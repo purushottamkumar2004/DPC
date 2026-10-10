@@ -1,0 +1,17 @@
+# Copy to /etc/systemd/system/dpc-supervisor.service, edit User and paths, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now dpc-supervisor
+[Unit]
+Description=DPC Supervisor
+After=network.target mosquitto.service
+
+[Service]
+User=dpc_tadipatri
+WorkingDirectory=/home/dpc_tadipatri/INSIGHTZZ/CODE/supervisor
+ExecStart=/usr/bin/python3 supervisor.py run
+Restart=always
+RestartSec=5
+# give workers time to stop cleanly (FrameCapture releases the cameras)
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+# v3 additions
+site.yaml
+BASLER_CONFIG1.xml
+config/sites/
+config/rendered/
+# safety net if the git root is ever ~/INSIGHTZZ instead of ~/INSIGHTZZ/code (anchored: only top-level folders)
+/data/
+/logs/
+/run/
+/config/secrets.env
+.dpc_backup_*/

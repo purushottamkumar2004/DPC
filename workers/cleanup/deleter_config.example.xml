@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <directories>
+
+        <raw_image_directories>
+            <path>/home/ddpc_maihar/INSIGHTZZ/CODE/FRAME_CAPTURE/CAM1/RAW_IMAGES/</path>
+            <path>/home/ddpc_maihar/INSIGHTZZ/CODE/FRAME_CAPTURE/CAM2/RAW_IMAGES/</path>
+        </raw_image_directories>
+
+        <inference_directories>
+            <path>/home/ddpc_maihar/INSIGHTZZ/CODE/FRAME_CAPTURE/CAM1/INF/</path>
+            <path>/home/ddpc_maihar/INSIGHTZZ/CODE/FRAME_CAPTURE/CAM2/INF/</path>
+        </inference_directories>
+
+        <repeated_image_directories>
+            <path>/home/ddpc_maihar/INSIGHTZZ/REPEATED_IMG_DIR/LEFT/</path>
+            <path>/home/ddpc_maihar/INSIGHTZZ/REPEATED_IMG_DIR/RIGHT/</path>
+        </repeated_image_directories>
+
+        <plate_image_directories>
+            <path>/home/ddpc_maihar/INSIGHTZZ/TEMP_IMG_DIR/PLATE_DIR/LEFT</path>
+            <path>/home/ddpc_maihar/INSIGHTZZ/TEMP_IMG_DIR/PLATE_DIR/RIGHT</path>
+        </plate_image_directories>
+
+        <defective_image_directories>
+            <path>/home/ddpc_maihar/INSIGHTZZ/DEFECTIVE_IMG_DIR/LEFT</path>
+            <path>/home/ddpc_maihar/INSIGHTZZ/DEFECTIVE_IMG_DIR/RIGHT</path>
+        </defective_image_directories>
+
+    </directories>
+
+   <settings>
+
+    <raw_image_retention_hours>24</raw_image_retention_hours>
+
+    <cleanup_interval_seconds>10</cleanup_interval_seconds>
+
+    <repeated_defects_threshold_days>20</repeated_defects_threshold_days>
+
+    <repeated_defects_threshold_items>200</repeated_defects_threshold_items>
+
+    <plate_data_threshold_days>10</plate_data_threshold_days>
+
+    <defective_defects_threshold_days>10</defective_defects_threshold_days>
+
+    <defective_defects_threshold_items>200</defective_defects_threshold_items>
+
+    <disk_usage_threshold_for_email>90.0</disk_usage_threshold_for_email>
+    
+    <disk_usage_threshold_for_raw_image_delete>85.0</disk_usage_threshold_for_raw_image_delete>
+
+    <disk_usage_threshold_for_delete>75.0</disk_usage_threshold_for_delete>
+    
+    <disk_usage_threshold_for_inference_image_delete>95.0</disk_usage_threshold_for_inference_image_delete>
+
+   </settings>
+</configuration>

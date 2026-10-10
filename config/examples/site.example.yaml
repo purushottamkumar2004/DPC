@@ -1,0 +1,15 @@
+# Example site config (target format, CONTRACTS section 7). Copy to ~/INSIGHTZZ/config/site.yaml and edit.
+# Secrets (DB and MQTT passwords) are NOT here: they go in secrets.env.
+schema_version: 1
+site: {id: example, name: "Example Plant"}
+paths: {root: /home/USER/INSIGHTZZ}
+mqtt: {host: localhost, port: 1883}
+db: {host: localhost, name: example_db, health_table: health_status}
+cameras:
+  - {id: CAM1, side: LEFT,  driver: basler, serial: "CHANGE_ME", fps: 4.0, exposure_us: 1500,  rotate: 90}
+  - {id: CAM2, side: RIGHT, driver: flir,   serial: "CHANGE_ME", fps: 4.0, exposure_us: 12000, rotate: 0,
+     interface: "GEV Interface 1", throughput_bps: 19662239}
+machine: {total_wheel_count: 190, expected_cycle_total: 188, wheel_stand_required_counts: {34: 3}}
+plc: {ip: 192.168.2.5, port: 502, light_register: 4109, cleaning_register: 4106, conveyor_status_register: 4098, cleaning_pulse_seconds: 10}
+mail: {sender: graph, project_name: "Example", recipients: [], cc: []}
+retention: {raw_hours: 24, thresholds: {delete: 75, raw: 85, mail: 90, inference: 95}}

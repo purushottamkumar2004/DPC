@@ -1,0 +1,131 @@
+# Decisions log (v3)
+
+Format: ID | date | status | decision | why | consequence. Newest at bottom. Never edit history; supersede with a new entry.
+Statuses: Accepted, Proposed, Open, Superseded.
+
+## D-001 | 2026-10 | Accepted | Generic Supervisor, not a Camera Manager
+Manages any worker via config: id, type, command, working dir, health, restart policy. No domain logic inside.
+
+## D-002 | 2026-10 | Accepted | Existing scripts run unmodified as external processes
+V1 launches them with `subprocess.Popen`. Code changes happen gradually, behind adapters.
+
+## D-003 | 2026-10 | Accepted | MQTT for events/status/heartbeat/commands only
+Local calls stay Python calls. Broker down => Supervisor keeps working, only status/commands are lost.
+
+## D-004 | 2026-10 | Accepted | Tolerant, time-based failure detection
+Failing health must persist `worker_timeout_seconds`; dead process restarts at once; startup grace per worker.
+
+## D-005 | 2026-10 | Accepted | Bounded retries then FAILED; retries earned back after sustained health
+
+## D-006 | 2026-10 | Accepted | Restart waits are non-blocking (WAITING_RESTART), one broken worker never delays others
+
+## D-007 | 2026-10 | Accepted | Own process group per worker; configurable stop signal, then SIGKILL
+Check per FrameCapture version whether it releases cameras on SIGTERM or only SIGINT.
+
+## D-008 | 2026-10 | Accepted | Health checks need no change in old scripts (`file_activity`), `heartbeat` for new/modified ones
+
+## D-009 | 2026-10 | Accepted | Commands via MQTT (needs broker)
+
+## D-010 | 2026-10 | Accepted | Supervisor replaces per-worker systemd units, migrated one at a time (never both)
+
+## D-011 | 2026-10 | Accepted | Worker-specific reactions go through events
+Example: algorithm publishes `poor_view` after N consecutive bad frames; the cleaning service acts with a cooldown and is the only cleaning-register writer.
+
+## D-012 | 2026-10 | Superseded by D-021 | (was) Merge Left/Right because they are identical
+Code review showed they are not identical.
+
+## D-013 | 2026-10 | Proposed | One `site_root`; all paths derived from it
+
+## D-014 | 2026-10 | Proposed | Configuration in DB, edited via Django; Supervisor reads it through ConfigurationManager and gets `reload`
+
+## D-015 | 2026-10 | Proposed | Camera drivers behind one interface (FLIR, Basler, ...)
+The deployed FrameCapture already switches FLIR/Basler by config; the quad FLIR rewrite is a second implementation to unify later.
+
+## D-016 | 2026-10 | Proposed | Setup wizard with mandatory self-test (frames, inference, DB insert, PLC read/write, test mail)
+
+## D-017 | 2026-10 | Proposed | Monitoring UI built on MQTT status/events; actions via authenticated API -> MQTT command
+
+## D-018 | 2026-10 | Accepted | No secrets in repo, XML, code or Project knowledge
+Found in the real code: MS Graph client secret hardcoded in `delete_script.py` and in the mail XML, DB passwords in all XML. Action: rotate, move to `/etc/dpc/secrets.env` (chmod 600), reference by env var.
+
+## D-019 | 2026-10 | Proposed | Worker `mode`: service | oneshot | periodic
+`light.py` and `cleaning_mechanism.py` exit by design. Supervisor must not treat a clean exit of a oneshot as failure. Needed before migrating PLC scripts.
+
+## D-020 | 2026-10 | Proposed | Algorithm health = queue lag; algorithm restart treated as expensive
+Health type `queue_lag` (age of oldest file in INF). Algorithms get long grace/timeout, few retries (`restart_cost: high`). Reason: restart deletes INF backlog, resets wheel/plate state, and skips frames until the next plate.
+
+## D-021 | 2026-10 | Proposed | Left/Right merge only after diff review + replay tests
+Right is 716 lines longer and has different functions and defaults. Plan: (1) replay harness with saved image sequences and expected defects, (2) diff-driven merge into one codebase with `side` parameter, (3) switch one site, compare defect output on live data in shadow mode.
+
+## D-022 | 2026-10 | Proposed | Config renderer: central site config generates the legacy XMLs
+Algorithms/capture read XML by position from cwd. Renderer writes them with exact tag order (golden-file tests), so the UI/wizard can set everything without touching the algorithms. Later the code reads the central config directly.
+
+## D-023 | 2026-10 | Proposed | Remove hardcoded site values from algorithms first (small, safe edits)
+`dailyDataDir`, `PLATE_IMG_OUTPUT_DIR`, `bolt_save_dir`, `WHEEL_STAND_REQUIRED_COUNTS`, `expected_total` move to config. This is the minimum for a second site to run the same code.
+
+## D-024 | 2026-10 | Proposed | Single PLC service owns Modbus
+One process, one IP/register map from config, periodic light re-assert + verify (today a one-time write; a PLC reboot leaves the light off silently), cleaning on `poor_view` with cooldown, conveyor-status read, publishes health/events.
+
+## D-025 | 2026-10 | Proposed | Persist wheel counter and plate state
+So a restart or exception does not blind inspection for up to one revolution. Decide storage (file/DB) and validity window.
+
+## D-026 | 2026-10 | Proposed | Edge-first; cloud layer aggregates sites later
+Inference, capture and PLC stay on the local server. Cloud receives status, defect summaries and thumbnails for a central dashboard and fleet management.
+
+## D-027 | 2026-10 | Accepted | PLC IP is per-server config; Maihar = 192.168.2.5
+`light.py` already uses it. `cleaning_mechanism.py` (192.168.1.4) is wrong for this server and must read the IP from the site config. Applies to the future PLC service (D-024).
+
+## D-028 | 2026-10 | Proposed | `wheel_no` stays text in DB; code treats it as int at the edges
+`defects_table.wheel_no` and `wheel_counter_table.WHEEL_COUNT` are varchar. Do not change column types now (Django/DataSync depend on them); convert in code, and add a rule that wheel numbers are written as plain integers (no padding) so string comparisons stay valid.
+
+## D-029 | 2026-10 | Proposed | Live wheel number belongs to both sides, not only Right
+Only `RightAlgorithm` updates `wheel_counter_table` (single row ID=1). Decide whether the UI needs per-side live counters (then add a row/column per side) before the Left/Right merge.
+
+## D-030 | 2026-10 | Accepted | One root folder per machine: `~/INSIGHTZZ` (code, config, logs, run, data)
+New machine (Tadipatri): one NVMe disk, services run as the login user, no dedicated service user. Created by `scripts/setup_dpc_layout.sh` (no sudo, no users created, `--root` to change). Alternatives considered: FHS split (`/opt`, `/etc`, `/var/lib`, `/var/log`) and a `dpc` service user: rejected for now because there is one disk and one operator, so the split gave no isolation; the paths stay config values, so it can be adopted later. Refines D-013 (`site_root` = `~/INSIGHTZZ`). Secrets path moves from `/etc/dpc/secrets.env` (D-018 text) to `<root>/config/secrets.env`, still chmod 600.
+
+## D-031 | 2026-10 | Accepted | Atomic frame hand-off
+Write each frame once into `_tmp`, then `os.link` into `INF` (and into `UI` when empty) and `os.replace` into `live/IMG_1.jpg`. Readers never see partial files and the write volume halves. Needs `_tmp`, `INF`, `UI`, `live` on one filesystem; fallback to a copy only when hard links are impossible. Consequence: hard links share data, so no process may modify these files in place. Built and tested in `workers/frame_capture_basler/`; the FLIR version still copies in place.
+
+## D-032 | 2026-10 | Accepted | Data folder layout under `<root>/data`
+`frames/CAMn/{live,_tmp,INF,RAW_IMAGES,UI}`, `ui_live/CAMn` (reserved), `images/{DEFECTIVE,REPEATED,RAW,PLATE}/{LEFT,RIGHT}`, `wheel_status/{LEFT,RIGHT,IMAGES,PDFS}` (subfolders assumed), `bolt_data`, `state`, `models`. Replaces the legacy names (`RAW_IMG_DIR`, `TEMP_IMG_DIR/PLATE_DIR`, ...). The legacy algorithms cannot use it until their paths come from config (D-023).
+
+## D-033 | 2026-10 | Proposed | `site.yaml` is the single source of truth, file-first; one capture process per camera
+Validated against a schema on load; secrets separate (`secrets.env`); legacy XMLs and `workers.yaml` are generated by the renderer (refines D-014 and D-022: file first, DB-backed later). Capture runs as one worker per camera (`frame_capture_cam1`, `frame_capture_cam2`), each with its own health and restart. Answers open question Q8.
+
+## D-034 | 2026-10 | Proposed | Config comes from local files at start; MQTT is for supervision only
+The system must boot and inspect with the broker down (reinforces D-003). MQTT carries status, health, events and commands. Heartbeat payload is extended append-only with `pid, version, config_hash, fps, last_frame_age_s, inf_queue_depth`. Topic names stay as in CONTRACTS section 2 (one broker per site, no site id in topics). Changing settings later: validated `command` -> versioned file rewrite (previous copy kept) -> restart that instance.
+
+## D-035 | 2026-10 | Proposed | Commissioning flow detects cameras and generates the config
+Detect cameras (pypylon, PySpin), assign CAM1/CAM2 from the detected serials, test-open with the chosen settings, write `site.yaml` and `secrets.env`, run the layout script, render configs and `workers.yaml`, enable units. Command-line wizard first, local web page later. Refines D-016.
+
+## D-036 | 2026-10 | Accepted | Repo and chat workflow
+One Claude Project, one monorepo, one folder per owner and one chat role per owner (MASTER, SUPERVISOR, W-<worker>, UI, CONFIG, SITE). Contracts first: an interface change goes through MASTER before the affected chats work. The Project's GitHub link is a read-only snapshot refreshed with Sync now; code reaches the repo through the developer's commits or Claude Code. See CHAT_WORKFLOW.md and OWNERS.md.
+
+## D-037 | 2026-10 | Accepted | Basler FrameCapture lives in `workers/frame_capture_basler/`; Left/Right stay in one folder
+Positional XML with an optional 16th element `TMP_IMG_PATH`; env `BASLER_CONFIG` selects the file. `workers/inspection/` stays one folder holding both algorithms until the D-021 merge; splitting it into `inspection_left` and `inspection_right` would only create churn.
+
+## D-038 | 2026-10 | Proposed | Site-specific names move out of code
+The Basler code updates a table literally named `tadipatri_health_status_table`. Table names, like paths and serials, become config (`db.health_table`). Extends D-023.
+
+## D-039 | 2026-10 | Proposed | One `main` branch with tagged releases; sites differ by config, never by branch
+Every site runs a tagged release of `main` (`git fetch && git checkout v0.<n>`; rollback = an older tag). Site settings live in `<root>/config` (`site.yaml`, `secrets.env`, rendered files), optionally mirrored in a separate private repo `dpc-sites` with one folder per site and no secrets. A site that needs a code fix before the next release gets a short-lived `hotfix/<site>-<what>` branch that is merged to `main` quickly and released as a new tag, so the fix reaches every site. Rejected: one long-lived code branch per site (every fix applied N times, drift, merge conflicts in config files, real configs and secrets ending up in git history, and the Project's GitHub link reading the wrong code). Consequence: `docs/SITES.md` records the release tag per site.
+
+## Open questions
+- Q1: Which signal best proves an algorithm is healthy: queue lag only, or also a heartbeat line/log?
+- Q2: Light register 4109: does 1 mean ON or OFF? Is cleaning ever triggered by the algorithm today, or by an operator/script?
+- Q3 (partly answered): PLC IP for the Maihar server is 192.168.2.5. Still open: should `cleaning_mechanism.py` (192.168.1.4) and the XML (192.168.1.5) simply be corrected? Are S7 DB numbers 12/13 used anywhere?
+- Q4: `CAMERA_PLC_STATUS`: is LEFT/RIGHT CAMERA mapping inverted vs CAM1/CAM2?
+- Q5 (mostly answered): `defects_table` and `wheel_counter_table` schemas received (see CONTRACTS section 5). Still needed: `health_status` and `CAMERA_PLC_STATUS` schemas, and indexes on `defects_table` (the 24 h dedupe query filters by create_datetime, wheel_no, defect_type, defect_side).
+- Q6: Why are the chain/wheel-bolt/gap checks commented out, and is that intended for all sites?
+- Q7 (answered for Tadipatri): services run as the login user (D-030). Still open for Maihar: do the existing services run as different Linux users or with EnvironmentFile settings?
+- Q8 (answered): FrameCapture splits into one process per camera (D-033).
+- Q9: Which mail sender is standard (SMTP/Gmail or Graph) for new sites?
+- Q10: Is a dedicated Linux/GPU test machine available for the replay harness?
+- Q11: Who empties `UI/` (the mailbox), and what reads `ui_live/CAMn/TMP.jpg` or `live/IMG_1.jpg`: the Django UI for both?
+- Q12: Does any consumer (algorithm, UI, DataSync) modify files in `INF`, `UI` or `live` in place? Hard links make that unsafe (D-031).
+- Q13: What are the real `WHEEL_STATUS` subfolders? The layout script assumes LEFT, RIGHT, IMAGES, PDFS.
+- Q14: Are old defect records imported into the new DB? `view_defect` holds absolute image paths, so a layout change breaks old images unless the rows are rewritten or the old paths are kept.
+- Q15: Which health table does each site use (`health_status` or `tadipatri_health_status_table`)? Needed for D-038.
+- Q16: Does Tadipatri run Basler only (CAM1) or two cameras, and which side is CAM1?
+- Q17: Keep site configs only on each machine, or also mirror them (no secrets) in a private `dpc-sites` repo, one folder per site (D-039)?

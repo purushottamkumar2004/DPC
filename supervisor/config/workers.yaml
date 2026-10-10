@@ -1,0 +1,109 @@
+# ======================================================================
+# DPC Supervisor configuration
+# To add a new worker: copy one entry under "workers", change id/command.
+# Nothing in the supervisor code needs to change.
+# ======================================================================
+
+monitoring:
+  check_interval_seconds: 5      # how often every worker is checked
+  worker_timeout_seconds: 10     # a failing health check must last this long before restart
+  startup_stagger_seconds: 1     # pause between starting workers
+  status_publish_interval_seconds: 30
+
+# Default restart policy (each worker can override it with its own "restart:" block)
+restart_policy:
+  enabled: true
+  max_retries: 3
+  retry_delay_seconds: 5
+  reset_after_seconds: 300       # healthy this long -> retry counter back to 0
+
+mqtt:
+  enabled: true                  # if the broker is down the supervisor still works
+  host: localhost
+  port: 1883
+  topic_prefix: dpc
+
+runtime:
+  root: runtime                  # relative to the supervisor folder (or use an absolute path)
+
+log_dir: logs
+
+# ======================================================================
+# Workers
+#   health.type:
+#     process        - only "is the process alive"
+#     file_activity  - a file/folder must have changed within max_age_seconds
+#     heartbeat      - worker publishes to dpc/worker/<id>/health
+# ======================================================================
+workers:
+
+  # ---------------- test workers (enabled so you can try it right now) ----------------
+  - id: dummy_crasher            # crashes every 20 s -> shows restart, then FAILED after 3 retries
+    type: dummy
+    enabled: true
+    command: python3 workers/dummy_worker.py --crash-after 20
+    runtime_dir: DUMMY1
+    directories: [raw, logs]
+    restart: { max_retries: 3, retry_delay_seconds: 5, reset_after_seconds: 600 }
+
+  - id: dummy_hanger             # stays alive but stops working after 25 s -> shows health-based restart
+    type: dummy
+    enabled: true
+    command: python3 workers/dummy_worker.py --hang-after 25 --heartbeat-file runtime/DUMMY2/logs/heartbeat.txt
+    runtime_dir: DUMMY2
+    directories: [logs]
+    health:
+      type: file_activity
+      path: runtime/DUMMY2/logs/heartbeat.txt
+      max_age_seconds: 8
+      startup_grace_seconds: 8
+
+  # ---------------- real workers (disabled until you connect them) ----------------
+  - id: frame_capture
+    type: frame_capture
+    enabled: false
+    command: python3 FrameCapture.py
+    working_directory: /home/insightzz-server/Insightzz/Code/FrameCapture
+    stop_signal: SIGINT          # FrameCapture.py only cleans up the cameras on Ctrl+C (KeyboardInterrupt)
+    stop_timeout_seconds: 30
+    directories:                 # absolute paths are created exactly as written
+      - /media/disk3/DPC_02/TempRawImgDir/LIVE_RAW_DATA/LEFT/INF
+      - /media/disk3/DPC_02/TempRawImgDir/LIVE_RAW_DATA/RIGHT/INF
+    health:
+      type: file_activity        # the capture script rewrites IMG_1.jpg on every frame
+      path:                      # a list: ALL cameras must be producing frames
+        - /media/disk3/DPC_02/TempRawImgDir/LIVE_RAW_DATA/LEFT/IMG_1.jpg
+        - /media/disk3/DPC_02/TempRawImgDir/LIVE_RAW_DATA/RIGHT/IMG_1.jpg
+      max_age_seconds: 30        # cameras run at 3-4 FPS, so 30 s without a frame is a real problem
+      startup_grace_seconds: 60
+
+  - id: left_algorithm
+    type: algorithm
+    enabled: false
+    command: python3 LeftAlgorithm.py
+    working_directory: /home/dpc_tadipatri/INSIGHTZZ/CODE/ALGORITHM
+    stop_timeout_seconds: 20
+    health:
+      type: file_activity        # watch the algorithm's own log file (use the real path)
+      path: /home/dpc_tadipatri/INSIGHTZZ/CODE/LOGS/left_algorithm.log
+      max_age_seconds: 120
+      startup_grace_seconds: 120   # Detectron2 model loading takes a while
+
+  - id: right_algorithm
+    type: algorithm
+    enabled: false
+    command: python3 RightAlgorithm.py
+    working_directory: /home/dpc_tadipatri/INSIGHTZZ/CODE/ALGORITHM
+    stop_timeout_seconds: 20
+    health:
+      type: file_activity
+      path: /home/dpc_tadipatri/INSIGHTZZ/CODE/LOGS/right_algorithm.log
+      max_age_seconds: 120
+      startup_grace_seconds: 120
+
+  - id: plc_service
+    type: plc
+    enabled: false
+    command: python3 plc_service.py
+    working_directory: /home/dpc_tadipatri/INSIGHTZZ/CODE/PLC
+    # health defaults to "process" (alive only) until the script sends heartbeats

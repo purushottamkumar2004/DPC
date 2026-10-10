@@ -1,0 +1,47 @@
+<DDPC>
+	<SYSTEM_PATH>
+		<CODE_PATH>/home/ddpc_maihar/INSIGHTZZ/CODE/ALGORITHM/</CODE_PATH>
+    	<LOG_FILE_PATH>/home/ddpc_maihar/INSIGHTZZ/CODE/LOGS/</LOG_FILE_PATH>
+    	<LOG_BACKUP_COUNT>5</LOG_BACKUP_COUNT>
+    	<DEFECTIVE_IMAGE_PATH>/home/ddpc_maihar/INSIGHTZZ/DEFECTIVE_IMG_DIR/RIGHT/</DEFECTIVE_IMAGE_PATH>
+		<INF_IMAGE_DIR_PATH>/home/ddpc_maihar/INSIGHTZZ/CODE/FRAME_CAPTURE/CAM2/INF/</INF_IMAGE_DIR_PATH>
+    	<RAW_IMAGE_DIR_PATH>//home/ddpc_maihar/INSIGHTZZ/RAW_IMG_DIR/RIGHT/</RAW_IMAGE_DIR_PATH>
+		<REPEATED_IMAGE_DIR_PATH>/home/ddpc_maihar/INSIGHTZZ/REPEATED_IMG_DIR/RIGHT/</REPEATED_IMAGE_DIR_PATH>
+    	<FRAME_START_INFO_FILE_PATH>/home/ddpc_maihar/INSIGHTZZ/CODE/LOGS/start.txt</FRAME_START_INFO_FILE_PATH>
+		<INPUT_IMG_DIR>/home/dpc_bela/Insightzz/TempRawImgDir/</INPUT_IMG_DIR>
+    	<TEMP_RAW_IMAGE_DIR_PATH>/home/ddpc_maihar/INSIGHTZZ/TEMP_IMG_DIR/</TEMP_RAW_IMAGE_DIR_PATH>
+		<DEFECT_SIDE>Right</DEFECT_SIDE>
+		<TOTAL_WHEEL_COUNT>190</TOTAL_WHEEL_COUNT>
+	</SYSTEM_PATH>
+
+	<OBJECT_DETAILS>
+		<WHEEL_WIDTH>530</WHEEL_WIDTH>
+		<WHEEL_HEIGHT>514</WHEEL_HEIGHT>
+		<BUCKET_CLIP_WIDTH>220</BUCKET_CLIP_WIDTH>
+		<CHAIN_WIDTH>621</CHAIN_WIDTH>
+		<HALF_BUCKET_CLIP_WIDTH>150</HALF_BUCKET_CLIP_WIDTH>
+	</OBJECT_DETAILS>
+
+	<DATABASE_DETAILS>
+		<DB_USER>root</DB_USER>
+	    <DB_PASS>CHANGE_ME</DB_PASS>
+	    <DB_HOST>localhost</DB_HOST>
+	    <DB_NAME>MAHIAR_DB</DB_NAME>
+	</DATABASE_DETAILS>
+
+	<MODEL>
+		<CONFIG_YAML_FL_PATH>/home/ddpc_maihar/Documents/detectron2/configs/COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x.yaml</CONFIG_YAML_FL_PATH>
+	    <MODEL>model_final.pth</MODEL>
+	    <DETECTTHRESH>0.5</DETECTTHRESH>
+	    <MASK_MODEL_PATH>/home/ddpc_maihar/INSIGHTZZ/MODELS/Augest_14_2026_MODEL/</MASK_MODEL_PATH>
+	    <JSON_PATH>/home/ddpc_maihar/INSIGHTZZ/MODELS/Augest_14_2026_MODEL/dpc_maihar_august_14_2026.json</JSON_PATH>
+		<ALL_CLASS_NAMES>["bottom_chain_bolt", "half_bottom_chain", "nut_bolt", "bucket_clip", "bottom_chain_bolt_clip", "plate_area", "plate", "half_bucket_clip", "bottom_chain", "half_wheel", "wheel_bolt", "wheel_magnet", "wheel", "top_chain_bolt", "top_chain", "top_chain_bolt_clip_missing", "top_chain_bolt_clip", "half_top_chain", "high_dusty_bucket_clip", "wheel_stand"]</ALL_CLASS_NAMES>
+	    <DETECT_LABEL_NAMES>["bottom_chain_bolt", "half_bottom_chain", "nut_bolt", "bucket_clip", "bottom_chain_bolt_clip", "plate_area", "plate", "half_bucket_clip", "bottom_chain", "half_wheel", "wheel_bolt", "wheel_magnet", "wheel", "top_chain_bolt", "top_chain", "top_chain_bolt_clip_missing", "top_chain_bolt_clip", "half_top_chain", "high_dusty_bucket_clip", "wheel_stand"]</DETECT_LABEL_NAMES>
+    </MODEL>
+	
+    <PLC_DETAILS>
+    	<PLC_IP_ADDRESS>192.168.1.5</PLC_IP_ADDRESS>
+    	<PLC_WRITE_DB_NUMBER>12</PLC_WRITE_DB_NUMBER>
+    	<PLC_READ_DB_NUMBER>13</PLC_READ_DB_NUMBER>
+    </PLC_DETAILS>
+</DDPC>
