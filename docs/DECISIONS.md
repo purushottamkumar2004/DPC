@@ -111,6 +111,13 @@ The Basler code updates a table literally named `tadipatri_health_status_table`.
 ## D-039 | 2026-10 | Proposed | One `main` branch with tagged releases; sites differ by config, never by branch
 Every site runs a tagged release of `main` (`git fetch && git checkout v0.<n>`; rollback = an older tag). Site settings live in `<root>/config` (`site.yaml`, `secrets.env`, rendered files), optionally mirrored in a separate private repo `dpc-sites` with one folder per site and no secrets. A site that needs a code fix before the next release gets a short-lived `hotfix/<site>-<what>` branch that is merged to `main` quickly and released as a new tag, so the fix reaches every site. Rejected: one long-lived code branch per site (every fix applied N times, drift, merge conflicts in config files, real configs and secrets ending up in git history, and the Project's GitHub link reading the wrong code). Consequence: `docs/SITES.md` records the release tag per site.
 
+## D-040 | 2026-10 | Accepted | Housekeeping after the Project verification
+Found when the Project knowledge was checked from a fresh chat. History above is not edited; this entry supersedes:
+- **D-039** (one `main`, tagged releases, no site branches) is **Accepted**; its "Proposed" label is superseded by this entry.
+- The secrets path in **D-018** (`/etc/dpc/secrets.env`) is superseded by **D-030**: secrets live in `<root>/config/secrets.env` (chmod 600, never committed).
+- The backlog order in `CODE_AUDIT.md` section 5 is superseded by `STATUS.md` ("Next"), with section 6 holding the later additions. The audit findings themselves stay valid.
+- Rule: `STATUS.md` is the single current backlog and state; the audit, decisions and contracts hold the history and the agreements.
+
 ## Open questions
 - Q1: Which signal best proves an algorithm is healthy: queue lag only, or also a heartbeat line/log?
 - Q2: Light register 4109: does 1 mean ON or OFF? Is cleaning ever triggered by the algorithm today, or by an operator/script?

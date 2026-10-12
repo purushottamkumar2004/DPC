@@ -46,6 +46,7 @@ All XML is read **by position** (`config_root[0][8]`, `[3][5]` ...). Adding, rem
 Logs are per script with different rotation; no common run id; no metrics (FPS, queue lag, inference time, GPU use); no central view.
 
 ## 5. Productization backlog (ordered)
+> **Superseded (D-040):** the current order is in `docs/STATUS.md` ("Next"); later additions are in section 6. The items below remain a useful list of work, not the current priority order.
 1. Rotate secrets; introduce env-file secrets. (P0)
 2. Add Supervisor `mode: oneshot | service | periodic` and `queue_lag` / `db_freshness` health types; migrate delete script, mail, FrameCapture first (low risk), algorithms last.
 3. Replace hardcoded paths in algorithms with config values (small, safe edit). Move wheel-stand counts and expected totals to config.

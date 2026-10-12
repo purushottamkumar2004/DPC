@@ -1,8 +1,10 @@
 # Project status
 
-Owned by MASTER; update after each handoff. Last updated: 2026-10-11.
+Owned by MASTER; update after each handoff. Last updated: 2026-10-12.
 
 ## Done
+- Claude Project environment verified from a fresh chat: synced repo docs are visible; release model, layout root, secrets location and backlog were answered from the docs alone.
+- Housekeeping recorded in D-040 (D-039 accepted, D-018 secrets path superseded by D-030, audit backlog superseded by this file).
 - Architecture v3, contracts v3, decisions D-001 to D-039, code audit (incl. Basler section), ownership, chat workflow, commissioning checklist.
 - Deployed layout script (`~/INSIGHTZZ`: code, config, logs, run, data) and the Basler single-camera FrameCapture with atomic hand-off (tested with stubbed camera libraries; not yet on the real camera).
 - Tadipatri machine: layout created, repo at `~/INSIGHTZZ/code`, pushed to GitHub (`purushottamkumar2004/DPC`). Two Basler cameras detected: serials 24824427 and 24874775.
@@ -12,6 +14,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-11.
 - Repo hygiene to confirm: repository set to **Private**; tag `v0.1` visible on GitHub; no credentials in history.
 
 ## Next (suggested order)
+0. **You, not a chat:** rotate the DB `root` password and the Microsoft Graph secret, and create a dedicated limited DB user (they appeared in old configs and in chats). Then confirm the GitHub repo is Private and the `v0.1` tag is visible, and set `RELEASE` in `SITES.md` for Tadipatri.
 1. CONFIG chat: `site.yaml` schema and loader, with tests.
 2. W-frame_capture_basler: reopen the camera when lost, publish only fresh grabs, health table name and log name per camera to config, heartbeat.
 3. SUPERVISOR chat: `mode`, `queue_lag`, heartbeat extension, start-after rule.
