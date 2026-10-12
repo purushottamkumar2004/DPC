@@ -99,7 +99,7 @@ Rules: INF file name `YYYY_MM_DD_HH_MM_SS_ffffff.jpg`; algorithm consumes the **
 ## 5. Database [EXISTING, schemas confirmed from your CSV exports]
 The executable source of truth for the structure is `db/schema.sql` plus `db/migrations/` (D-043); this section explains what the columns mean and who uses them. Both change in the same commit.
 - Health tables in use today: Maihar `health_status` (`item`, `health`, `update_datetime`, written by the FLIR capture); Tadipatri `tadipatri_health_status_table` (`ITEM`, `HEALTH`, `IS_DATA_SYNC`, `CREATE_DATETIME`, written by the Basler capture, D-041 `HEALTH_TABLE`). Both writers only `UPDATE` an existing row per camera serial, so the seed must insert those rows. **New sites use the standard `health_status` table from `db/schema.sql`** (`ID`, `ITEM` unique, `HEALTH`, `IS_DATA_SYNC`, `CREATE_DATETIME`, `UPDATE_DATETIME`); both writers work against it because MySQL column names are case-insensitive. Set `HEALTH_TABLE` = `health_status`.
-- `CAMERA_PLC_STATUS` in `db/schema.sql`: `id`, `` `RIGHT CAMERA` ``, `` `LEFT CAMERA` `` (text 'True'/'False'), `UPDATE_DATETIME`. The FLIR capture writes CAM1 into `RIGHT CAMERA` and CAM2 into `LEFT CAMERA`, which contradicts CAM1 = LEFT: to verify at Maihar before any change.
+- `CAMERA_PLC_STATUS` in `db/schema.sql`: `id`, `` `RIGHT CAMERA` ``, `` `LEFT CAMERA` `` (text 'True'/'False'), `UPDATE_DATETIME`. The FLIR capture writes CAM1 into `RIGHT CAMERA` and CAM2 into `LEFT CAMERA`; kept as is (D-044).
 - `defects_table`:
   `ID` int PK auto_increment; `defect_side` varchar(45) NOT NULL (Left|Right); `defect_type` varchar(45) NOT NULL; `view_defect` varchar(545) NOT NULL (defect image path);
   `wheel_no` varchar(45) NOT NULL (**text, not int**; code compares it with integers, MySQL converts); `xmin,xmax,ymin,ymax` int NULL;
@@ -113,7 +113,7 @@ The executable source of truth for the structure is `db/schema.sql` plus `db/mig
 - `wheel_counter_table`: `ID` int PK auto; `WHEEL_COUNT` varchar(45) NULL. **One row, `ID = 1`, holds the live wheel number.** Written only by `RightAlgorithm.update_wheel_count()` (called in the main loop); `LeftAlgorithm` does not write it. Wheel number is therefore stored as text.
 - `health_status`: `item` (camera serial), `health`, `update_datetime` (schema not yet provided).
 - `CAMERA_PLC_STATUS`: row `id=1`, columns `` `RIGHT CAMERA` ``, `` `LEFT CAMERA` `` (mapping vs CAM1/CAM2 to verify; full schema not yet provided).
-Dedupe rule: same `wheel_no` + `defect_type` + `defect_side` within 24 h with bbox width/height within +-50 px.
+Dedupe rule: same `wheel_no` + `defect_type` + `defect_side` within 24 h with bbox width/height within +-50 px. In practice the size check compares the new defect with itself, so only wheel + type + side + 24 h decide; kept as is (D-044).
 
 ## 6. PLC [EXISTING]
 Modbus TCP (pymodbus), port 502, timeout 3 s. Registers: light **4109** (script writes 1; comment says 0 on/1 off: confirm), cleaning **4106** (1 for 10 s then 0), legacy cleaning 4097 / 4197, read conveyor status **4098**. **PLC IP for this server (Maihar): `192.168.2.5`** (confirmed by you; matches `light.py`). `cleaning_mechanism.py` (192.168.1.4) and the algorithm XML `PLC_IP_ADDRESS` (192.168.1.5) disagree with it and are treated as stale until proven otherwise. The XML DB numbers 12/13 are not used by the Modbus scripts. **One PLC IP per site must be a single config value** (`plc.ip` in site.yaml).

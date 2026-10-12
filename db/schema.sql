@@ -116,9 +116,8 @@ CREATE TABLE IF NOT EXISTS health_status (
 -- ---------------------------------------------------------------------
 -- CAMERA_PLC_STATUS: ONE row (id = 1), used by the UI for status lamps.
 -- The FLIR capture writes 'True' / 'False' as text into the camera columns.
--- NOTE: the FLIR code writes CAM1 into `RIGHT CAMERA` and CAM2 into
--- `LEFT CAMERA`, while the contract says CAM1 = LEFT. Mapping to verify
--- (CONTRACTS section 5); the table itself does not decide it.
+-- The FLIR code writes CAM1 into `RIGHT CAMERA` and CAM2 into
+-- `LEFT CAMERA`; kept as is (D-044).
 -- Column names contain spaces because the existing code uses them.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS CAMERA_PLC_STATUS (

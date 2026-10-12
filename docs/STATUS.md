@@ -118,7 +118,6 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 - Q11 to Q14 and Q17 in `DECISIONS.md`.
 
 ## Known risks
-- **Dedupe ignores the bounding box** (found while testing the DB seed): in `LeftAlgorithm.py`/`RightAlgorithm.py` and both mail senders the dedupe query computes `({xmax} - {xmin}) BETWEEN ...` from the NEW defect's own values, not from the stored row's `xmin/xmax` columns, so the "+-50 px size" part is always true. Effective dedupe today: same wheel + type + side within 24 h. Not changed (business logic); needs your decision before W-inspection touches it.
 - Root DB login and a plaintext password in the old Basler config (rotate; use a dedicated DB user).
 - The capture test covered normal running only. A lost camera still ends in timeouts forever, with no health signal (CODE_AUDIT 6, P1). Fixed by item 2.
 - Frames are rotated 90 in code while the site wants none. The algorithms' geometry (left-to-right motion, plate x-movement, object sizes) and the model must match whatever orientation is finally used.

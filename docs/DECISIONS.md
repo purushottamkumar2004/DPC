@@ -127,6 +127,9 @@ The developer wants Claude to read and write the repo without manual downloads a
 ## D-043 | 2026-10 | Accepted | Database seed lives in `db/`, maintained with every DB change
 The full DB structure for a new site is kept as SQL in `db/`: `schema.sql` (all tables, `CREATE TABLE IF NOT EXISTS`, no database name, no data), `fixed_rows.sql` (rows programs only `UPDATE`: `wheel_counter_table` ID 1, `CAMERA_PLC_STATUS` id 1), `site_rows.example.sql` (one health row per camera serial), numbered append-only `migrations/` for existing sites, and a `schema_version` table. Run by hand in MySQL Workbench today; `scripts/dpc_db_init.py` (CONFIG) runs the same files later for the installer. `db/` is owned by MASTER because it is the DB contract; worker chats request changes in their handoff. Every table or column change updates `schema.sql`, adds a migration and updates CONTRACTS section 5 in the same commit. Django tables stay with `manage.py migrate`. v1 is built from `mysqldump --no-data` of Maihar and Tadipatri, not from guesses. Reason: 35+ sites need an identical, repeatable DB; today the structure exists only on the running machines.
 
+## D-044 | 2026-10 | Accepted | Keep the dedupe size check and the FLIR camera-lamp mapping as they are
+Found while testing the DB seed (D-043): (1) the dedupe query in the algorithms and mail senders computes the bbox size from the new defect's own values, so the +-50 px size condition is always true and dedupe is effectively wheel + type + side within 24 h; (2) the FLIR capture writes CAM1 into `CAMERA_PLC_STATUS.RIGHT CAMERA` and CAM2 into `LEFT CAMERA`. Developer decision: no change to either. Chats must not raise these again or "fix" them unless the developer asks.
+
 ## Open questions
 - Q1: Which signal best proves an algorithm is healthy: queue lag only, or also a heartbeat line/log?
 - Q2: Light register 4109: does 1 mean ON or OFF? Is cleaning ever triggered by the algorithm today, or by an operator/script?
