@@ -127,28 +127,113 @@ Affected rows: MySQL reports **changed** rows, so an `UPDATE` that writes identi
 ## 6. PLC [EXISTING]
 Modbus TCP (pymodbus), port 502, timeout 3 s. Registers: light **4109** (script writes 1; comment says 0 on/1 off: confirm), cleaning **4106** (1 for 10 s then 0), legacy cleaning 4097 / 4197, read conveyor status **4098**. **PLC IP for this server (Maihar): `192.168.2.5`** (confirmed by you; matches `light.py`). `cleaning_mechanism.py` (192.168.1.4) and the algorithm XML `PLC_IP_ADDRESS` (192.168.1.5) disagree with it and are treated as stale until proven otherwise. The XML DB numbers 12/13 are not used by the Modbus scripts. **One PLC IP per site must be a single config value** (`plc.ip` in site.yaml).
 
-## 7. Site config [PROPOSED] (`<root>/config/site.yaml`, later DB rows) (D-033)
-Single source of truth, validated against a schema when loaded (missing serial, fps out of range or duplicate camera id fail with a clear message before anything starts). `schema_version` allows migration. Layers: code defaults < `site.yaml` < env/CLI overrides. Secrets are never in this file.
+## 7. Site config v1 [ACCEPTED, loader not built yet] (`<root>/config/site.yaml`) (D-033, D-047)
+One file per site; the only file a person edits to set up a site. File first; the DB becomes the master copy only when the UI starts editing config (later decision). Secrets are never in this file (section 9). Every program gets its settings from this file, directly (new code) or through the renderer (legacy XMLs, section 3).
+
+**Location:** env `DPC_SITE_CONFIG`, else `~/INSIGHTZZ/config/site.yaml`.
+**Loader** (CONFIG, `common/config/site_config.py`): `load_site_config(path=None) -> SiteConfig`. It reads the file, applies the defaults below, validates everything and raises `SiteConfigError` that lists **every** problem with its key path (e.g. `cameras[1].serial: missing`). `python -m common.config.site_config [path]` prints `OK` or the problems; exit 0 or 1.
+**Rules:** unknown keys are errors (catches typos); no per-key env overrides in v1; relative paths are relative to `paths.root`; `~` is expanded; numbers are checked against the ranges below; serials are strings (quote them).
+
 ```yaml
-schema_version: 1
-site: {id: <str>, name: <str>}
-paths: {root: /home/<user>/INSIGHTZZ}            # code/ config/ logs/ run/ data/ derive from this
-mqtt: {host: localhost, port: 1883}              # user/password from secrets.env
-db: {host: localhost, name: <..>, health_table: health_status}   # user/password from secrets.env
-cameras:
-  - {id: CAM1, side: LEFT, driver: basler|flir, serial: "<..>", fps: <n>, exposure_us: <us>, rotate: 0|90|180|270,
-     interface: "<flir only>", throughput_bps: <flir only>}
-  - {id: CAM2, side: RIGHT, driver: ..., serial: "<..>", ...}
-machine: {total_wheel_count: <n>, expected_cycle_total: <n>, wheel_stand_required_counts: {34: 3}, object_sizes: {LEFT: {wheel_w,wheel_h,bucket_clip_w,chain_w,half_bucket_clip_w}, RIGHT: {..}}}
-model: {dir: <path>, detectron_yaml: <path>, weights: model_final.pth, class_json: <path>, threshold: 0.5, classes: [..]}
-plc: {ip: <..>, port: 502, light_register: <..>, cleaning_register: <..>, conveyor_status_register: <..>, cleaning_pulse_seconds: 10}
-mail: {sender: smtp|graph, project_name: <..>, recipients: [..], cc: [..]}
-retention: {raw_hours: 24, thresholds: {delete: 75, raw: 85, mail: 90, inference: 95}, ...}
+schema_version: 1                 # required, must be 1
+
+site:
+  id: tadipatri                   # required; lowercase letters, digits, - or _; used in mail subjects and MQTT
+  name: "Tadipatri DPC"           # required; free text
+
+paths:
+  root: ~/INSIGHTZZ               # required; code/ config/ logs/ run/ data/ derive from it (section 4.1)
+
+logging:
+  backup_count: 5                 # default 5; days of rotated logs kept (LOG_BACKUP_COUNT)
+
+db:
+  host: localhost                 # default localhost
+  port: 3306                      # default 3306
+  name: tadipatri4                # required
+  health_table: health_status     # default health_status (D-043); existing sites set their own table
+  # user and password: secrets.env DPC_DB_USER, DPC_DB_PASS
+
+mqtt:
+  host: localhost                 # default localhost
+  port: 1883                      # default 1883
+  # optional auth: secrets.env DPC_MQTT_USER, DPC_MQTT_PASS
+
+cameras:                          # required; 1 or 2 entries
+  - id: CAM1                      # required; CAM1 | CAM2; unique
+    side: LEFT                    # required; LEFT | RIGHT; unique; CAM1 = LEFT, CAM2 = RIGHT (section 4.1)
+    driver: basler                # required; basler | flir
+    serial: "24824427"            # required; string; unique
+    fps: 4.0                      # required; > 0 and <= 30
+    exposure_us: 1500             # required; integer 10 .. 1000000
+    rotate: 0                     # required; 0 | 90 | 180 | 270 (no default: the model depends on orientation)
+    flir:                         # required when driver = flir, not allowed otherwise
+      interface: "GEV Interface 1"
+      throughput_bps: 19662239
+
+machine:
+  total_wheel_count: 190          # required; integer > 0 (TOTAL_WHEEL_COUNT)
+  expected_cycle_total: 188       # optional; read once W-inspection moves it out of code (D-023)
+  wheel_stand_required_counts: {34: 3}   # optional, default {}; wheel number -> required wheel_stand count (same, D-023)
+  object_sizes:                   # required; one entry per configured side; pixels, integers > 0
+    LEFT:  {wheel_w: 530, wheel_h: 495, bucket_clip_w: 300, chain_w: 880, half_bucket_clip_w: 150}
+    RIGHT: {wheel_w: 530, wheel_h: 495, bucket_clip_w: 300, chain_w: 880, half_bucket_clip_w: 150}
+
+model:
+  dir: data/models/<model_name>   # required; folder with weights and class json (MASK_MODEL_PATH)
+  weights: model_final.pth        # default model_final.pth; file inside dir (MODEL)
+  class_json: <file>.json         # required; file inside dir (JSON_PATH)
+  detectron_yaml: <path>          # required; Detectron2 config yaml (CONFIG_YAML_FL_PATH)
+  threshold: 0.5                  # required; > 0 and < 1 (DETECTTHRESH)
+  classes: [wheel, half_wheel, plate, bucket_clip, nut_bolt]   # required; non-empty, unique (ALL_CLASS_NAMES)
+  detect_labels: [...]            # default = classes; each must be in classes (DETECT_LABEL_NAMES)
+
+plc:
+  type: modbus_tcp                # default modbus_tcp (only value in v1)
+  ip: 192.168.2.5                 # required; IPv4; ONE PLC address per site (section 6)
+  port: 502                       # default 502
+  timeout_s: 3                    # default 3
+  light_register: 4109            # required
+  cleaning_register: 4106         # required
+  conveyor_status_register: 4098  # required
+  cleaning_pulse_seconds: 10      # default 10
+  legacy_db_numbers: {write: 12, read: 13}   # optional; only written into the legacy algorithm XML, not used by Modbus
+
+mail:
+  sender: graph                   # required; graph | smtp
+  project_name: "Tadipatri_dpc"   # required; used in subjects (PROJECT_NAME)
+  report_dir: data/reports        # default data/reports (REPORT)
+  recipients: ["a@example.com"]   # required; at least one address
+  cc: []                          # default []
+  smtp: {host: smtp.gmail.com, port: 587}   # only when sender = smtp; defaults = today's hardcoded values
+  # graph secrets: DPC_MS_TENANT_ID, DPC_MS_CLIENT_ID, DPC_MS_CLIENT_SECRET, DPC_MAIL_SENDER
+  # smtp secrets:  DPC_MAIL_SENDER, DPC_SMTP_PASSWORD
+
+retention:                        # all optional; defaults = today's deleter_config values
+  raw_image_hours: 24
+  cleanup_interval_seconds: 10
+  repeated: {days: 20, items: 200}
+  plate_days: 10
+  defective: {days: 10, items: 200}
+  disk_percent: {delete: 75, raw_delete: 85, mail: 90, inference_delete: 95}   # each 1..99, strictly increasing in this order
 ```
-Renderer output = the legacy XML files above plus `workers.yaml` (one capture worker per camera), golden-file tested. `docs/SITES.md` records the values per site.
+
+**Cross-field checks:** camera `id`, `side` and `serial` unique; `object_sizes` has exactly the sides of the configured cameras; `flir` block present if and only if `driver: flir`; `smtp` block only with `sender: smtp`; `detect_labels` subset of `classes`; `disk_percent` increasing.
+
+**Derived values (computed, never written in the file):** frame folders `<root>/data/frames/<CAMn>/{live,_tmp,INF,RAW_IMAGES,UI}`, images `<root>/data/images/{DEFECTIVE,REPEATED,RAW,PLATE}/<SIDE>`, logs `<root>/logs/`, per-camera log name `FrameCapture_<CAMn>.log`, legacy `DEFECT_SIDE` = `Left|Right` from `side`.
+
+**Renderer contract (later, D-022):** writes `<root>/config/rendered/` from this file plus `secrets.env`, keeping the XML tag order of section 3 exactly:
+| Rendered file | Filled from |
+|---|---|
+| `BASLER_CONFIG<n>.xml` (one per basler camera) | `paths` (derived), `logging.backup_count`, `cameras[]` (serial, exposure_us, fps, rotate), `db` + DB secrets, `db.health_table` |
+| `FRAME_CAPTURE_CONFIG.xml` (flir) | the same plus `cameras[].flir` |
+| `leftConfig.xml` / `rightConfig.xml` | derived paths for that side, `machine.total_wheel_count`, `machine.object_sizes.<SIDE>`, `db`, `model.*`, `plc.ip`, `plc.legacy_db_numbers` |
+| `MAIL_SERVICE_CONFIG.xml` | `db`, `mail.*`, mail secrets |
+| `deleter_config.xml` | derived image folders, `retention.*` |
+| `workers.yaml` | one `frame_capture_<camn>` worker per camera plus the other workers (D-033) |
 
 ## 8. Compatibility rules
 Topics, status fields, event names, XML tag order and DB columns are append-only; renaming/removing needs a DECISIONS entry plus a migration note. New optional config keys must not break existing files.
 
 ## 9. Secrets [PROPOSED] (D-018, D-030)
-`<root>/config/secrets.env` (chmod 600, owner = the user running the services). Keys today: `DPC_DB_USER`, `DPC_DB_PASS`, `DPC_MS_TENANT_ID`, `DPC_MS_CLIENT_ID`, `DPC_MS_CLIENT_SECRET`, `DPC_MAIL_SENDER`, `DPC_DISK_REPORT_TO`, `DPC_SITE_NAME`; MQTT credentials when auth is enabled. Never committed (`secrets.env.example` is). Loaded by systemd `EnvironmentFile=` or by the Supervisor's `env_file` option (proposed in section 1). Use a dedicated DB user with limited rights instead of `root`.
+`<root>/config/secrets.env` (chmod 600, owner = the user running the services). Keys: `DPC_DB_USER`, `DPC_DB_PASS`, `DPC_MS_TENANT_ID`, `DPC_MS_CLIENT_ID`, `DPC_MS_CLIENT_SECRET`, `DPC_MAIL_SENDER`, `DPC_SMTP_PASSWORD` (smtp only, new in D-047), `DPC_DISK_REPORT_TO`, `DPC_MQTT_USER` / `DPC_MQTT_PASS` (when MQTT auth is on). `DPC_SITE_NAME` is retired: the site name lives in `site.yaml` (`site.name`). Never committed (`secrets.env.example` is). Loaded by systemd `EnvironmentFile=` or by the Supervisor's `env_file` option (proposed in section 1). Use a dedicated DB user with limited rights instead of `root`.

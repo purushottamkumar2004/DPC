@@ -136,6 +136,9 @@ The developer runs database work in a separate chat instead of MASTER. Role **DB
 ## D-046 | 2026-10 | Proposed | New sites do not get the legacy `LOGIN` table
 From the DB chat handoff (2026-10-12). The legacy `LOGIN` table (plain-text `PASSWORD`) is left out of `db/schema.sql`; UI login on new sites uses Django auth (`auth_user`, created by `manage.py migrate`). Existing sites keep their table. Accept once the UI work confirms nothing new reads `LOGIN`.
 
+## D-047 | 2026-10 | Accepted | D-033 accepted; `site.yaml` schema v1 fixed in CONTRACTS section 7
+D-033 (`site.yaml` single source of truth, file first, one capture process per camera) moves to **Accepted**: the DB becomes the master copy only when the UI edits config, which needs its own decision then. Schema v1 is written in CONTRACTS section 7 so the CONFIG chat builds the loader against it. Choices made: unknown keys are errors; no per-key env overrides in v1 (only `DPC_SITE_CONFIG` for the file location); `cameras[].rotate` has no default because the model depends on orientation; `machine.expected_cycle_total` and `wheel_stand_required_counts` are optional until W-inspection reads them (D-023); `plc.legacy_db_numbers` only feeds the legacy XML; new secret key `DPC_SMTP_PASSWORD`, `DPC_SITE_NAME` retired (section 9). Changing a key later follows CONTRACTS section 8 and bumps `schema_version`.
+
 ## Open questions
 - Q1: Which signal best proves an algorithm is healthy: queue lag only, or also a heartbeat line/log?
 - Q2: Light register 4109: does 1 mean ON or OFF? Is cleaning ever triggered by the algorithm today, or by an operator/script?

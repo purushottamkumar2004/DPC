@@ -41,7 +41,7 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 |---|---|
 | Owner chat | CONFIG |
 | Files | `common/config/site_config.py` *(proposed)*, `config/examples/site.example.yaml`, `config/examples/secrets.example.env`, `tests/unit/test_site_config.py` |
-| Contract impact | **Yes.** New CONTRACTS section "site.yaml schema v1". It covers `paths.root`, `cameras[]` (id, serial, vendor, side, exposure, fps, rotate), `db` (name, host, `health_table`), `logging`, and secret key *names* only. D-033 must move to Accepted. |
+| Contract impact | None new: build against CONTRACTS section 7 (schema v1, D-047) and section 9 (secret keys). Update `config/examples/site.example.yaml` to v1 (it predates it: e.g. `rotate`, `object_sizes`, `model` missing). |
 | Done when | (a) The example file loads into a typed object. (b) A missing required key, an unknown key or a wrong type fails with a message that names the key. (c) `~` and `paths.root` are expanded. (d) Secrets come only from `secrets.env`, and the loader refuses that file if it is not chmod 600. (e) Unit tests pass. (f) The examples contain no real secret or serial. |
 
 ### 2. Basler capture robustness
@@ -84,7 +84,7 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 ### Follow-ups from handoffs (small, any order)
 | # | Owner chat | What | Done when |
 |---|---|---|---|
-| 6 | W-mail | `workers/mail/immediate_mail_sender.py` line ~329 uses `defect['id']` on a DictCursor row whose key is `ID`: KeyError the first time a duplicate defect is found (the outlook sender already uses `ID`). Verified in code. | A duplicate defect is marked ignored (2) without an exception; send path unchanged |
+| 6 (DONE, PR #3) | W-mail | `workers/mail/immediate_mail_sender.py` line ~329 uses `defect['id']` on a DictCursor row whose key is `ID`: KeyError the first time a duplicate defect is found (the outlook sender already uses `ID`). Verified in code. | A duplicate defect is marked ignored (2) without an exception; send path unchanged |
 | 7 | W-frame_capture_basler | Health "matched no row" warning can be false: MySQL returns changed rows, not matched rows, when the value is unchanged. Connect with `client_flag=CLIENT.FOUND_ROWS`. | Repeating the same health value on an existing row logs no warning; a missing row still warns |
 | 8 | DB | Bring the Tadipatri DB to schema version 1 with a reviewed upgrade script, run only after a full backup. | Script reviewed by you; after it, `db/test_seed.py` checks pass against `tadipatri4`; backup restorable |
 
@@ -101,8 +101,6 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 | Gap | Blocks | Needed |
 |---|---|---|
 | Which extra tables Django and DataSync need (Django's own are left to `manage.py migrate`) | 2b (later) | Add to `schema.sql` through a migration when the UI/DataSync work starts |
-| D-033 (`site.yaml`, file-first) still Proposed; "file first vs DB first" still waiting | 1, 5 | Accept D-033 with "file first; DB becomes master only when the UI edits config" |
-| `site.yaml` schema v1 not in CONTRACTS | 1, 2 (later), 5 | MASTER writes the schema section before the CONFIG chat starts |
 | D-038 Proposed; Q15 open (health table per site) | 2 | Accept D-038; answer Q15 for Maihar and Tadipatri |
 | D-041 Proposed (Basler XML elements 16 to 18) | 2 | Accept D-041 and add the elements to CONTRACTS section 3 |
 | `health_status` schema unknown (Q5) | 2 (DB health part) | Export the schema from Maihar and Tadipatri |
