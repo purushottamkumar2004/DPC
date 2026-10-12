@@ -130,6 +130,9 @@ The full DB structure for a new site is kept as SQL in `db/`: `schema.sql` (all 
 ## D-044 | 2026-10 | Accepted | Keep the dedupe size check and the FLIR camera-lamp mapping as they are
 Found while testing the DB seed (D-043): (1) the dedupe query in the algorithms and mail senders computes the bbox size from the new defect's own values, so the +-50 px size condition is always true and dedupe is effectively wheel + type + side within 24 h; (2) the FLIR capture writes CAM1 into `CAMERA_PLC_STATUS.RIGHT CAMERA` and CAM2 into `LEFT CAMERA`. Developer decision: no change to either. Chats must not raise these again or "fix" them unless the developer asks.
 
+## D-045 | 2026-10 | Accepted | DB work moves to its own chat role, DB
+The developer runs database work in a separate chat instead of MASTER. Role **DB** owns `db/` (seed SQL, migrations, `reference/` dumps) and `docs/CONTRACTS.md` section 5, so a table change, its migration and its contract text land in one commit (D-043). Supersedes the "`db/` owned by MASTER" part of D-043; everything else in D-043 stands. DB pushes directly per D-042. MASTER still owns the rest of `docs/` and records DB decisions in DECISIONS from the DB chat's handoff.
+
 ## Open questions
 - Q1: Which signal best proves an algorithm is healthy: queue lag only, or also a heartbeat line/log?
 - Q2: Light register 4109: does 1 mean ON or OFF? Is cleaning ever triggered by the algorithm today, or by an operator/script?

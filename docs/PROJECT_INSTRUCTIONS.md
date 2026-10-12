@@ -53,7 +53,7 @@ Continuous operation; images arrive continuously; LEFT and RIGHT are separate st
 10. Respect folder ownership (OWNERS.md): change only the folder named in the opener. If a task needs a contract change, stop and say so; MASTER decides.
 11. Use the deployed layout (`<root>/code|config|logs|run|data`, CONTRACTS section 4.1). Never hardcode `/home/<user>` or a site name; paths, serials and table names are config.
 12. Frame files in `INF`, `UI` and `live` are hard-linked: read, move or delete them, never modify in place.
-13. Start from `docs/STATUS.md` for the current state and next steps. A chat's role (MASTER, SUPERVISOR, W-<worker>, UI, CONFIG, SITE) comes from its first message; if it is missing, ask which role this chat is.
+13. Start from `docs/STATUS.md` for the current state and next steps. A chat's role (MASTER, SUPERVISOR, W-<worker>, UI, CONFIG, DB, SITE) comes from its first message; if it is missing, ask which role this chat is.
 
 ## 8. Site profile (fill one per site and paste when starting a site-specific chat)
 ```
@@ -68,5 +68,5 @@ KNOWN SITE QUIRKS: <..>
 ```
 
 ## 9. Layout and chat roles (short)
-Deployed root `~/INSIGHTZZ`: `code/ config/ logs/ run/ data/` (data = frames, images, wheel_status, bolt_data, state, models). Config comes from local files (`site.yaml` target, legacy XMLs today); MQTT is for status, health, events and commands only. Chat roles: MASTER (docs, contracts, backlog), SUPERVISOR, W-<worker>, UI, CONFIG, SITE-<name>. Details: ARCHITECTURE.md sections 9 and 10, CHAT_WORKFLOW.md, OWNERS.md.
+Deployed root `~/INSIGHTZZ`: `code/ config/ logs/ run/ data/` (data = frames, images, wheel_status, bolt_data, state, models). Config comes from local files (`site.yaml` target, legacy XMLs today); MQTT is for status, health, events and commands only. Chat roles: MASTER (docs, contracts, backlog), SUPERVISOR, W-<worker>, UI, CONFIG, DB (`db/` seed and DB contract), SITE-<name>. Details: ARCHITECTURE.md sections 9 and 10, CHAT_WORKFLOW.md, OWNERS.md.
 Releases: one `main` branch for all sites, tagged `v0.<n>`; sites differ by config, never by branch (D-039). If a site needs different code, first propose a config option; a real fix goes through a short-lived `hotfix/<site>-<what>` branch merged to `main`.

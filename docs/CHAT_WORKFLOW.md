@@ -10,6 +10,7 @@ Chats cannot talk to each other and cannot push to GitHub. Everything they share
 | **W-<worker>** (one per task) | `workers/<worker>/` | any other folder | that folder + `docs/CONTRACTS.md` |
 | **UI** | `ui/` | workers, supervisor | `ui/` |
 | **CONFIG** | `config/`, config loader in `common/`, `scripts/` | worker logic | `config/`, `common/` |
+| **DB** | `db/` (seed SQL, migrations, reference dumps) and `docs/CONTRACTS.md` section 5 (D-045) | worker code, other docs | nothing extra (repo access per D-042) |
 | **SITE-<name>** | that site's entry in `docs/SITES.md`, and the site data sheet in `docs/COMMISSIONING.md` | code | site profile + sanitized example config |
 
 Rules: one task per worker chat; start a new chat when the task is done or the chat gets long; never mix two workers in one chat. If a task is the interface between two owners (a topic, a DB column, a path), it goes to MASTER first.
@@ -59,6 +60,15 @@ ROLE: CONFIG
 TASK: <e.g. site.yaml schema and loader with tests>
 OWNS: config/, common/config*, scripts/
 CONTRACT: CONTRACTS section 7 (site.yaml) and section 3 (legacy XML tag order)
+DONE WHEN: <testable condition>
+```
+DB:
+```
+ROLE: DB
+TASK: <e.g. reconcile db/schema.sql with db/reference/tadipatri (STATUS item 2b findings)>
+OWNS: db/, docs/CONTRACTS.md section 5
+CONTRACT: CONTRACTS section 5 and section 8 (columns append-only); D-043, D-044, D-045
+DO NOT CHANGE: worker code (write needed code changes as requests in the handoff), other docs
 DONE WHEN: <testable condition>
 ```
 

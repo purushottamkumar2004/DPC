@@ -10,6 +10,7 @@ Today you run them by hand in MySQL Workbench; later `scripts/dpc_db_init.py` ru
 | `fixed_rows.sql` | Rows the programs expect to already exist, because they only `UPDATE` them: `wheel_counter_table` ID 1, `CAMERA_PLC_STATUS` id 1. `INSERT IGNORE`, safe to run twice. | New site: after `schema.sql` |
 | `site_rows.example.sql` | Template for site-specific rows: one health row per camera serial. Copy, fill the serials, run. Never commit the filled copy. | New site: after `fixed_rows.sql` |
 | `migrations/NNNN_<what>.sql` (from `0002`) | One file per change, numbered, append-only. Brings an **existing** site DB up to the current `schema.sql`. | Existing sites, in number order |
+| `reference/<site>/schema_<date>.sql` | Structure-only export of a live site DB, kept as a record. Never run on a new site. | Read when reconciling `schema.sql` |
 | `schema_version` table | Created by `schema.sql`; each migration inserts its number. Shows which changes a site has. | Read it to see where a site stands |
 
 ## New site in MySQL Workbench

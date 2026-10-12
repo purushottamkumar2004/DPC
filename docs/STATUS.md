@@ -52,14 +52,25 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 | Contract impact | **Yes, small.** The Basler XML gets optional, append-only elements 16 `HEALTH_TABLE`, 17 `LOG_FILE_NAME` and 18 `ROTATE_DEG` (D-041); the defaults reproduce today's behaviour. The heartbeat is out of scope here; health comes from `file_activity` on `live/IMG_1.jpg` until item 3 is done. |
 | Done when | Tested on the Tadipatri cameras: (a) both cameras run at the same time with separate logs; (b) after the cable is pulled and replugged, frames resume within 30 s with no manual restart, and the log shows the lost and reopened events; (c) no two consecutive `INF` files are byte-identical during a 10-minute run; (d) health rows go to the table named in config; (e) the `_tmp` folder is empty after a clean stop; (f) the normal-run checks from the 2026-10-12 test still pass (regression); (g) with `ROTATE_DEG` 0 the saved frames are 1920x1080 and the log has no rotation warnings, and with the element absent frames are still rotated 90 (backward compatible). |
 
-### 2b. Database seed (D-043): schema v1 BUILT 2026-10-12
+### 2b. Database seed (D-043): schema v1 built; reconcile with Tadipatri (next, DB chat)
 | | |
 |---|---|
-| Owner chat | MASTER (`db/*.sql`), CONFIG (`scripts/dpc_db_init.py`, after item 1) |
-| Files | `db/schema.sql`, `db/fixed_rows.sql`, `db/site_rows.example.sql`, `db/migrations/0001_baseline.sql`, `db/README.md` (written); later `scripts/dpc_db_init.py` |
-| Contract impact | **Yes.** `db/` becomes the executable DB contract next to CONTRACTS section 5. Choose one standard health table for new sites (Q15). |
-| Built | `db/schema.sql` v1 (6 tables), `fixed_rows.sql`, `site_rows.example.sql`, `migrations/README.md`; designed from CONTRACTS section 5 and the code's queries (no copy of old DBs); tested on MariaDB. Remaining: run it once in MySQL Workbench (MySQL 8), then `scripts/dpc_db_init.py` (CONFIG, after item 1). |
-| Done when | (a) On an empty schema in MySQL Workbench, `schema.sql` then `fixed_rows.sql` then a filled `site_rows` run with no error, and running them again changes nothing. (b) Every table and column the code uses exists: the algorithms' `INSERT` into `defects_table`, the mail senders' `SELECT`/`UPDATE`, `wheel_counter_table` `UPDATE` of ID 1, and both health writers find their row. (c) Comparing `mysqldump --no-data` of the new DB with the Tadipatri dump shows no missing column. (d) No database name, password or serial in any committed file. |
+| Owner chat | **DB** (D-045); CONFIG later for `scripts/dpc_db_init.py` (after item 1) |
+| Built | `db/schema.sql` v1 (6 tables), `fixed_rows.sql`, `site_rows.example.sql`, `migrations/README.md`, tested on MariaDB. Live Tadipatri structure stored in `db/reference/tadipatri/schema_2026-10-12.sql` (26 tables). |
+| Next task | Reconcile `schema.sql` with the Tadipatri reference using the findings below: for each table decide keep, add or leave out, then re-test. `schema.sql` is still version 1 (no site runs it yet), so it can be rewritten without a migration. |
+| Contract impact | **Yes.** CONTRACTS section 5 gets every table the seed creates, with its writer and reader. |
+| Done when | (a) On an empty MySQL 8 schema, `schema.sql`, `fixed_rows.sql` and a filled `site_rows` run with no error, twice. (b) Every query the repo code runs works against it (as in the v1 test). (c) Every Tadipatri table is either in `schema.sql` or listed in `db/README.md` with the reason it is left out. (d) CONTRACTS section 5 matches `schema.sql`. (e) No database name, password or serial in any committed file. |
+
+**Findings from the Tadipatri export (2026-10-12), input for the DB chat**
+1. **Health table name mismatch (act now):** the live table is `tadipatri4_health_status_table`, but the Basler capture's default (D-041) is `tadipatri_health_status_table`, so its health updates fail at Tadipatri unless element 16 `HEALTH_TABLE` = `tadipatri4_health_status_table` is set in both `BASLER_CONFIG*.xml`.
+2. **Repeated-defects name:** live table is `repeated_defect_table` (singular); the algorithms query `repeated_defects_table` (plural), which does not exist at Tadipatri. `schema.sql` follows the code (plural).
+3. **defects_table at Tadipatri has no review columns** (`reviewed_by`, `reviewed_at`, `review_status`), which Maihar has and `schema.sql` includes.
+4. **CAMERA_PLC_STATUS** live has a `PLC` column, `id` without auto-increment and `varchar(45)` columns; `schema.sql` has no `PLC` column.
+5. **Old `HEALTH_STATUS` (`DEVICE_NAME`, `STATUS`)** is a different table from the FLIR capture's `health_status` (`item`, `health`); table names are case-sensitive on Linux.
+6. **Nine tables not in `schema.sql` and with no writer in the repo:** `LOGIN`, `PROCESS_UPTIME_REPORT`, `UPTIME_TABLE`, `cycle_time_table`, `dpc_status_table`, `live_images`, `mail_status`, `shutdown_status`, `system_health_status`. Their writers (uptime report, Django views, DataSync, other scripts) must be found before deciding.
+7. **Django:** only built-in `auth_*` / `django_*` tables, no app tables; leave them to `manage.py migrate`.
+8. Only primary keys, no other indexes; collation `utf8mb4_0900_ai_ci` (MySQL 8 only) vs `utf8mb4_unicode_ci` in `schema.sql`.
+9. `LOGIN` has a plain-text `PASSWORD` column; decide whether new sites get it at all.
 
 ### 3. Supervisor V2: modes, `queue_lag`, heartbeat, start order
 | | |
