@@ -138,7 +138,9 @@ Update `docs/SITES.md` (serials, sides, release tag, quirks), commit it through 
 | `os.link failed` or "different filesystem" in the log | frame folders on different mounts | all of `frames/CAMn` must be on one filesystem; rerun the layout script check |
 | `_tmp` fills up | writes failing after the temp file is created | check disk space and permissions; read the log |
 | `INF` count not growing | camera not grabbing, wrong serial, config path wrong | check the serial in the XML, the log, and `BASLER_CONFIG` |
-| Image is sideways | rotation setting | change the rotation in the code (config key planned in `site.yaml`) |
+| Image is sideways | rotation setting | set element 18 `ROTATE_DEG` in the camera's XML (D-041), restart |
+| Log shows `CHANGE_ME` (DB user or health table) or `Access denied for user 'CHANGE_ME'` | the capture read a template copy, not the site config: started without `BASLER_CONFIG`, so it took `BASLER_CONFIG1.xml` from the working folder | always start with `BASLER_CONFIG=$HOME/INSIGHTZZ/config/BASLER_CONFIGn.xml`; delete config copies from the code folder; the `Started pid` log line shows `config=` |
+| Health row changes only at start | by design: written at start, at once on a state change, otherwise every 10 min (`HEALTH_INTERVAL_S`) | wait 10 min or pull a cable to see `NOK` at once |
 | `git push` or fetch fails with authentication | HTTPS and no token, or key not added | use the SSH deploy key (step 2) |
 
 ## 5. Update and rollback of an installed site

@@ -25,6 +25,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-12.
 - Tadipatri machine: layout created, repo at `~/INSIGHTZZ/code`, pushed to GitHub (`purushottamkumar2004/DPC`).
 - **Tadipatri first real capture test passed (2026-10-12)** for both Basler cameras. COMMISSIONING step 7 checks passed: `live/IMG_1.jpg` updates every frame, `INF` grows at the configured fps, `_tmp` is empty, the log is clean, the image is correct. `INF` queues were emptied after the test.
 - Tadipatri camera mapping and tuning confirmed: CAM1 = LEFT = 24824427 (4 fps, 1500 us), CAM2 = RIGHT = 24874775 (4 fps, 2000 us), no rotation wanted. Recorded in `SITES.md`; Q16 answered.
+- Tadipatri camera health working (2026-10-12): both captures started with `BASLER_CONFIG` pointing at `~/INSIGHTZZ/config/`, element 16 `HEALTH_TABLE` = `tadipatri4_health_status_table`; `OK` written at start, every 10 min, and `NOK` at once on a camera loss.
 
 ## In progress
 - Repo hygiene: the repo is **public** (checked 2026-10-12). Make it Private (GitHub, Settings, General, Danger Zone, Change visibility). A history scan found only `CHANGE_ME` placeholders, no real passwords; tag `v0.1` still to confirm.
@@ -32,7 +33,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-12.
 
 ## Next (ordered)
 
-**0. You, not a chat (prerequisite).** Rotate the DB `root` password and the MS Graph secret. Create a limited DB user per site. Make the repo Private and confirm `v0.1` exists. Tadipatri: set Basler XML element 16 `HEALTH_TABLE` = `tadipatri4_health_status_table` in both camera files and check one health row per serial exists. Set `RELEASE` for Tadipatri in `SITES.md`.
+**0. You, not a chat (prerequisite).** Rotate the DB `root` password and the MS Graph secret. Create a limited DB user per site. Make the repo Private and confirm `v0.1` exists. Set `RELEASE` for Tadipatri in `SITES.md`.
 Done when: no config on the machine uses `root`; the old secrets are revoked; `SITES.md` shows the Tadipatri release tag.
 
 ### 1. `site.yaml` schema and loader
