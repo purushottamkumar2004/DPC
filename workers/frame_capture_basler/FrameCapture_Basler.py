@@ -479,7 +479,7 @@ def apply_camera_settings(camera):
 def make_converter():
     converter = pylon.ImageFormatConverter()
     converter.OutputPixelFormat = pylon.PixelType_BGR8packed
-    converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+    converter.OutputBitAlignment.Value = pylon.OutputBitAlignment_MsbAligned   # newer pypylon syntax
     return converter
 
 
