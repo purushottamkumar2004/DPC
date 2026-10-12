@@ -121,6 +121,9 @@ Found when the Project knowledge was checked from a fresh chat. History above is
 ## D-041 | 2026-10 | Proposed | Basler XML: optional append-only elements for health table, log name and rotation
 `BASLER_CONFIG*.xml` gains optional positions 16 `HEALTH_TABLE` (default `tadipatri_health_status_table`), 17 `LOG_FILE_NAME` (default today's shared name), 18 `ROTATE_DEG` (0 | 90 | 180 | 270, default 90 = today's behaviour; 0 = no rotation, no warning). Defaults reproduce current behaviour so existing files keep working. Matches `cameras[].rotate` in `site.yaml`; the renderer will write these elements later. Reason: rotation, health table and log name are site values hardcoded in code (D-023, D-038). Tadipatri sets `ROTATE_DEG` 0 on both cameras.
 
+## D-042 | 2026-10 | Accepted | Secrets may be shared in chats; Claude works on the repo directly
+The developer wants Claude to read and write the repo without manual downloads and uploads. A GitHub fine-grained token (DPC repo only, Contents read/write) is given in the chat or in a hand-added Project knowledge file. Claude clones, edits, commits and pushes: docs straight to `main`, code to a `feat/` or `hotfix/` branch that the developer tests and merges. Supersedes the "nothing secret in a chat, rotate if pasted" rule of `CLAUDE_PROJECT_SETUP.md` section E and instruction 4. Unchanged: no secret ever goes into code, docs, git history or memory (D-018, D-030); production secrets stay in `<root>/config/secrets.env`. Accepted risk: anyone who can read the chat history or the Project can use the token until it expires.
+
 ## Open questions
 - Q1: Which signal best proves an algorithm is healthy: queue lag only, or also a heartbeat line/log?
 - Q2: Light register 4109: does 1 mean ON or OFF? Is cleaning ever triggered by the algorithm today, or by an operator/script?

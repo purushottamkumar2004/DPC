@@ -48,5 +48,8 @@ Expected: the docs listed (including `COMMISSIONING.md`, `OWNERS.md`, `SITES.md`
 4. Commit those docs, push, press **Sync now** in the Project.
 5. Tag a release when a tested set of changes should go to sites (`v0.<n>`).
 
-## E. What never goes into the Project or a chat
-Passwords, tokens, `secrets.env`, real configs with credentials, models, images, logs. Paste an error or a small snippet instead. A secret that appears in a chat is rotated.
+## E. Secrets and repo access (D-042)
+- **Chats may hold secrets.** To let Claude work on the repo directly, paste the GitHub token at the start of a chat (or keep it in a Project knowledge text file added by hand, not through GitHub). Claude clones, edits, commits and pushes; you do not download or upload code.
+- **Token:** fine-grained, only the `DPC` repo, Contents read and write, an expiry you choose. Replace it when it expires or if the chat history is ever shared.
+- **Never in the repo:** passwords, tokens, `secrets.env`, real configs with credentials, models, images, logs. Git history is permanent and every site installs from this repo.
+- **What Claude pushes where:** docs (MASTER) go straight to `main`. Code goes to a `feat/` or `hotfix/` branch; you test it on a machine and merge it, because code runs on the plants.
