@@ -24,7 +24,7 @@ QUIRKS: <..>
 SITE: tadipatri   HOST: dpc-tadipatri (HP Z2 Tower G9)   ROOT: /home/dpc_tadipatri/INSIGHTZZ   RELEASE: (none yet)
 DISK: one 938 GB NVMe mounted at /, services run as the login user dpc_tadipatri (D-030)
 CAMERAS: CAM1=LEFT Basler serial 24824427 exposure_us 1500 fps 4.0 rotate 0 (target; code still rotates 90 until D-041 is built); CAM2=RIGHT Basler serial 24874775 exposure_us 2000 fps 4.0 rotate 0 (same note). Mapping confirmed, both capture correctly (test 2026-10-12).
-DB: name tadipatri4   health table tadipatri_health_status_table (hardcoded in code, D-038)
+DB: name tadipatri4   health table tadipatri4_health_status_table (set Basler XML element 16 HEALTH_TABLE to this, D-041; the code default tadipatri_health_status_table does not exist here)
 PLC / MODEL / MAIL / WHEELS: to fill
 QUIRKS: Basler config was under .../CODE/FRAME_CAPTURE/CAM1/ in the old layout; DB login is root (rotate, use a dedicated user); no image rotation wanted (rotate 0): model and object sizes must be for unrotated 1920x1080 frames
 ```

@@ -27,12 +27,12 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-12.
 - Tadipatri camera mapping and tuning confirmed: CAM1 = LEFT = 24824427 (4 fps, 1500 us), CAM2 = RIGHT = 24874775 (4 fps, 2000 us), no rotation wanted. Recorded in `SITES.md`; Q16 answered.
 
 ## In progress
-- Repo hygiene: repo is **Private**, tag `v0.1` is visible, no credentials in git history.
+- Repo hygiene: the repo is **public** (checked 2026-10-12). Make it Private (GitHub, Settings, General, Danger Zone, Change visibility). A history scan found only `CHANGE_ME` placeholders, no real passwords; tag `v0.1` still to confirm.
 - Set CAM2 exposure to 2000 us in `BASLER_CONFIG2.xml` (position 5; done on the machine by you). Rotation switches off with item 2.
 
 ## Next (ordered)
 
-**0. You, not a chat (prerequisite).** Rotate the DB `root` password and the MS Graph secret. Create a limited DB user per site. Confirm the repo is Private and `v0.1` exists. Set `RELEASE` for Tadipatri in `SITES.md`.
+**0. You, not a chat (prerequisite).** Rotate the DB `root` password and the MS Graph secret. Create a limited DB user per site. Make the repo Private and confirm `v0.1` exists. Tadipatri: set Basler XML element 16 `HEALTH_TABLE` = `tadipatri4_health_status_table` in both camera files and check one health row per serial exists. Set `RELEASE` for Tadipatri in `SITES.md`.
 Done when: no config on the machine uses `root`; the old secrets are revoked; `SITES.md` shows the Tadipatri release tag.
 
 ### 1. `site.yaml` schema and loader
@@ -52,25 +52,8 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 | Contract impact | **Yes, small.** The Basler XML gets optional, append-only elements 16 `HEALTH_TABLE`, 17 `LOG_FILE_NAME` and 18 `ROTATE_DEG` (D-041); the defaults reproduce today's behaviour. The heartbeat is out of scope here; health comes from `file_activity` on `live/IMG_1.jpg` until item 3 is done. |
 | Done when | Tested on the Tadipatri cameras: (a) both cameras run at the same time with separate logs; (b) after the cable is pulled and replugged, frames resume within 30 s with no manual restart, and the log shows the lost and reopened events; (c) no two consecutive `INF` files are byte-identical during a 10-minute run; (d) health rows go to the table named in config; (e) the `_tmp` folder is empty after a clean stop; (f) the normal-run checks from the 2026-10-12 test still pass (regression); (g) with `ROTATE_DEG` 0 the saved frames are 1920x1080 and the log has no rotation warnings, and with the element absent frames are still rotated 90 (backward compatible). |
 
-### 2b. Database seed (D-043): schema v1 built; reconcile with Tadipatri (next, DB chat)
-| | |
-|---|---|
-| Owner chat | **DB** (D-045); CONFIG later for `scripts/dpc_db_init.py` (after item 1) |
-| Built | `db/schema.sql` v1 (6 tables), `fixed_rows.sql`, `site_rows.example.sql`, `migrations/README.md`, tested on MariaDB. Live Tadipatri structure stored in `db/reference/tadipatri/schema_2026-10-12.sql` (26 tables). |
-| Next task | Reconcile `schema.sql` with the Tadipatri reference using the findings below: for each table decide keep, add or leave out, then re-test. `schema.sql` is still version 1 (no site runs it yet), so it can be rewritten without a migration. |
-| Contract impact | **Yes.** CONTRACTS section 5 gets every table the seed creates, with its writer and reader. |
-| Done when | (a) On an empty MySQL 8 schema, `schema.sql`, `fixed_rows.sql` and a filled `site_rows` run with no error, twice. (b) Every query the repo code runs works against it (as in the v1 test). (c) Every Tadipatri table is either in `schema.sql` or listed in `db/README.md` with the reason it is left out. (d) CONTRACTS section 5 matches `schema.sql`. (e) No database name, password or serial in any committed file. |
-
-**Findings from the Tadipatri export (2026-10-12), input for the DB chat**
-1. **Health table name mismatch (act now):** the live table is `tadipatri4_health_status_table`, but the Basler capture's default (D-041) is `tadipatri_health_status_table`, so its health updates fail at Tadipatri unless element 16 `HEALTH_TABLE` = `tadipatri4_health_status_table` is set in both `BASLER_CONFIG*.xml`.
-2. **Repeated-defects name:** live table is `repeated_defect_table` (singular); the algorithms query `repeated_defects_table` (plural), which does not exist at Tadipatri. `schema.sql` follows the code (plural).
-3. **defects_table at Tadipatri has no review columns** (`reviewed_by`, `reviewed_at`, `review_status`), which Maihar has and `schema.sql` includes.
-4. **CAMERA_PLC_STATUS** live has a `PLC` column, `id` without auto-increment and `varchar(45)` columns; `schema.sql` has no `PLC` column.
-5. **Old `HEALTH_STATUS` (`DEVICE_NAME`, `STATUS`)** is a different table from the FLIR capture's `health_status` (`item`, `health`); table names are case-sensitive on Linux.
-6. **Nine tables not in `schema.sql` and with no writer in the repo:** `LOGIN`, `PROCESS_UPTIME_REPORT`, `UPTIME_TABLE`, `cycle_time_table`, `dpc_status_table`, `live_images`, `mail_status`, `shutdown_status`, `system_health_status`. Their writers (uptime report, Django views, DataSync, other scripts) must be found before deciding.
-7. **Django:** only built-in `auth_*` / `django_*` tables, no app tables; leave them to `manage.py migrate`.
-8. Only primary keys, no other indexes; collation `utf8mb4_0900_ai_ci` (MySQL 8 only) vs `utf8mb4_unicode_ci` in `schema.sql`.
-9. `LOGIN` has a plain-text `PASSWORD` column; decide whether new sites get it at all.
+### 2b. Database seed (D-043): DONE 2026-10-12 (DB chat)
+`db/schema.sql` v1 reconciled with the Tadipatri export: every Tadipatri table is seeded or listed under "Left out" in `db/README.md` with the reason; `CAMERA_PLC_STATUS` gained `PLC`; CONTRACTS section 5 rewritten (writer and reader per table). `db/test_seed.py` passed twice on MySQL 8.0.46: seed runs twice, 16 worker DB statements, all 26 Tadipatri tables accounted for, CONTRACTS 5 names every seeded column, no site values. Reference export: `db/reference/tadipatri/schema_2026-10-12.sql`. `scripts/dpc_db_init.py` stays with CONFIG after item 1.
 
 ### 3. Supervisor V2: modes, `queue_lag`, heartbeat, start order
 | | |
@@ -96,6 +79,13 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 | Checks, in order | layout exists and the frame folders share one filesystem; `site.yaml` is valid (item 1 loader); `secrets.env` is chmod 600 and outside git; free disk is above the cleanup threshold; each configured serial is detected (pypylon); DB login works with a non-`root` user; MQTT broker is reachable (a warning only, per D-034) |
 | Contract impact | **Small.** Exit codes 0 = pass, 1 = fail, 2 = pass with warnings, plus one result line per check. Add to CONTRACTS as the commissioning interface (D-035). |
 | Done when | (a) On Tadipatri all checks pass without sudo. (b) Each check can be made to fail on purpose (unplug a camera, `chmod 644 secrets.env`, a wrong serial, `root` as DB user) and then fails with a one-line reason. (c) It runs in under 30 s. (d) It never prints a secret. |
+
+### Follow-ups from handoffs (small, any order)
+| # | Owner chat | What | Done when |
+|---|---|---|---|
+| 6 | W-mail | `workers/mail/immediate_mail_sender.py` line ~329 uses `defect['id']` on a DictCursor row whose key is `ID`: KeyError the first time a duplicate defect is found (the outlook sender already uses `ID`). Verified in code. | A duplicate defect is marked ignored (2) without an exception; send path unchanged |
+| 7 | W-frame_capture_basler | Health "matched no row" warning can be false: MySQL returns changed rows, not matched rows, when the value is unchanged. Connect with `client_flag=CLIENT.FOUND_ROWS`. | Repeating the same health value on an existing row logs no warning; a missing row still warns |
+| 8 | DB | Bring the Tadipatri DB to schema version 1 with a reviewed upgrade script, run only after a full backup. | Script reviewed by you; after it, `db/test_seed.py` checks pass against `tadipatri4`; backup restorable |
 
 ### Later (unchanged intent)
 - `install.sh`: layout, clone at a tag, venv, dependencies, model fetch, then the wizard.
