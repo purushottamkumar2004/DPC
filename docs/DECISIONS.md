@@ -142,6 +142,6 @@ The full DB structure for a new site is kept as SQL in `db/`: `schema.sql` (all 
 - Q12: Does any consumer (algorithm, UI, DataSync) modify files in `INF`, `UI` or `live` in place? Hard links make that unsafe (D-031).
 - Q13: What are the real `WHEEL_STATUS` subfolders? The layout script assumes LEFT, RIGHT, IMAGES, PDFS.
 - Q14: Are old defect records imported into the new DB? `view_defect` holds absolute image paths, so a layout change breaks old images unless the rows are rewritten or the old paths are kept.
-- Q15: Which health table does each site use (`health_status` or `tadipatri_health_status_table`)? Needed for D-038.
+- Q15: Which health table does each site use (`health_status` or `tadipatri_health_status_table`)? Needed for D-038. **New sites: answered by D-043, standard `health_status`; existing sites keep their table via `HEALTH_TABLE`.**
 - Q16 (answered): Tadipatri CAM1 = LEFT = 24824427 (exposure 1500 us), CAM2 = RIGHT = 24874775 (exposure 2000 us), both 4 fps, no rotation. See SITES.md.
 - Q17: Keep site configs only on each machine, or also mirror them (no secrets) in a private `dpc-sites` repo, one folder per site (D-039)?
