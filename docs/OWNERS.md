@@ -4,7 +4,7 @@ One owner per folder. A chat changes only the folder it owns. Anything that cros
 
 | Folder | Owner chat | Others may |
 |---|---|---|
-| `docs/` | MASTER | read |
+| `docs/` (including `COMMISSIONING.md`, `STATUS.md`, `CLAUDE_PROJECT_SETUP.md`) | MASTER | read; SITE chats edit only their entry in `SITES.md` |
 | `supervisor/` | SUPERVISOR | read |
 | `common/` | SUPERVISOR (MQTT helpers), CONFIG (config loader, path helpers) | import, never edit |
 | `workers/frame_capture_basler/` | W-frame_capture_basler | read |

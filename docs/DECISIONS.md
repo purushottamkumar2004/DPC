@@ -127,5 +127,5 @@ Every site runs a tagged release of `main` (`git fetch && git checkout v0.<n>`; 
 - Q13: What are the real `WHEEL_STATUS` subfolders? The layout script assumes LEFT, RIGHT, IMAGES, PDFS.
 - Q14: Are old defect records imported into the new DB? `view_defect` holds absolute image paths, so a layout change breaks old images unless the rows are rewritten or the old paths are kept.
 - Q15: Which health table does each site use (`health_status` or `tadipatri_health_status_table`)? Needed for D-038.
-- Q16: Does Tadipatri run Basler only (CAM1) or two cameras, and which side is CAM1?
+- Q16 (partly answered): Tadipatri has two Basler cameras (serials 24824427, 24874775). Still open: which one is CAM1 (LEFT) and which is CAM2 (RIGHT), and the tuned fps, exposure and rotation of the second.
 - Q17: Keep site configs only on each machine, or also mirror them (no secrets) in a private `dpc-sites` repo, one folder per site (D-039)?

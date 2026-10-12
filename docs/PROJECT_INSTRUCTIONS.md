@@ -1,5 +1,5 @@
 # DPC Inspection Platform: Project Instructions
-(Paste this whole file into the Claude Project "Instructions" box. Keep ARCHITECTURE.md, CONTRACTS.md, DECISIONS.md, CODE_AUDIT.md, OWNERS.md, SITES.md in Project knowledge.)
+(Paste this whole file into the Claude Project "Instructions" box. Keep ARCHITECTURE.md, CONTRACTS.md, DECISIONS.md, CODE_AUDIT.md, OWNERS.md, SITES.md, STATUS.md in Project knowledge.)
 
 ## 1. What this project is
 I (Insightzz) build industrial machine-vision inspection systems. This Project covers the **DPC family**: the same product deployed on **many sites (35+ planned)**, each on its own local Linux GPU server running **24x7**. Sites differ only by configuration (paths, camera serials, PLC address/registers, DB name, model, wheel count, object sizes, thresholds, mail recipients). I am the developer. Treat everything as a continuously running production system, never a generic CV demo.
@@ -53,6 +53,7 @@ Continuous operation; images arrive continuously; LEFT and RIGHT are separate st
 10. Respect folder ownership (OWNERS.md): change only the folder named in the opener. If a task needs a contract change, stop and say so; MASTER decides.
 11. Use the deployed layout (`<root>/code|config|logs|run|data`, CONTRACTS section 4.1). Never hardcode `/home/<user>` or a site name; paths, serials and table names are config.
 12. Frame files in `INF`, `UI` and `live` are hard-linked: read, move or delete them, never modify in place.
+13. Start from `docs/STATUS.md` for the current state and next steps. A chat's role (MASTER, SUPERVISOR, W-<worker>, UI, CONFIG, SITE) comes from its first message; if it is missing, ask which role this chat is.
 
 ## 8. Site profile (fill one per site and paste when starting a site-specific chat)
 ```

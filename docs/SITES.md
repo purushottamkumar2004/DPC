@@ -23,7 +23,7 @@ QUIRKS: <..>
 ```
 SITE: tadipatri   HOST: dpc-tadipatri (HP Z2 Tower G9)   ROOT: /home/dpc_tadipatri/INSIGHTZZ   RELEASE: (none yet)
 DISK: one 938 GB NVMe mounted at /, services run as the login user dpc_tadipatri (D-030)
-CAMERAS: CAM1 Basler serial 24824427, exposure_us 1500, fps 4.0, rotate 90 (side to confirm); CAM2 to confirm
+CAMERAS: two Basler cameras detected, serials 24824427 and 24874775; CAM1/CAM2 and side to confirm by looking at the images; first config: 24824427 exposure_us 1500, fps 4.0, rotate 90; the second camera uses the same settings until tuned
 DB: name tadipatri4   health table tadipatri_health_status_table (hardcoded in code, D-038)
 PLC / MODEL / MAIL / WHEELS: to fill
 QUIRKS: Basler config was under .../CODE/FRAME_CAPTURE/CAM1/ in the old layout; DB login is root (rotate, use a dedicated user)

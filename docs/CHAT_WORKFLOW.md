@@ -10,7 +10,7 @@ Chats cannot talk to each other and cannot push to GitHub. Everything they share
 | **W-<worker>** (one per task) | `workers/<worker>/` | any other folder | that folder + `docs/CONTRACTS.md` |
 | **UI** | `ui/` | workers, supervisor | `ui/` |
 | **CONFIG** | `config/`, config loader in `common/`, `scripts/` | worker logic | `config/`, `common/` |
-| **SITE-<name>** | that site's entry in `docs/SITES.md` | code | site profile + sanitized example config |
+| **SITE-<name>** | that site's entry in `docs/SITES.md`, and the site data sheet in `docs/COMMISSIONING.md` | code | site profile + sanitized example config |
 
 Rules: one task per worker chat; start a new chat when the task is done or the chat gets long; never mix two workers in one chat. If a task is the interface between two owners (a topic, a DB column, a path), it goes to MASTER first.
 

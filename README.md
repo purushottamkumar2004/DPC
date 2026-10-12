@@ -27,6 +27,12 @@ Run `bash scripts/setup_dpc_layout.sh` as your normal user (no sudo). It creates
 - `*.example.*` files are real configs with secrets and recipients replaced by placeholders; XML tag order is unchanged because the programs read XML **by position**.
 - Real configs, `site.yaml` and `secrets.env` stay on the machine and are git-ignored.
 
+## Working with Claude
+One-time Project setup and the routine after every task: `docs/CLAUDE_PROJECT_SETUP.md`. Current state and next steps: `docs/STATUS.md`.
+
+## Installing a site
+Follow `docs/COMMISSIONING.md`: site data sheet, step-by-step procedure with a check after each step, acceptance checklist, update and rollback.
+
 ## Releases
 One `main` branch for all sites; releases are tags (`v0.<n>`). A site pins a tag (`git checkout v0.<n>`), and sites differ by config in `~/INSIGHTZZ/config`, never by branch (D-039). The tag per site is recorded in `docs/SITES.md`.
 
