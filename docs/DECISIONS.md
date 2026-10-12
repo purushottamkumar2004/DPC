@@ -118,6 +118,9 @@ Found when the Project knowledge was checked from a fresh chat. History above is
 - The backlog order in `CODE_AUDIT.md` section 5 is superseded by `STATUS.md` ("Next"), with section 6 holding the later additions. The audit findings themselves stay valid.
 - Rule: `STATUS.md` is the single current backlog and state; the audit, decisions and contracts hold the history and the agreements.
 
+## D-041 | 2026-10 | Proposed | Basler XML: optional append-only elements for health table, log name and rotation
+`BASLER_CONFIG*.xml` gains optional positions 16 `HEALTH_TABLE` (default `tadipatri_health_status_table`), 17 `LOG_FILE_NAME` (default today's shared name), 18 `ROTATE_DEG` (0 | 90 | 180 | 270, default 90 = today's behaviour; 0 = no rotation, no warning). Defaults reproduce current behaviour so existing files keep working. Matches `cameras[].rotate` in `site.yaml`; the renderer will write these elements later. Reason: rotation, health table and log name are site values hardcoded in code (D-023, D-038). Tadipatri sets `ROTATE_DEG` 0 on both cameras.
+
 ## Open questions
 - Q1: Which signal best proves an algorithm is healthy: queue lag only, or also a heartbeat line/log?
 - Q2: Light register 4109: does 1 mean ON or OFF? Is cleaning ever triggered by the algorithm today, or by an operator/script?
@@ -134,5 +137,5 @@ Found when the Project knowledge was checked from a fresh chat. History above is
 - Q13: What are the real `WHEEL_STATUS` subfolders? The layout script assumes LEFT, RIGHT, IMAGES, PDFS.
 - Q14: Are old defect records imported into the new DB? `view_defect` holds absolute image paths, so a layout change breaks old images unless the rows are rewritten or the old paths are kept.
 - Q15: Which health table does each site use (`health_status` or `tadipatri_health_status_table`)? Needed for D-038.
-- Q16 (partly answered): Tadipatri has two Basler cameras (serials 24824427, 24874775). Still open: which one is CAM1 (LEFT) and which is CAM2 (RIGHT), and the tuned fps, exposure and rotation of the second.
+- Q16 (answered): Tadipatri CAM1 = LEFT = 24824427 (exposure 1500 us), CAM2 = RIGHT = 24874775 (exposure 2000 us), both 4 fps, no rotation. See SITES.md.
 - Q17: Keep site configs only on each machine, or also mirror them (no secrets) in a private `dpc-sites` repo, one folder per site (D-039)?
