@@ -1,4 +1,7 @@
 <BASLER_CAM>
+    <!-- Read BY POSITION (CONTRACTS section 3). Do not reorder or remove elements.
+         Elements 15 to 18 are optional; an empty element means "use the default",
+         so a later element can be set while keeping earlier ones at their default. -->
     <CODE_PATH>/home/USER/INSIGHTZZ/code/workers/frame_capture_basler/</CODE_PATH>
     <LOG_FILE_PATH>/home/USER/INSIGHTZZ/logs/</LOG_FILE_PATH>
     <LOG_BACKUP_COUNT>5</LOG_BACKUP_COUNT>
@@ -15,4 +18,10 @@
     <DB_HOST>localhost</DB_HOST>
     <DB_NAME>CHANGE_ME</DB_NAME>
     <TMP_IMG_PATH>/home/USER/INSIGHTZZ/data/frames/CAM1/_tmp/</TMP_IMG_PATH>
+    <!-- 16: health table this camera's row lives in (letters, digits, _). Default: tadipatri_health_status_table -->
+    <HEALTH_TABLE>CHANGE_ME</HEALTH_TABLE>
+    <!-- 17: log file name inside LOG_FILE_PATH. Give each camera its own. Default: FrameCapture_Basler.log -->
+    <LOG_FILE_NAME>FrameCapture_CAM1.log</LOG_FILE_NAME>
+    <!-- 18: clockwise rotation 0|90|180|270. 0 = none. Default when absent or empty: 90 -->
+    <ROTATE_DEG>0</ROTATE_DEG>
 </BASLER_CAM>
