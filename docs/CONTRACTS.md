@@ -57,7 +57,8 @@ Root `BASLER_CAM`, read by position, one camera per file. Located through env `B
 ```
 0 CODE_PATH, 1 LOG_FILE_PATH (must end with "/": the code appends the file name), 2 LOG_BACKUP_COUNT, 3 CAM_SERIAL_NO,
 4 CAM_NAME, 5 EXPOSURE (us), 6 FRAME_RATE, 7 SAVE_LIVE_IMG_PATH (the live/ folder), 8 UI_PATH, 9 INF_PATH, 10 RAW_IMG_PATH,
-11 DB_USER, 12 DB_PASS, 13 DB_HOST, 14 DB_NAME, 15 TMP_IMG_PATH (optional; default = sibling "_tmp" folder of the live folder)
+11 DB_USER, 12 DB_PASS, 13 DB_HOST, 14 DB_NAME, 15 TMP_IMG_PATH (optional; default = sibling "_tmp" folder of the live folder),
+16 HEALTH_TABLE (optional), 17 LOG_FILE_NAME (optional), 18 ROTATE_DEG (optional: 0|90|180|270, default 90)   [PROPOSED, D-041]
 ```
 Paths are absolute (XML does not expand `~`). Credentials still live here [EXISTING]; the target is `secrets.env` (D-018). The code also uses a site-specific health table name (see CODE_AUDIT section 6).
 ### MAIL_SERVICE_CONFIG.xml

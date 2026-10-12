@@ -21,8 +21,8 @@ Copy the Tadipatri column as the starting point; mark anything not yet known.
 | Site id, hostname, login user | you choose | tadipatri, dpc-tadipatri, dpc_tadipatri |
 | Release tag to install | developer | (first: v0.1) |
 | Camera serials | detected (step 4) | 24824427 and 24874775 (both Basler, detected) |
-| Which serial is CAM1 / CAM2, which side (LEFT/RIGHT) | physical mounting: look at the image | to confirm |
-| fps, exposure, rotation per camera | defaults from a similar site, tuned on site | CAM1: 4.0 fps, 1500 us, rotate 90 (from the old config); CAM2: same until tuned |
+| Which serial is CAM1 / CAM2, which side (LEFT/RIGHT) | physical mounting: look at the image | CAM1 = LEFT = 24824427, CAM2 = RIGHT = 24874775 |
+| fps, exposure, rotation per camera | defaults from a similar site, tuned on site | CAM1: 4.0 fps, 1500 us; CAM2: 4.0 fps, 2000 us; no rotation (rotate 0, needs D-041 in code) |
 | DB name | you choose | tadipatri4 |
 | DB user and password | generated on the machine: a new password per site, never `root` | to create |
 | Health table name | per site (hardcoded in code today, D-038) | tadipatri_health_status_table |
