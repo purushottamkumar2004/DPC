@@ -1,8 +1,9 @@
 """
 FrameCapture_Basler.py: single-camera Basler capture for the DPC platform.
 
-One process per camera (D-033). Config is a positional XML file chosen by the env
-variable BASLER_CONFIG (CONTRACTS section 3, "BASLER_CONFIG1.xml"). Every frame is
+One process per camera (D-033). Config is a positional XML file (CONTRACTS section 3,
+"BASLER_CONFIG1.xml"), chosen by the camera number on the command line:
+    python3 FrameCapture_Basler.py 1    ->  <root>/config/BASLER_CONFIG1.xml Every frame is
 handed off atomically to INF, UI and live (D-031).
 
 Robustness (STATUS item 2):
@@ -127,9 +128,29 @@ def _validated_log_file_name(name):
     return name
 
 
+def deployed_config_dir():
+    """<root>/config, found from where this script sits in the deployed layout
+    (<root>/code/workers/frame_capture_basler/FrameCapture_Basler.py, CONTRACTS 4.1).
+    No home folder or user name is hardcoded."""
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    root = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))
+    return os.path.join(root, "config")
+
+
 def config_file_path():
-    """BASLER_CONFIG env var, else BASLER_CONFIG1.xml in the working directory."""
-    return os.environ.get("BASLER_CONFIG", os.path.join(os.getcwd(), "BASLER_CONFIG1.xml"))
+    """Which camera config to read, first match wins:
+    1. command-line argument: a camera number ("1" -> <root>/config/BASLER_CONFIG1.xml)
+       or a path to an XML file;
+    2. env BASLER_CONFIG (kept so existing start commands keep working);
+    3. BASLER_CONFIG1.xml in the working directory (the old behaviour)."""
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].strip()
+        if arg.isdigit():
+            return os.path.join(deployed_config_dir(), f"BASLER_CONFIG{arg}.xml")
+        return os.path.abspath(os.path.expanduser(arg))
+    if os.environ.get("BASLER_CONFIG"):
+        return os.environ["BASLER_CONFIG"]
+    return os.path.join(os.getcwd(), "BASLER_CONFIG1.xml")
 
 
 def loadConfiguration():

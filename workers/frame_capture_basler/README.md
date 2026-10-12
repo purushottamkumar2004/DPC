@@ -5,11 +5,12 @@ Single-camera Basler FrameCapture with atomic hand-off (D-031). One process per 
 Per frame: write once to `_tmp`, hard-link into `INF` (and `UI` when empty), `os.replace` into `live/IMG_1.jpg`. See `docs/ARCHITECTURE.md` section 3a and `docs/CONTRACTS.md` sections 3 and 4.1.
 
 ## Run
-Config file chosen by env, else `BASLER_CONFIG1.xml` in the working directory:
+Give the camera number; the file is read from `<root>/config/` (found from where the script sits):
 ```
-BASLER_CONFIG=~/INSIGHTZZ/config/BASLER_CONFIG1.xml python3 FrameCapture_Basler.py
-BASLER_CONFIG=~/INSIGHTZZ/config/BASLER_CONFIG2.xml python3 FrameCapture_Basler.py
+python3 FrameCapture_Basler.py 1     # <root>/config/BASLER_CONFIG1.xml
+python3 FrameCapture_Basler.py 2     # <root>/config/BASLER_CONFIG2.xml
 ```
+Lookup order: argument (camera number or a path to an XML file), then env `BASLER_CONFIG`, then `BASLER_CONFIG1.xml` in the working directory.
 Copy `BASLER_CONFIG1.example.xml`, fill in the serial and DB login, keep the real file out of git (chmod 600).
 A config error (bad value, missing element) stops the process at once with exit code 2 and a message on stderr.
 
