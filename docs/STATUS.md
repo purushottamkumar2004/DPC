@@ -52,6 +52,15 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 | Contract impact | **Yes, small.** The Basler XML gets optional, append-only elements 16 `HEALTH_TABLE`, 17 `LOG_FILE_NAME` and 18 `ROTATE_DEG` (D-041); the defaults reproduce today's behaviour. The heartbeat is out of scope here; health comes from `file_activity` on `live/IMG_1.jpg` until item 3 is done. |
 | Done when | Tested on the Tadipatri cameras: (a) both cameras run at the same time with separate logs; (b) after the cable is pulled and replugged, frames resume within 30 s with no manual restart, and the log shows the lost and reopened events; (c) no two consecutive `INF` files are byte-identical during a 10-minute run; (d) health rows go to the table named in config; (e) the `_tmp` folder is empty after a clean stop; (f) the normal-run checks from the 2026-10-12 test still pass (regression); (g) with `ROTATE_DEG` 0 the saved frames are 1920x1080 and the log has no rotation warnings, and with the element absent frames are still rotated 90 (backward compatible). |
 
+### 2b. Database seed (D-043)
+| | |
+|---|---|
+| Owner chat | MASTER (`db/*.sql`), CONFIG (`scripts/dpc_db_init.py`, after item 1) |
+| Files | `db/schema.sql`, `db/fixed_rows.sql`, `db/site_rows.example.sql`, `db/migrations/0001_baseline.sql`, `db/README.md` (written); later `scripts/dpc_db_init.py` |
+| Contract impact | **Yes.** `db/` becomes the executable DB contract next to CONTRACTS section 5. Choose one standard health table for new sites (Q15). |
+| Input needed | `mysqldump --no-data --skip-comments` of the Maihar and Tadipatri DBs (structure only, no data, no users). |
+| Done when | (a) On an empty schema in MySQL Workbench, `schema.sql` then `fixed_rows.sql` then a filled `site_rows` run with no error, and running them again changes nothing. (b) Every table and column the code uses exists: the algorithms' `INSERT` into `defects_table`, the mail senders' `SELECT`/`UPDATE`, `wheel_counter_table` `UPDATE` of ID 1, and both health writers find their row. (c) Comparing `mysqldump --no-data` of the new DB with the Tadipatri dump shows no missing column. (d) No database name, password or serial in any committed file. |
+
 ### 3. Supervisor V2: modes, `queue_lag`, heartbeat, start order
 | | |
 |---|---|
@@ -89,6 +98,8 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 ## Decision and contract gaps (blocking the items above)
 | Gap | Blocks | Needed |
 |---|---|---|
+| Real DB structure (`mysqldump --no-data`) from Maihar and Tadipatri; full `CAMERA_PLC_STATUS` and health schemas (Q5) | 2b | You export and share the dumps |
+| Which tables Django and DataSync own (Django's are left to `manage.py migrate`) | 2b | Check against the dump |
 | D-033 (`site.yaml`, file-first) still Proposed; "file first vs DB first" still waiting | 1, 5 | Accept D-033 with "file first; DB becomes master only when the UI edits config" |
 | `site.yaml` schema v1 not in CONTRACTS | 1, 2 (later), 5 | MASTER writes the schema section before the CONFIG chat starts |
 | D-038 Proposed; Q15 open (health table per site) | 2 | Accept D-038; answer Q15 for Maihar and Tadipatri |

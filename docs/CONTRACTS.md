@@ -97,6 +97,8 @@ Rules: INF file name `YYYY_MM_DD_HH_MM_SS_ffffff.jpg`; algorithm consumes the **
 **[PROPOSED]** every path derived from one `site_root`.
 
 ## 5. Database [EXISTING, schemas confirmed from your CSV exports]
+The executable source of truth for the structure is `db/schema.sql` plus `db/migrations/` (D-043); this section explains what the columns mean and who uses them. Both change in the same commit.
+- Health tables in use today: Maihar `health_status` (`item`, `health`, `update_datetime`, written by the FLIR capture); Tadipatri `tadipatri_health_status_table` (`ITEM`, `HEALTH`, `IS_DATA_SYNC`, `CREATE_DATETIME`, written by the Basler capture, D-041 `HEALTH_TABLE`). Both writers only `UPDATE` an existing row per camera serial, so the seed must insert those rows.
 - `defects_table`:
   `ID` int PK auto_increment; `defect_side` varchar(45) NOT NULL (Left|Right); `defect_type` varchar(45) NOT NULL; `view_defect` varchar(545) NOT NULL (defect image path);
   `wheel_no` varchar(45) NOT NULL (**text, not int**; code compares it with integers, MySQL converts); `xmin,xmax,ymin,ymax` int NULL;
