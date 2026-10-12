@@ -1,6 +1,6 @@
 <BASLER_CAM>
     <!-- Read BY POSITION (CONTRACTS section 3). Do not reorder or remove elements.
-         Elements 15 to 18 are optional; an empty element means "use the default",
+         Elements 15 to 19 are optional; an empty element means "use the default",
          so a later element can be set while keeping earlier ones at their default. -->
     <CODE_PATH>/home/USER/INSIGHTZZ/code/workers/frame_capture_basler/</CODE_PATH>
     <LOG_FILE_PATH>/home/USER/INSIGHTZZ/logs/</LOG_FILE_PATH>
@@ -24,4 +24,6 @@
     <LOG_FILE_NAME>FrameCapture_CAM1.log</LOG_FILE_NAME>
     <!-- 18: clockwise rotation 0|90|180|270. 0 = none. Default when absent or empty: 90 -->
     <ROTATE_DEG>0</ROTATE_DEG>
+    <!-- 19: seconds between repeated health writes while the state is unchanged (a change is written at once). Default: 600 -->
+    <HEALTH_INTERVAL_S>600</HEALTH_INTERVAL_S>
 </BASLER_CAM>

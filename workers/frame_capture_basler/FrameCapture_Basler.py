@@ -37,7 +37,6 @@ from pypylon import genicam, pylon
 RETRIEVE_TIMEOUT_MIN_MS = 5000   # wait at most this long for one frame (or 3 frame periods if longer)
 NO_FRAME_REOPEN_S = 15           # no good frame for this long -> treat the camera as lost and reopen it
 REOPEN_RETRY_S = 2               # pause between reopen attempts (keeps recovery well under 30 s)
-HEALTH_INTERVAL_S = 600          # repeat the same health state at most this often (same as the old code)
 LOG_REPEAT_S = 60                # a repeating problem is logged at most once per this period
 DB_CONNECT_TIMEOUT_S = 3         # a DB outage must not stall capture for long
 
@@ -50,6 +49,7 @@ DB_CONNECT_TIMEOUT_S = 3         # a DB outage must not stall capture for long
 DEFAULT_HEALTH_TABLE = "tadipatri_health_status_table"
 DEFAULT_LOG_FILE_NAME = "FrameCapture_Basler.log"
 DEFAULT_ROTATE_DEG = 90
+DEFAULT_HEALTH_INTERVAL_S = 600   # same rhythm as the old code
 
 CV2_ROTATION = {
     90: cv2.ROTATE_90_CLOCKWISE,
@@ -84,6 +84,7 @@ class CONFIG_KEY_NAME:
     HEALTH_TABLE = "HEALTH_TABLE"      # position 16, optional (D-041)
     LOG_FILE_NAME = "LOG_FILE_NAME"    # position 17, optional (D-041)
     ROTATE_DEG = "ROTATE_DEG"          # position 18, optional (D-041)
+    HEALTH_INTERVAL_S = "HEALTH_INTERVAL_S"  # position 19, optional
 
 
 # ===========================================================================
@@ -120,6 +121,16 @@ def _validated_rotation(text):
     if angle not in VALID_ROTATIONS:
         raise ValueError(f"ROTATE_DEG must be one of {VALID_ROTATIONS}, got {angle}")
     return angle
+
+
+def _validated_health_interval(text):
+    try:
+        seconds = int(text)
+    except ValueError:
+        raise ValueError(f"HEALTH_INTERVAL_S must be a whole number of seconds, got '{text}'")
+    if seconds <= 0:
+        raise ValueError(f"HEALTH_INTERVAL_S must be greater than 0, got {seconds}")
+    return seconds
 
 
 def _validated_log_file_name(name):
@@ -187,6 +198,10 @@ def loadConfiguration():
     configHashMap[CONFIG_KEY_NAME.ROTATE_DEG] = _validated_rotation(
         _optional(config_root, 18, str(DEFAULT_ROTATE_DEG)))
 
+    # 19: how often an unchanged health state is written again.
+    configHashMap[CONFIG_KEY_NAME.HEALTH_INTERVAL_S] = _validated_health_interval(
+        _optional(config_root, 19, str(DEFAULT_HEALTH_INTERVAL_S)))
+
     if not configHashMap[CONFIG_KEY_NAME.CAM_SERIAL_NO]:
         raise ValueError("CAM_SERIAL_NO (position 3) is empty")
     if configHashMap[CONFIG_KEY_NAME.FRAME_RATE] <= 0:
@@ -212,7 +227,8 @@ def initializeLogger():
         f"fps={configHashMap[CONFIG_KEY_NAME.FRAME_RATE]} "
         f"exposure_us={configHashMap[CONFIG_KEY_NAME.EXPOSURE]} "
         f"rotate_deg={configHashMap[CONFIG_KEY_NAME.ROTATE_DEG]} "
-        f"health_table={configHashMap[CONFIG_KEY_NAME.HEALTH_TABLE]} log={log_file}")
+        f"health_table={configHashMap[CONFIG_KEY_NAME.HEALTH_TABLE]} "
+        f"health_interval_s={configHashMap[CONFIG_KEY_NAME.HEALTH_INTERVAL_S]} log={log_file}")
 
 
 # ===========================================================================
@@ -392,16 +408,17 @@ def update_health_status(health, is_data_sync):
 
 class HealthReporter:
     """Writes OK/NOK at once when the state changes, and repeats the same state
-    at most every HEALTH_INTERVAL_S (the old code's 600 s rhythm)."""
+    at most every HEALTH_INTERVAL_S seconds (config position 19, default 600)."""
 
     def __init__(self):
+        self.interval_s = configHashMap[CONFIG_KEY_NAME.HEALTH_INTERVAL_S]
         self._last_state = None
         self._last_write = None
 
     def report(self, state):
         now = time.monotonic()
         unchanged = state == self._last_state
-        recent = self._last_write is not None and now - self._last_write < HEALTH_INTERVAL_S
+        recent = self._last_write is not None and now - self._last_write < self.interval_s
         if unchanged and recent:
             return
         self._last_state = state
