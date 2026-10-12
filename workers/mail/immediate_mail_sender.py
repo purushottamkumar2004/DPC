@@ -157,6 +157,18 @@ def checkIsDefectAlreadyGenerated(logger, cur, dbConn, wheel_counter, defectName
         logger.error(f"ALERTER: checkIsDefectAlreadyGenerated() Exception is: {e}")
     return isDefectFound
 
+def get_defect_row_id(defect):
+    """
+    Primary key of a defects_table row.
+    The column is declared `ID` (CONTRACTS section 5) and pymysql's
+    DictCursor keys rows by the declared name, so defect['id'] raises
+    KeyError. Accept `id` too, in case an older site DB declares it in
+    lower case.
+    """
+    if 'ID' in defect:
+        return defect['ID']
+    return defect.get('id')
+
 def mark_batch_as_sent(logger, cur, dbConn, defect_ids):
     """Updates a BATCH of defects to status 1 (Sent)."""
     if not defect_ids: return
@@ -306,6 +318,12 @@ def run_realtime_alert_poller(logger):
 
                     # --- PHASE 1: "THINKING" (Sort defects) ---
                     for defect in new_defects:
+                        row_id = get_defect_row_id(defect)
+                        if row_id is None:
+                            # Cannot mark it later, so do not send it either.
+                            logger.error(f"ALERTER: defect row has no ID column, skipped: {defect}")
+                            continue
+
                         defect_signature = (
                             defect['defect_type'], 
                             defect['wheel_no'], 
@@ -326,7 +344,7 @@ def run_realtime_alert_poller(logger):
                         is_batch_duplicate = defect_signature in processed_in_this_batch
                         
                         if is_db_duplicate or is_batch_duplicate:
-                            defects_to_ignore_ids.append(defect['id'])
+                            defects_to_ignore_ids.append(row_id)
                         else:
                             defects_to_send.append(defect)
                             processed_in_this_batch.add(defect_signature)
@@ -338,7 +356,7 @@ def run_realtime_alert_poller(logger):
                     if defects_to_send:
                         email_success = send_batch_defect_email(logger, defects_to_send)
                         if email_success:
-                            ids_to_send = [d['id'] for d in defects_to_send]
+                            ids_to_send = [get_defect_row_id(d) for d in defects_to_send]
                             mark_batch_as_sent(logger, cur, dbConn, ids_to_send)
                         else:
                             logger.error("Failed to send BATCH email. Defects will NOT be marked as '1'. Will retry next loop.")
