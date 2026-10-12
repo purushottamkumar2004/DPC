@@ -8,4 +8,4 @@
 INSERT IGNORE INTO wheel_counter_table (ID, WHEEL_COUNT) VALUES (1, '0');
 
 -- Camera status lamps for the UI, written by the FLIR capture: WHERE id = 1
-INSERT IGNORE INTO CAMERA_PLC_STATUS (id, `RIGHT CAMERA`, `LEFT CAMERA`) VALUES (1, 'False', 'False');
+INSERT IGNORE INTO CAMERA_PLC_STATUS (id, `RIGHT CAMERA`, `LEFT CAMERA`, PLC) VALUES (1, 'False', 'False', 'False');

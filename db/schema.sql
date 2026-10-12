@@ -3,7 +3,10 @@
 -- Run on an EMPTY schema that is already selected (Workbench: double-click
 -- the schema so it is bold). No database name, no data, no passwords here.
 -- Safe to run twice: every table is CREATE TABLE IF NOT EXISTS.
--- Tested on MySQL 8 syntax / MariaDB 10.
+-- Tested on MySQL 8.0 (db/test_seed.py); also runs on MariaDB 10.
+-- Collation utf8mb4_unicode_ci on purpose: it exists on MySQL 8 and on
+-- MariaDB (the live sites use MySQL 8's utf8mb4_0900_ai_ci, which MariaDB
+-- does not have). Comparisons the programs make are the same in both.
 --
 -- How to change this file: see db/README.md "Keeping it up to date".
 -- Columns are append-only (CONTRACTS section 8). Every change here also
@@ -63,6 +66,8 @@ CREATE TABLE IF NOT EXISTS defects_table (
 -- repeated_defects_table: defects marked as known/repeated so they are
 -- not reported again until expiry_datetime.
 -- Read by the algorithms (lookup is currently disabled in code).
+-- Name is plural because the code queries it that way. Tadipatri's live
+-- table is the singular repeated_defect_table (db/README.md, site notes).
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS repeated_defects_table (
     ID               INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -100,12 +105,16 @@ CREATE TABLE IF NOT EXISTS wheel_counter_table (
 --   FLIR capture  : UPDATE health_status SET health, update_datetime WHERE item
 --   Basler capture: UPDATE <HEALTH_TABLE> SET HEALTH, IS_DATA_SYNC, CREATE_DATETIME WHERE ITEM
 -- Both only UPDATE, so each camera's row comes from site_rows.sql.
--- Tadipatri still uses its old table name (tadipatri_health_status_table).
+-- Tadipatri still uses its old table tadipatri4_health_status_table
+-- (same columns, no unique key), so its Basler XMLs must set
+-- HEALTH_TABLE = tadipatri4_health_status_table.
+-- HEALTH_STATUS in capitals (DEVICE_NAME, STATUS) is an OLD, different
+-- table: table names are case-sensitive on Linux; it is not seeded.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS health_status (
     ID               INT         NOT NULL AUTO_INCREMENT PRIMARY KEY,
     ITEM             VARCHAR(64) NOT NULL,                  -- camera serial
-    HEALTH           VARCHAR(20) NULL,                      -- e.g. OK | NOK
+    HEALTH           VARCHAR(45) NULL,                      -- e.g. OK | NOK
     IS_DATA_SYNC     TINYINT     NOT NULL DEFAULT 0,
     CREATE_DATETIME  DATETIME    NULL DEFAULT CURRENT_TIMESTAMP,
     UPDATE_DATETIME  DATETIME    NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -116,14 +125,18 @@ CREATE TABLE IF NOT EXISTS health_status (
 -- ---------------------------------------------------------------------
 -- CAMERA_PLC_STATUS: ONE row (id = 1), used by the UI for status lamps.
 -- The FLIR capture writes 'True' / 'False' as text into the camera columns.
+-- PLC: lamp for the PLC connection. It is in the live Tadipatri table but
+-- no program in this repo writes it yet (future PLC service, D-024); it is
+-- seeded so the UI that reads it works on a new site.
 -- The FLIR code writes CAM1 into `RIGHT CAMERA` and CAM2 into
 -- `LEFT CAMERA`; kept as is (D-044).
 -- Column names contain spaces because the existing code uses them.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS CAMERA_PLC_STATUS (
     id               INT         NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    `RIGHT CAMERA`   VARCHAR(10) NULL DEFAULT 'False',
-    `LEFT CAMERA`    VARCHAR(10) NULL DEFAULT 'False',
+    `RIGHT CAMERA`   VARCHAR(45) NULL DEFAULT 'False',
+    `LEFT CAMERA`    VARCHAR(45) NULL DEFAULT 'False',
+    PLC              VARCHAR(45) NULL DEFAULT 'False',
     UPDATE_DATETIME  DATETIME    NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

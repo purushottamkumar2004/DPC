@@ -96,24 +96,33 @@ TEMP_IMG_DIR/PLATE_DIR/{LEFT,RIGHT}   WHEEL_STATUS/{LEFT,RIGHT,IMAGES,PDFs}   MO
 Rules: INF file name `YYYY_MM_DD_HH_MM_SS_ffffff.jpg`; algorithm consumes the **oldest** INF file and moves it to RAW_IMAGES; defect images are saved before the DB row. CAM1 -> LEFT, CAM2 -> RIGHT.
 **[PROPOSED]** every path derived from one `site_root`.
 
-## 5. Database [EXISTING, schemas confirmed from your CSV exports]
-The executable source of truth for the structure is `db/schema.sql` plus `db/migrations/` (D-043); this section explains what the columns mean and who uses them. Both change in the same commit.
-- Health tables in use today: Maihar `health_status` (`item`, `health`, `update_datetime`, written by the FLIR capture); Tadipatri `tadipatri_health_status_table` (`ITEM`, `HEALTH`, `IS_DATA_SYNC`, `CREATE_DATETIME`, written by the Basler capture, D-041 `HEALTH_TABLE`). Both writers only `UPDATE` an existing row per camera serial, so the seed must insert those rows. **New sites use the standard `health_status` table from `db/schema.sql`** (`ID`, `ITEM` unique, `HEALTH`, `IS_DATA_SYNC`, `CREATE_DATETIME`, `UPDATE_DATETIME`); both writers work against it because MySQL column names are case-insensitive. Set `HEALTH_TABLE` = `health_status`.
-- `CAMERA_PLC_STATUS` in `db/schema.sql`: `id`, `` `RIGHT CAMERA` ``, `` `LEFT CAMERA` `` (text 'True'/'False'), `UPDATE_DATETIME`. The FLIR capture writes CAM1 into `RIGHT CAMERA` and CAM2 into `LEFT CAMERA`; kept as is (D-044).
-- `defects_table`:
+## 5. Database [EXISTING; seed reconciled with the live Tadipatri DB 2026-10-12] (D-043, D-045)
+The executable source of truth is `db/schema.sql` + `db/fixed_rows.sql` + `db/site_rows.example.sql` + `db/migrations/` (D-043). This section says what each table and column means and who writes and reads it. Both change in the same commit; `db/test_seed.py` checks that every seeded table and column is named here. One DB per site (name in config); new sites get exactly the tables below, nothing else. Tables found on live sites but **not** seeded, and per-site differences, are listed in `db/README.md` ("Left out", "Site notes").
+
+Rules for all tables: column names, types and defaults are append-only (section 8). Collation `utf8mb4_unicode_ci`. Table names are case-sensitive on Linux (`HEALTH_STATUS` is not `health_status`); column names are not.
+
+- `schema_version`: `version` int PK, `description` varchar(255) NOT NULL, `applied_at` datetime default CURRENT_TIMESTAMP. Written by `schema.sql` (version 1) and by each migration; read by people and later `scripts/dpc_db_init.py`.
+- `defects_table`: one row per confirmed defect.
   `ID` int PK auto_increment; `defect_side` varchar(45) NOT NULL (Left|Right); `defect_type` varchar(45) NOT NULL; `view_defect` varchar(545) NOT NULL (defect image path);
-  `wheel_no` varchar(45) NOT NULL (**text, not int**; code compares it with integers, MySQL converts); `xmin,xmax,ymin,ymax` int NULL;
-  `create_datetime` datetime default CURRENT_TIMESTAMP; `update_datetime` datetime on update CURRENT_TIMESTAMP;
-  `is_alert_sent` int default 0 (0 pending, 1 sent, 2 ignored) used by the mail sender;
-  `is_data_sync` tinyint default 0, `is_image_sync` tinyint default 0 (used by the DataSync service, not in the uploaded code);
-  `defect_checkbox` varchar(255) default "Select To Park Defect", `reviewed_by` varchar(100), `reviewed_at` datetime, `review_status` varchar(20) NOT NULL default "PENDING" (review workflow, used by Django/UI);
+  `wheel_no` varchar(45) NOT NULL (**text, not int**; code compares it with integers, MySQL converts, D-028); `xmin,xmax,ymin,ymax` int NULL;
+  `create_datetime` datetime default CURRENT_TIMESTAMP; `update_datetime` datetime NULL, on update CURRENT_TIMESTAMP;
+  `is_alert_sent` int NOT NULL default 0 (0 pending, 1 sent, 2 ignored);
+  `is_data_sync`, `is_image_sync` tinyint NOT NULL default 0 (DataSync; not in the repo);
+  `defect_checkbox` varchar(255) default 'Select To Park Defect'; `reviewed_by` varchar(100) NULL, `reviewed_at` datetime NULL, `review_status` varchar(20) NOT NULL default 'PENDING' (review workflow, Django UI; Maihar has these columns, Tadipatri does not);
   `no_of_days` int default 0.
-  Note: the algorithms' `INSERT` fills only `defect_side, defect_type, view_defect, wheel_no, xmin..ymax`; everything else comes from defaults or other services.
-- `repeated_defects_table`: `ID` int PK auto; `defect_table_id` int NOT NULL; `defect_name` varchar(255) NOT NULL; `image_path` varchar(500) NULL; `xmin,xmax,ymin,ymax` int NOT NULL; `wheel_no` int NULL; `expiry_datetime` datetime NULL; `create_datetime` datetime NULL; `no_of_days` int default 0. (Algorithm lookup of this table is currently disabled.)
-- `wheel_counter_table`: `ID` int PK auto; `WHEEL_COUNT` varchar(45) NULL. **One row, `ID = 1`, holds the live wheel number.** Written only by `RightAlgorithm.update_wheel_count()` (called in the main loop); `LeftAlgorithm` does not write it. Wheel number is therefore stored as text.
-- `health_status`: `item` (camera serial), `health`, `update_datetime` (schema not yet provided).
-- `CAMERA_PLC_STATUS`: row `id=1`, columns `` `RIGHT CAMERA` ``, `` `LEFT CAMERA` `` (mapping vs CAM1/CAM2 to verify; full schema not yet provided).
+  Indexes: `is_alert_sent`; (`defect_side`, `defect_type`, `create_datetime`); `create_datetime`.
+  Writer: LeftAlgorithm / RightAlgorithm `INSERT` of `defect_side, defect_type, view_defect, wheel_no, xmin..ymax` only; everything else is a default. Mail senders `UPDATE is_alert_sent`. DataSync and the UI update their own columns.
+  Readers: the algorithms (24 h dedupe), both mail senders (`SELECT * ... is_alert_sent = 0` with a DictCursor, so rows are read **by column name**: the key is `ID`, not `id`), DataSync, the UI.
+- `repeated_defects_table` (plural, as the code queries it): `ID` int PK auto; `defect_table_id` int NOT NULL (`defects_table.ID`, indexed); `defect_name` varchar(255) NOT NULL; `image_path` varchar(500) NULL; `xmin,xmax,ymin,ymax` int NOT NULL; `wheel_no` int NULL; `expiry_datetime` datetime NULL; `create_datetime` datetime NULL; `no_of_days` int default 0. Writer: the UI (assumed; not in the repo). Reader: the algorithms (`select *`; the lookup is currently disabled in code). Tadipatri has the singular `repeated_defect_table` instead.
+- `wheel_counter_table`: `ID` int PK auto; `WHEEL_COUNT` varchar(45) NULL. **One row, `ID = 1`, holds the live wheel number as text.** Row created by `fixed_rows.sql`. Writer: only `RightAlgorithm.update_wheel_count()` (`UPDATE ... WHERE ID = 1`); `LeftAlgorithm` does not write it (D-029). Reader: the UI.
+- `health_status`: one row per camera. `ID` int PK auto; `ITEM` varchar(64) NOT NULL, unique (camera serial); `HEALTH` varchar(45) NULL (Basler `OK`|`NOK`, FLIR its own text); `IS_DATA_SYNC` tinyint NOT NULL default 0; `CREATE_DATETIME` datetime default CURRENT_TIMESTAMP; `UPDATE_DATETIME` datetime default CURRENT_TIMESTAMP on update CURRENT_TIMESTAMP.
+  Writers only `UPDATE` an existing row, so each camera's row comes from the site's filled `site_rows` file: FLIR capture `UPDATE health_status SET health, update_datetime WHERE item`; Basler capture `UPDATE <HEALTH_TABLE> SET HEALTH, IS_DATA_SYNC, CREATE_DATETIME WHERE ITEM` (table from Basler XML element 16, D-041). Readers: DataSync, the UI.
+  **New sites set `HEALTH_TABLE` = `health_status`.** Live sites keep their table: Maihar `health_status` (`item`, `health`, `update_datetime`), Tadipatri **`tadipatri4_health_status_table`** (same columns as above, no unique key). The Basler code default `tadipatri_health_status_table` (D-041) exists on no site, so element 16 must always be set.
+- `CAMERA_PLC_STATUS`: **one row, `id = 1`** (created by `fixed_rows.sql`), status lamps for the UI, text 'True'/'False'. `id` int PK; `` `RIGHT CAMERA` ``, `` `LEFT CAMERA` ``, `PLC` varchar(45) default 'False'; `UPDATE_DATETIME` datetime, on update CURRENT_TIMESTAMP.
+  Writer: the FLIR capture, CAM1 into `RIGHT CAMERA` and CAM2 into `LEFT CAMERA`, kept as is (D-044). `PLC` has no writer in the repo yet (future PLC service, D-024); it is seeded because the live table and its UI have it. Reader: the UI. The Basler capture does not write this table.
+
 Dedupe rule: same `wheel_no` + `defect_type` + `defect_side` within 24 h with bbox width/height within +-50 px. In practice the size check compares the new defect with itself, so only wheel + type + side + 24 h decide; kept as is (D-044).
+Affected rows: MySQL reports **changed** rows, so an `UPDATE` that writes identical values returns 0 even though the row exists.
 
 ## 6. PLC [EXISTING]
 Modbus TCP (pymodbus), port 502, timeout 3 s. Registers: light **4109** (script writes 1; comment says 0 on/1 off: confirm), cleaning **4106** (1 for 10 s then 0), legacy cleaning 4097 / 4197, read conveyor status **4098**. **PLC IP for this server (Maihar): `192.168.2.5`** (confirmed by you; matches `light.py`). `cleaning_mechanism.py` (192.168.1.4) and the algorithm XML `PLC_IP_ADDRESS` (192.168.1.5) disagree with it and are treated as stale until proven otherwise. The XML DB numbers 12/13 are not used by the Modbus scripts. **One PLC IP per site must be a single config value** (`plc.ip` in site.yaml).
