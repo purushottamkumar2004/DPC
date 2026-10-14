@@ -36,7 +36,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-12.
 **0. You, not a chat (prerequisite).** Rotate the DB `root` password and the MS Graph secret. Create a limited DB user per site. Make the repo Private and confirm `v0.1` exists. Set `RELEASE` for Tadipatri in `SITES.md`.
 Done when: no config on the machine uses `root`; the old secrets are revoked; `SITES.md` shows the Tadipatri release tag.
 
-### 1. `site.yaml` schema and loader
+### 1. `site.yaml` schema and loader: DONE (merged PR #4, `cc191e1`; no handoff received yet)
 | | |
 |---|---|
 | Owner chat | CONFIG |
@@ -44,7 +44,7 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 | Contract impact | None new: build against CONTRACTS section 7 (schema v1, D-047) and section 9 (secret keys). Update `config/examples/site.example.yaml` to v1 (it predates it: e.g. `rotate`, `object_sizes`, `model` missing). |
 | Done when | (a) The example file loads into a typed object. (b) A missing required key, an unknown key or a wrong type fails with a message that names the key. (c) `~` and `paths.root` are expanded. (d) Secrets come only from `secrets.env`, and the loader refuses that file if it is not chmod 600. (e) Unit tests pass. (f) The examples contain no real secret or serial. |
 
-### 2. Basler capture robustness
+### 2. Basler capture robustness: BUILT (PR #2), in use at Tadipatri; cable-pull test (b) still to run
 | | |
 |---|---|
 | Owner chat | W-frame_capture_basler |
@@ -87,6 +87,22 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 | 6 (DONE, PR #3) | W-mail | `workers/mail/immediate_mail_sender.py` line ~329 uses `defect['id']` on a DictCursor row whose key is `ID`: KeyError the first time a duplicate defect is found (the outlook sender already uses `ID`). Verified in code. | A duplicate defect is marked ignored (2) without an exception; send path unchanged |
 | 7 | W-frame_capture_basler | Health "matched no row" warning can be false: MySQL returns changed rows, not matched rows, when the value is unchanged. Connect with `client_flag=CLIENT.FOUND_ROWS`. | Repeating the same health value on an existing row logs no warning; a missing row still warns |
 | 8 | DB | Bring the Tadipatri DB to schema version 1 with a reviewed upgrade script, run only after a full backup. | Script reviewed by you; after it, `db/test_seed.py` checks pass against `tadipatri4`; backup restorable |
+
+### Automation cases (from the 2026-10-13 review; owner = chat that builds it)
+| # | Case | What the system will do | Owner chat | Covered by |
+|---|---|---|---|---|
+| A1 | New camera inserted | Detect the serial, offer it in the wizard, write `site.yaml` | CONFIG | `dpc-check` (item 5), wizard (later, D-035) |
+| A2 | Camera not connected | Reopen by itself, `NOK` health, alert | W-frame_capture_basler, SUPERVISOR | Reopen + NOK done (item 2); alert after item 3 |
+| A3 | Camera below the configured fps | Measure real fps, report it, warn below a threshold | W-frame_capture_basler, SUPERVISOR | Heartbeat `fps` (D-034, item 3) |
+| A4 | Camera parameters changed | Read settings back periodically and re-apply config values | W-frame_capture_basler | New |
+| A5 | Inference delay | Detect a growing `INF` backlog | SUPERVISOR | `queue_lag` (D-020, item 3) |
+| A6 | Model deployment | Fetch a model by version with checksum, switch, roll back | CONFIG | Installer; waits for the model-hosting decision |
+| A7 | Weekly data upload | Chunk images from both sides, upload weekly | new worker (W-data_upload) | New; needs a target (where to upload) |
+| A8 | Light off | Detect a dark view, switch the light on via PLC | W-plc | PLC service (D-024) |
+| A9 | Sunlight on the view | Mask that image region, set per camera in config | W-inspection, CONFIG | New; needs a `site.yaml` key (contract change) |
+| A10 | Dust on the view | Detect a dirty view, trigger the cleaning pulse | W-plc, W-inspection | PLC service (D-024) |
+| A11 | Other wrong-view causes | To be defined | - | - |
+| A12 | Code error | Restart the failed program, event over MQTT, mail alert | SUPERVISOR | Restart done (V1); alert after item 3 |
 
 ### Later (unchanged intent)
 - `install.sh`: layout, clone at a tag, venv, dependencies, model fetch, then the wizard.
