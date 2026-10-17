@@ -44,6 +44,14 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 | Contract impact | None new: build against CONTRACTS section 7 (schema v1, D-047) and section 9 (secret keys). Update `config/examples/site.example.yaml` to v1 (it predates it: e.g. `rotate`, `object_sizes`, `model` missing). |
 | Done when | (a) The example file loads into a typed object. (b) A missing required key, an unknown key or a wrong type fails with a message that names the key. (c) `~` and `paths.root` are expanded. (d) Secrets come only from `secrets.env`, and the loader refuses that file if it is not chmod 600. (e) Unit tests pass. (f) The examples contain no real secret or serial. |
 
+### 1b. `site.yaml` v2 with secrets (D-048, D-049)
+| | |
+|---|---|
+| Owner chat | CONFIG |
+| Files | `common/config/site_config.py`, `config/examples/site.example.yaml`, `tests/unit/test_site_config.py`; remove the `secrets.env` loader and example |
+| Contract impact | None new: build against CONTRACTS sections 7 (v2) and 9 |
+| Done when | (a) v2 example loads; a v1 file fails with a message saying which keys to add. (b) A file that is not chmod 600 is refused. (c) `--redacted` output contains no secret value (test with known secrets). (d) No error message or log line contains a secret. (e) graph/smtp blocks validated (required for their sender, not allowed otherwise). |
+
 ### 2. Basler capture robustness: BUILT (PR #2), in use at Tadipatri; cable-pull test (b) still to run
 | | |
 |---|---|
@@ -61,7 +69,7 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 |---|---|
 | Owner chat | SUPERVISOR |
 | Files | `supervisor/core/{config,process_manager,monitor,recovery_manager}.py`, `supervisor/health/queue_lag_health_check.py` *(proposed)*, `supervisor/config/workers.yaml` (example), `tests/unit/` for the supervisor |
-| Contract impact | **Yes.** New `workers.yaml` keys: `mode`, `interval_s` (periodic), `restart_cost`, `start_after`, and a `queue_lag` health block (folder, max age). The heartbeat payload is extended append-only (D-034). Needs D-019, D-020 and D-034 Accepted, and Q1 answered. |
+| Contract impact | **Yes.** New `workers.yaml` keys: `mode`, `interval_s` (periodic), `restart_cost`, `start_after`, `env_from_site` (D-048 env bridge), and a `queue_lag` health block (folder, max age). The heartbeat payload is extended append-only (D-034). Decisions accepted (D-049). |
 | Done when | Tested with dummy workers: (a) a oneshot that exits 0 ends as STOPPED and is not restarted, while a non-zero exit counts as a failure; (b) a periodic worker runs every `interval_s`; (c) `queue_lag` goes UNHEALTHY when the oldest `INF` file is older than the threshold and recovers when the folder drains; (d) workers start in `start_after` order; (e) both the old and the extended heartbeat are accepted; (f) a worker with `restart_cost: high` uses the longer timeout. |
 
 ### 4. First real workers under the Supervisor (Tadipatri)
@@ -116,13 +124,10 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 ## Decision and contract gaps (blocking the items above)
 | Gap | Blocks | Needed |
 |---|---|---|
-| D-048 Proposed (secrets into `site.yaml`, schema v2) | CONFIG v2 loader, SUPERVISOR env export, W-cleanup | Accept or reject; if accepted pick one legacy route (Supervisor export or `delete_script.py` reads `site.yaml`); then CONTRACTS 7 and 9 updated |
-| D-019, D-020, D-034 Proposed; Q1 open | 3 (Supervisor V2) | Accept; Q1 = queue lag plus heartbeat |
 | Which extra tables Django and DataSync need (Django's own are left to `manage.py migrate`) | 2b (later) | Add to `schema.sql` through a migration when the UI/DataSync work starts |
 | D-038 Proposed; Q15 open (health table per site) | 2 | Accept D-038; answer Q15 for Maihar and Tadipatri |
 | D-041 Proposed (Basler XML elements 16 to 18) | 2 | Accept D-041 and add the elements to CONTRACTS section 3 |
 | `health_status` schema unknown (Q5) | 2 (DB health part) | Export the schema from Maihar and Tadipatri |
-| D-019, D-020, D-034 Proposed; Q1 open | 3 | Accept all three; answer Q1 (proposed: queue lag plus heartbeat) |
 | No `start_after` / `restart_cost` keys in the `workers.yaml` contract | 3, 4 | Add to CONTRACTS together with item 3 |
 | Where the site `workers.yaml` lives | 4 | Proposed: `<root>/config/workers.yaml` until the renderer exists, then `rendered/` |
 | How the Supervisor itself is started on boot (systemd user unit? assumed) | 4 | Decide; note it in COMMISSIONING |
