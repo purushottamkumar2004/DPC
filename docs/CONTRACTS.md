@@ -60,7 +60,7 @@ Root `BASLER_CAM`, read by position, one camera per file. Located through env `B
 11 DB_USER, 12 DB_PASS, 13 DB_HOST, 14 DB_NAME, 15 TMP_IMG_PATH (optional; default = sibling "_tmp" folder of the live folder),
 16 HEALTH_TABLE (optional), 17 LOG_FILE_NAME (optional), 18 ROTATE_DEG (optional: 0|90|180|270, default 90)   [PROPOSED, D-041]
 ```
-Paths are absolute (XML does not expand `~`). Credentials still live here [EXISTING]; the target is `secrets.env` (D-018). The code also uses a site-specific health table name (see CODE_AUDIT section 6).
+Paths are absolute (XML does not expand `~`). Credentials still live here [EXISTING]; the target is `site.yaml` (D-048), with the renderer writing these XMLs. The code also uses a site-specific health table name (see CODE_AUDIT section 6).
 ### MAIL_SERVICE_CONFIG.xml
 `DATABASE_DETAILS`, `PROJECT_DETAILS` (PROJECT_NAME, REPORT dir), `MICROSOFT_AUTH` (tenant/client/secret/sender: **secrets**), `RECEIVER_DETAILS` (RECIPIENT, CC_RECIPIENT as Python list literals). SMTP variant adds `SENDER_DETAILS`.
 ### deleter_config.xml
@@ -70,7 +70,7 @@ Directory groups: raw, inference, repeated, plate, defective (each a list of pat
 ### 4.1 Deployed layout [BUILT script, new machines] (D-030, D-032)
 Root `<root>` = `~/INSIGHTZZ` (config key `paths.root`), created by `scripts/setup_dpc_layout.sh`:
 ```
-code/   config/{site.yaml, secrets.env, rendered/}   logs/   run/
+code/   config/{site.yaml, rendered/}   logs/   run/
 data/frames/CAM1|CAM2/{live, _tmp, INF, RAW_IMAGES, UI}      data/ui_live/CAM1|CAM2 (reserved)
 data/images/{DEFECTIVE, REPEATED, RAW, PLATE}/{LEFT, RIGHT}
 data/wheel_status/{LEFT, RIGHT, IMAGES, PDFS} (assumed)      data/bolt_data   data/state   data/models
