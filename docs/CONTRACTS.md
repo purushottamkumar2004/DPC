@@ -127,15 +127,15 @@ Affected rows: MySQL reports **changed** rows, so an `UPDATE` that writes identi
 ## 6. PLC [EXISTING]
 Modbus TCP (pymodbus), port 502, timeout 3 s. Registers: light **4109** (script writes 1; comment says 0 on/1 off: confirm), cleaning **4106** (1 for 10 s then 0), legacy cleaning 4097 / 4197, read conveyor status **4098**. **PLC IP for this server (Maihar): `192.168.2.5`** (confirmed by you; matches `light.py`). `cleaning_mechanism.py` (192.168.1.4) and the algorithm XML `PLC_IP_ADDRESS` (192.168.1.5) disagree with it and are treated as stale until proven otherwise. The XML DB numbers 12/13 are not used by the Modbus scripts. **One PLC IP per site must be a single config value** (`plc.ip` in site.yaml).
 
-## 7. Site config v1 [ACCEPTED, loader not built yet] (`<root>/config/site.yaml`) (D-033, D-047)
-One file per site; the only file a person edits to set up a site. File first; the DB becomes the master copy only when the UI starts editing config (later decision). Secrets are never in this file (section 9). Every program gets its settings from this file, directly (new code) or through the renderer (legacy XMLs, section 3).
+## 7. Site config v2 [ACCEPTED; loader built for v1, v2 next] (`<root>/config/site.yaml`) (D-033, D-047, D-048)
+One file per site; the only file a person edits to set up a site. File first; the DB becomes the master copy only when the UI starts editing config (later decision). Since schema v2 the file also holds the site's secrets (D-048): it must be chmod 600 and owned by the user running the services; share it only as a `--redacted` copy. Every program gets its settings from this file, directly (new code) or through the renderer (legacy XMLs, section 3).
 
 **Location:** env `DPC_SITE_CONFIG`, else `~/INSIGHTZZ/config/site.yaml`.
-**Loader** (CONFIG, `common/config/site_config.py`): `load_site_config(path=None) -> SiteConfig`. It reads the file, applies the defaults below, validates everything and raises `SiteConfigError` that lists **every** problem with its key path (e.g. `cameras[1].serial: missing`). `python -m common.config.site_config [path]` prints `OK` or the problems; exit 0 or 1.
+**Loader** (CONFIG, `common/config/site_config.py`): `load_site_config(path=None) -> SiteConfig`. It reads the file, applies the defaults below, validates everything and raises `SiteConfigError` that lists **every** problem with its key path (e.g. `cameras[1].serial: missing`). `python -m common.config.site_config [path]` prints `OK` or the problems; exit 0 or 1. `--redacted` prints the whole file with every secret replaced by `***` (safe to share). The loader refuses a file that is not chmod 600 and never prints or logs a secret value.
 **Rules:** unknown keys are errors (catches typos); no per-key env overrides in v1; relative paths are relative to `paths.root`; `~` is expanded; numbers are checked against the ranges below; serials are strings (quote them).
 
 ```yaml
-schema_version: 1                 # required, must be 1
+schema_version: 2                 # required, must be 2 (v1 files: add the secret keys below and bump)
 
 site:
   id: tadipatri                   # required; lowercase letters, digits, - or _; used in mail subjects and MQTT
@@ -152,12 +152,14 @@ db:
   port: 3306                      # default 3306
   name: tadipatri4                # required
   health_table: health_status     # default health_status (D-043); existing sites set their own table
-  # user and password: secrets.env DPC_DB_USER, DPC_DB_PASS
+  user: dpc_app                   # required; never root (D-030)
+  password: "<secret>"           # required; secret
 
 mqtt:
   host: localhost                 # default localhost
   port: 1883                      # default 1883
-  # optional auth: secrets.env DPC_MQTT_USER, DPC_MQTT_PASS
+  user: ""                        # optional; give both user and password, or neither
+  password: ""                    # optional; secret
 
 cameras:                          # required; 1 or 2 entries
   - id: CAM1                      # required; CAM1 | CAM2; unique
@@ -205,9 +207,16 @@ mail:
   report_dir: data/reports        # default data/reports (REPORT)
   recipients: ["a@example.com"]   # required; at least one address
   cc: []                          # default []
-  smtp: {host: smtp.gmail.com, port: 587}   # only when sender = smtp; defaults = today's hardcoded values
-  # graph secrets: DPC_MS_TENANT_ID, DPC_MS_CLIENT_ID, DPC_MS_CLIENT_SECRET, DPC_MAIL_SENDER
-  # smtp secrets:  DPC_MAIL_SENDER, DPC_SMTP_PASSWORD
+  sender_address: "dpc@example.com"     # required; the mailbox mails are sent from
+  disk_report_to: ["a@example.com"]     # default = recipients; daily disk report
+  graph:                          # required when sender = graph, not allowed otherwise
+    tenant_id: "<secret>"
+    client_id: "<secret>"
+    client_secret: "<secret>"
+  smtp:                           # required when sender = smtp, not allowed otherwise
+    host: smtp.gmail.com          # default = today's hardcoded value
+    port: 587                     # default 587
+    password: "<secret>"          # required
 
 retention:                        # all optional; defaults = today's deleter_config values
   raw_image_hours: 24
@@ -222,7 +231,7 @@ retention:                        # all optional; defaults = today's deleter_con
 
 **Derived values (computed, never written in the file):** frame folders `<root>/data/frames/<CAMn>/{live,_tmp,INF,RAW_IMAGES,UI}`, images `<root>/data/images/{DEFECTIVE,REPEATED,RAW,PLATE}/<SIDE>`, logs `<root>/logs/`, per-camera log name `FrameCapture_<CAMn>.log`, legacy `DEFECT_SIDE` = `Left|Right` from `side`.
 
-**Renderer contract (later, D-022):** writes `<root>/config/rendered/` from this file plus `secrets.env`, keeping the XML tag order of section 3 exactly:
+**Renderer contract (later, D-022):** writes `<root>/config/rendered/` from this file (rendered files that carry secrets are chmod 600), keeping the XML tag order of section 3 exactly:
 | Rendered file | Filled from |
 |---|---|
 | `BASLER_CONFIG<n>.xml` (one per basler camera) | `paths` (derived), `logging.backup_count`, `cameras[]` (serial, exposure_us, fps, rotate), `db` + DB secrets, `db.health_table` |
