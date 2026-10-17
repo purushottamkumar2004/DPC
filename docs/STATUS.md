@@ -116,6 +116,8 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 ## Decision and contract gaps (blocking the items above)
 | Gap | Blocks | Needed |
 |---|---|---|
+| D-048 Proposed (secrets into `site.yaml`, schema v2) | CONFIG v2 loader, SUPERVISOR env export, W-cleanup | Accept or reject; if accepted pick one legacy route (Supervisor export or `delete_script.py` reads `site.yaml`); then CONTRACTS 7 and 9 updated |
+| D-019, D-020, D-034 Proposed; Q1 open | 3 (Supervisor V2) | Accept; Q1 = queue lag plus heartbeat |
 | Which extra tables Django and DataSync need (Django's own are left to `manage.py migrate`) | 2b (later) | Add to `schema.sql` through a migration when the UI/DataSync work starts |
 | D-038 Proposed; Q15 open (health table per site) | 2 | Accept D-038; answer Q15 for Maihar and Tadipatri |
 | D-041 Proposed (Basler XML elements 16 to 18) | 2 | Accept D-041 and add the elements to CONTRACTS section 3 |
