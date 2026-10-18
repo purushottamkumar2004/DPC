@@ -33,6 +33,7 @@ class Monitor:
         self.recovery = recovery
         self.mqtt = mqtt
         self.timeout = settings.worker_timeout_seconds
+        self.high_cost_timeout = settings.high_cost_timeout_seconds
         self.publish_interval = settings.status_publish_interval_seconds
         self._last_published = {}
         self._last_full_publish = 0.0
@@ -54,9 +55,9 @@ class Monitor:
             self.recovery.restart_if_due(worker)
             return
 
-        # 1. process alive?
+        # 1. process alive? (what an exit means depends on the mode: see RecoveryManager)
         if not self.pm.is_running(worker):
-            self.recovery.handle_failure(worker, f"process exited (exit code {worker.exit_code})")
+            self.recovery.handle_exit(worker)
             return
 
         # 2. health check
@@ -89,12 +90,18 @@ class Monitor:
             return
 
         failing_for = now - worker.failing_since
-        if failing_for >= self.timeout:
+        timeout = self._timeout_for(worker)
+        if failing_for >= timeout:
             worker.status = WorkerStatus.UNHEALTHY
             self.recovery.handle_failure(worker, f"unhealthy for {failing_for:.0f}s: {result.message}")
         else:
             log.info("[%s] still failing (%.0fs/%.0fs): %s",
-                     worker.id, failing_for, self.timeout, result.message)
+                     worker.id, failing_for, timeout, result.message)
+
+    def _timeout_for(self, worker) -> float:
+        """A restart_cost: high worker (an algorithm: wheel counter and plate state are lost,
+        up to a full revolution is not inspected) must fail longer before it is restarted."""
+        return self.high_cost_timeout if worker.config.restart_cost == "high" else self.timeout
 
     # ------------------------------------------------------------------
     def publish_changes(self, force=False):

@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Optional
 
 from core.config import WorkerConfig
+from core.site_env import SiteEnv, SiteEnvError
 
 log = logging.getLogger("supervisor.process")
 
@@ -52,6 +53,12 @@ class Worker:
     healthy_since: Optional[float] = None
     restart_at: Optional[float] = None     # when WAITING_RESTART should end
     message: str = ""
+    # ---- V2: oneshot / periodic runs ----
+    next_run_at: Optional[float] = None    # periodic only; None = not scheduled (e.g. stopped by command)
+    completed_runs: int = 0                # runs that ended with exit code 0
+    consecutive_failures: int = 0          # periodic only: failed runs in a row
+    first_started_at: Optional[float] = None   # first launch since supervisor start (start_after waits)
+    heartbeat: Optional[object] = None     # last Heartbeat (health/heartbeat.py), for the status
 
     @property
     def id(self) -> str:
@@ -63,10 +70,11 @@ def _iso(ts: Optional[float]) -> Optional[str]:
 
 
 class ProcessManager:
-    def __init__(self, log_dir: str, extra_env: Optional[dict] = None):
+    def __init__(self, log_dir: str, extra_env: Optional[dict] = None, site_env: Optional[SiteEnv] = None):
         self.worker_log_dir = os.path.join(log_dir, "workers")
         os.makedirs(self.worker_log_dir, exist_ok=True)
         self.extra_env = extra_env or {}
+        self.site_env = site_env or SiteEnv()
 
     # ------------------------------------------------------------------
     def start_worker(self, worker: Worker) -> bool:
@@ -80,12 +88,22 @@ class ProcessManager:
             log.error("[%s] %s", cfg.id, worker.message)
             return False
 
-        worker.log_path = os.path.join(self.worker_log_dir, f"{cfg.id}.log")
-        self._rotate_if_big(worker.log_path)
-
         env = dict(os.environ)
         env.update(self.extra_env)
-        env.update(cfg.env)
+        if cfg.env_from_site:
+            try:
+                site_vars = self.site_env.variables()
+            except SiteEnvError as e:
+                worker.message = f"site.yaml: {e}"        # the text holds no secret value
+                log.error("[%s] cannot start: %s", cfg.id, worker.message)
+                return False
+            env.update(site_vars)
+            log.info("[%s] env_from_site: %d variable(s) exported: %s",
+                     cfg.id, len(site_vars), ", ".join(sorted(site_vars)))     # names only
+        env.update(cfg.env)                    # what workers.yaml says for this worker wins
+
+        worker.log_path = os.path.join(self.worker_log_dir, f"{cfg.id}.log")
+        self._rotate_if_big(worker.log_path)
         env["PYTHONUNBUFFERED"] = "1"          # so print() shows up in the log immediately
         env["DPC_WORKER_ID"] = cfg.id
 
@@ -113,6 +131,8 @@ class ProcessManager:
         worker.process = proc
         worker.pid = proc.pid
         worker.started_at = time.time()
+        if worker.first_started_at is None:
+            worker.first_started_at = worker.started_at
         worker.exit_code = None
         worker.failing_since = None
         worker.healthy_since = None
@@ -178,6 +198,12 @@ class ProcessManager:
             "log_file": worker.log_path,
             "message": worker.message,
             "timestamp": _iso(time.time()),
+            # V2, append-only (CONTRACTS 8): older consumers ignore these
+            "mode": worker.config.mode,
+            "restart_cost": worker.config.restart_cost,
+            "next_run_at": _iso(worker.next_run_at),
+            "consecutive_failures": worker.consecutive_failures,
+            "heartbeat": dict(worker.heartbeat.info) if worker.heartbeat is not None else None,
         }
 
     # ------------------------------------------------------------------

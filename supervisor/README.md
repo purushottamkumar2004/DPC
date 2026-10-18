@@ -1,4 +1,4 @@
-# DPC Supervisor V1
+# DPC Supervisor V2
 
 A generic manager for independent worker processes (cameras, algorithms, PLC,
 sync, reports, mail...). It only knows **command, health, restart policy**.
@@ -38,7 +38,9 @@ supervisor/
   core/recovery_manager.py   retry policy, FAILED state
   communication/mqtt_client.py
   health/base_health_check.py   HealthCheck interface
-  health/basic_health_check.py  process / file_activity / heartbeat
+  health/basic_health_check.py  process / file_activity / heartbeat / queue_lag
+  health/heartbeat.py           heartbeat payloads (old and extended, D-034)
+  core/site_env.py              env bridge: DPC_* variables from site.yaml (CONTRACTS 9)
   workers/dummy_worker.py    test worker
   logs/                      supervisor.log + logs/workers/<id>.log (worker stdout/stderr)
 ```
@@ -49,7 +51,8 @@ supervisor/
 pip install -r requirements.txt
 sudo apt install mosquitto        # optional - supervisor works without a broker
 
-python3 supervisor.py check-config
+python3 supervisor.py check-config          # also checks site.yaml if a worker has env_from_site
+python3 supervisor.py check-config --site-config ~/INSIGHTZZ/config/site.yaml
 python3 supervisor.py run         # Ctrl+C stops the supervisor and all workers
 
 # from another terminal (needs the broker):
@@ -127,3 +130,19 @@ retry counter back, so one crash per day never ends in FAILED.
 * `QUAD_FLIR_CONFIG.xml` contains DB passwords in plain text. The supervisor never
   reads it; keep it out of git.
 * Verify the log-file paths used for the algorithm health checks on each site.
+
+## V2: modes, start order, restart cost, env bridge (STATUS item 3)
+
+| key | values | meaning |
+|---|---|---|
+| `mode` | `service` (default) | runs forever; any exit is a failure |
+| | `oneshot` | runs once; exit 0 = STOPPED, not restarted; exit != 0 = failure (retry policy, then FAILED) |
+| | `periodic` + `interval_s` | runs every `interval_s` s (start to start, no overlap); STOPPED between runs with `next_run_at` in the status; a failed run is a `worker_failure` event and the next run is the retry (never FAILED) |
+| `restart_cost` | `normal` / `high` | `high` must fail `monitoring.high_cost_timeout_seconds` (default 120) instead of `worker_timeout_seconds`. A dead process is still restarted at once. |
+| `start_after` | `[ids]` | started only when those are ready (service RUNNING, oneshot/periodic finished with exit 0). After `monitoring.start_after_timeout_seconds`, or when a dependency is FAILED, it starts anyway with a warning and `start_after_unmet` in the `worker_started` event. Disabled ids are ignored; loops and unknown ids are config errors. Only applies at supervisor start; a `start` command overrules it. |
+| `env_from_site` | `true` / `false` | exports `DPC_DB_USER`, `DPC_DB_PASS`, `DPC_MS_*`, `DPC_MAIL_SENDER`, `DPC_SMTP_PASSWORD`, `DPC_DISK_REPORT_TO`, `DPC_MQTT_USER/PASS`, `DPC_SITE_NAME` from site.yaml. Read at every start of the worker (rotate a password, then `restart <id>`). Values are never logged or published; a bad site.yaml fails that worker only. `env:` in workers.yaml wins. |
+| `health.type: queue_lag` | `path`, `max_oldest_age_seconds`, `require_heartbeat`, `max_age_seconds` | oldest `*.jpg` in the folder(s) must be younger than the limit; empty folder = healthy. With `require_heartbeat: true` a fresh healthy heartbeat is needed too (D-049). |
+
+Heartbeat: `{"healthy": true}` and the extended payload (`pid, version, config_hash, fps, last_frame_age_s, inf_queue_depth`) are both accepted; the known fields are type-checked and shown under `heartbeat` in the worker status. `{"healthy": false}` makes the check fail at once (the timeout still applies).
+
+Tests: `python3 -m unittest tests.unit.test_supervisor_v2 -v` from the repo root (about 30 s).
