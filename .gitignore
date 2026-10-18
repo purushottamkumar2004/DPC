@@ -9,3 +9,7 @@ config/rendered/
 /run/
 /config/secrets.env
 .dpc_backup_*/
+# Python build output
+__pycache__/
+*.pyc
+.pytest_cache/

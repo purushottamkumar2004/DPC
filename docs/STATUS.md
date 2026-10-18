@@ -64,7 +64,7 @@ Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release t
 ### 2b. Database seed (D-043): DONE 2026-10-12 (DB chat)
 `db/schema.sql` v1 reconciled with the Tadipatri export: every Tadipatri table is seeded or listed under "Left out" in `db/README.md` with the reason; `CAMERA_PLC_STATUS` gained `PLC`; CONTRACTS section 5 rewritten (writer and reader per table). `db/test_seed.py` passed twice on MySQL 8.0.46: seed runs twice, 16 worker DB statements, all 26 Tadipatri tables accounted for, CONTRACTS 5 names every seeded column, no site values. Reference export: `db/reference/tadipatri/schema_2026-10-12.sql`. `scripts/dpc_db_init.py` stays with CONFIG after item 1.
 
-### 3. Supervisor V2: modes, `queue_lag`, heartbeat, start order: DONE (merged PR #7, `05749a7`; 103 unit tests pass on main, re-run by MASTER 2026-10-18; handoff not received)
+### 3. Supervisor V2: modes, `queue_lag`, heartbeat, start order: DONE (merged PR #7, `05749a7`; 103 unit tests pass on main, re-run by MASTER 2026-10-18; handoff recorded, D-051)
 | | |
 |---|---|
 | Owner chat | SUPERVISOR |
@@ -93,6 +93,9 @@ Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release t
 | # | Owner chat | What | Done when |
 |---|---|---|---|
 | 9 (DONE, PR #6) | CONFIG | D-050: `db.user: root` becomes a warning, not an error, in `common/config/site_config.py`; update the comment in `config/examples/site.example.yaml` and the test | A file with `user: root` prints `OK` plus one warning line and exits 0; tests pass |
+| 10 | SUPERVISOR | A hung oneshot/periodic run has no time limit: add optional `run_timeout_seconds` (append-only key in CONTRACTS 1) | A run longer than the limit is stopped, reported as `worker_failure`, and the next run still happens |
+| 11 | CONFIG + SUPERVISOR | The Supervisor's own MQTT login still comes from `workers.yaml`, while `site.yaml` holds `mqtt.user`/`mqtt.password` (D-048). Proposed: the Supervisor reads its MQTT login from `site.yaml` too; `workers.yaml` keeps only host/port/topic | One place for MQTT credentials; `workers.yaml` holds no secret; tests pass |
+| 12 | SUPERVISOR (item 4) | `supervisor/dpc-supervisor.service` hardcodes the Tadipatri user and paths | Unit file is a template (user and root filled at install); covers the "how the Supervisor starts on boot" gap |
 | 6 (DONE, PR #3) | W-mail | `workers/mail/immediate_mail_sender.py` line ~329 uses `defect['id']` on a DictCursor row whose key is `ID`: KeyError the first time a duplicate defect is found (the outlook sender already uses `ID`). Verified in code. | A duplicate defect is marked ignored (2) without an exception; send path unchanged |
 | 7 | W-frame_capture_basler | Health "matched no row" warning can be false: MySQL returns changed rows, not matched rows, when the value is unchanged. Connect with `client_flag=CLIENT.FOUND_ROWS`. | Repeating the same health value on an existing row logs no warning; a missing row still warns |
 | 8 | DB | Bring the Tadipatri DB to schema version 1 with a reviewed upgrade script, run only after a full backup. | Script reviewed by you; after it, `db/test_seed.py` checks pass against `tadipatri4`; backup restorable |

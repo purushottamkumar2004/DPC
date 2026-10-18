@@ -23,7 +23,7 @@ workers:
     mode: service|oneshot|periodic      # default service (D-019)
     interval_s: <s>                     # periodic only: start to start, no overlap
     restart_cost: normal|high           # high = must fail high_cost_timeout_seconds before a restart (D-020)
-    start_after: [<worker id>, ..]      # waits until they are running, at most start_after_timeout_seconds
+    start_after: [<worker id>, ..]      # at Supervisor start only: waits until each is ready (service RUNNING; oneshot/periodic one run exit 0), at most start_after_timeout_seconds or until one is FAILED, then starts anyway (D-051)
     env_from_site: false                # true = DPC_* variables exported from site.yaml (section 9)
 ```
 **V2 semantics (built):** `oneshot` exit 0 = STOPPED, not restarted; exit != 0 follows the retry policy. `periodic` is STOPPED between runs (`next_run_at` in its status); a failed run is a `worker_failure` event and the next run is the retry, never FAILED. `queue_lag` = the oldest file in `path` (the INF folder) is younger than `max_oldest_age_seconds`; with `require_heartbeat: true` a fresh heartbeat (`max_age_seconds`) is also needed (D-049, Q1). A `start_after` naming a disabled worker is ignored; loops and unknown ids are config errors. Site config for the env bridge: `--site-config`, else `$DPC_SITE_CONFIG`, else the default (section 7); `python3 supervisor.py check-config` also validates it.
@@ -41,8 +41,9 @@ Env passed to workers: `DPC_WORKER_ID`, `DPC_MQTT_HOST`, `DPC_MQTT_PORT`, `PYTHO
 | `dpc/supervisor/status` | online/offline (last-will) | yes |
 
 Statuses: STARTING, RUNNING, UNHEALTHY, WAITING_RESTART, STOPPED, FAILED. Events: `worker_started|stopped|failure|restarted|failed`. Commands: `start|stop|restart|status`. Heartbeat: `{"worker_id":..,"healthy":true}`. All JSON, ISO-8601 timestamps.
+**[BUILT, V2, append-only, D-051]** status payload adds `mode`, `restart_cost`, `next_run_at`, `consecutive_failures`, `heartbeat` (only the known extended fields, type-checked, text cut to 64 chars). No new status value: a periodic worker between runs is STOPPED with `next_run_at` set (UI shows it as idle). Events add `worker_stopped` with `reason: "completed"` (oneshot/periodic exit 0) and `start_after_unmet` on `worker_started`. Heartbeat: the old and the extended payload are both accepted, unknown fields ignored; `{"healthy": false}` fails the check at once (the failure timeout still applies before a restart).
 **[PROPOSED]** `poor_view` event (algorithm -> cleaning service): `{worker_id, event:"poor_view", classes_found, side}`; algorithm needs N consecutive bad frames; consumer owns the cooldown and is the only cleaning-register writer; consumers filter on `event`.
-**[PROPOSED, append-only]** richer heartbeat for new or modified workers (D-034): `{"worker_id":..,"healthy":true,"pid":..,"version":..,"config_hash":..,"fps":..,"last_frame_age_s":..,"inf_queue_depth":..}`; existing consumers ignore unknown fields. One broker per site, so topics carry no site id. Config is never delivered over MQTT; workers boot from local files.
+**[ACCEPTED, consumer built in V2]** richer heartbeat for new or modified workers (D-034): `{"worker_id":..,"healthy":true,"pid":..,"version":..,"config_hash":..,"fps":..,"last_frame_age_s":..,"inf_queue_depth":..}`; existing consumers ignore unknown fields. One broker per site, so topics carry no site id. Config is never delivered over MQTT; workers boot from local files.
 
 ## 3. Legacy program configs [EXISTING] (read **by position**, from `os.getcwd()`)
 **Order of tags must never change.** The renderer must reproduce it exactly.
