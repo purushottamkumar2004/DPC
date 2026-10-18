@@ -44,7 +44,7 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 | Contract impact | None new: build against CONTRACTS section 7 (schema v1, D-047) and section 9 (secret keys). Update `config/examples/site.example.yaml` to v1 (it predates it: e.g. `rotate`, `object_sizes`, `model` missing). |
 | Done when | (a) The example file loads into a typed object. (b) A missing required key, an unknown key or a wrong type fails with a message that names the key. (c) `~` and `paths.root` are expanded. (d) Secrets come only from `secrets.env`, and the loader refuses that file if it is not chmod 600. (e) Unit tests pass. (f) The examples contain no real secret or serial. |
 
-### 1b. `site.yaml` v2 with secrets (D-048, D-049)
+### 1b. `site.yaml` v2 with secrets (D-048, D-049): DONE (merged PR #5, `9aa788d`). MASTER check 2026-10-13: 61 unit tests pass; checker OK on the v2 example, refuses chmod 644, `--redacted` hides all secrets, v1 file and out-of-range values rejected with the key named, a secret in an error shows as `***`. Site test: write the real Tadipatri `site.yaml` and run the checker (not done yet).
 | | |
 |---|---|
 | Owner chat | CONFIG |
