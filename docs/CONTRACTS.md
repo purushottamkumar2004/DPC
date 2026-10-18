@@ -5,9 +5,10 @@ v3 changes: per-camera capture workers (1), richer heartbeat (2), Basler config 
 Status: **[BUILT]** implemented, **[EXISTING]** exists in production code (do not break), **[PROPOSED]** agreed shape, not implemented.
 Secrets are never stored here.
 
-## 1. Supervisor `workers.yaml` [BUILT]
+## 1. Supervisor `workers.yaml` [BUILT, V2 merged PR #7]
 ```yaml
-monitoring: {check_interval_seconds: 5, worker_timeout_seconds: 10, startup_stagger_seconds: 1, status_publish_interval_seconds: 30}
+monitoring: {check_interval_seconds: 5, worker_timeout_seconds: 10, startup_stagger_seconds: 1, status_publish_interval_seconds: 30,
+             high_cost_timeout_seconds: 120, start_after_timeout_seconds: 120}
 restart_policy: {enabled: true, max_retries: 3, retry_delay_seconds: 5, reset_after_seconds: 300}
 mqtt: {enabled: true, host: localhost, port: 1883, username: null, password: null, topic_prefix: dpc}
 runtime: {root: runtime}
@@ -17,10 +18,17 @@ workers:
     enabled: true  working_directory: <path>  runtime_dir: <name>  directories: [..]
     stop_signal: SIGTERM|SIGINT  stop_timeout_seconds: 10  env: {K: v}
     restart: true|false|{enabled,max_retries,retry_delay_seconds,reset_after_seconds}
-    health: {type: process|file_activity|heartbeat, path: <file|dir|[list]>, max_age_seconds: 30, startup_grace_seconds: 30}
+    health: {type: process|file_activity|heartbeat|queue_lag, path: <file|dir|[list]>, max_age_seconds: 30, startup_grace_seconds: 30,
+             max_oldest_age_seconds: <s, required for queue_lag>, require_heartbeat: false}
+    mode: service|oneshot|periodic      # default service (D-019)
+    interval_s: <s>                     # periodic only: start to start, no overlap
+    restart_cost: normal|high           # high = must fail high_cost_timeout_seconds before a restart (D-020)
+    start_after: [<worker id>, ..]      # waits until they are running, at most start_after_timeout_seconds
+    env_from_site: false                # true = DPC_* variables exported from site.yaml (section 9)
 ```
+**V2 semantics (built):** `oneshot` exit 0 = STOPPED, not restarted; exit != 0 follows the retry policy. `periodic` is STOPPED between runs (`next_run_at` in its status); a failed run is a `worker_failure` event and the next run is the retry, never FAILED. `queue_lag` = the oldest file in `path` (the INF folder) is younger than `max_oldest_age_seconds`; with `require_heartbeat: true` a fresh heartbeat (`max_age_seconds`) is also needed (D-049, Q1). A `start_after` naming a disabled worker is ignored; loops and unknown ids are config errors. Site config for the env bridge: `--site-config`, else `$DPC_SITE_CONFIG`, else the default (section 7); `python3 supervisor.py check-config` also validates it.
 Env passed to workers: `DPC_WORKER_ID`, `DPC_MQTT_HOST`, `DPC_MQTT_PORT`, `PYTHONUNBUFFERED=1`. Worker stdout/stderr: `<log_dir>/workers/<id>.log`.
-**[PROPOSED additions]:** `mode: service|oneshot|periodic` (+ `every_seconds`), `restart_cost: normal|high`, `env_file: <path>`, health types `queue_lag {path, max_oldest_age_seconds}` and `db_freshness {table, where, column, max_age_seconds}`.
+**[PROPOSED, not built]:** health type `db_freshness {table, where, column, max_age_seconds}`. (`env_file` was dropped: secrets come from `site.yaml`, D-048.)
 **[PROPOSED]** one capture worker per camera: `id: frame_capture_cam1` / `frame_capture_cam2`, each started with its own config file (env `BASLER_CONFIG`, later `--camera CAM1` reading `site.yaml`). Until a heartbeat exists, `file_activity` on `data/frames/CAMn/live/IMG_1.jpg` is a valid health check: with the atomic hand-off its mtime changes on every frame.
 
 ## 2. MQTT [BUILT]
