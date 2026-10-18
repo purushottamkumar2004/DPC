@@ -12,7 +12,7 @@
 #
 # Layout (everything under the root):
 #   code/      git checkout of the platform
-#   config/    secrets.env, site.yaml, rendered/ (generated legacy XMLs)
+#   config/    site.yaml (holds secrets: chmod 600), rendered/ (generated legacy XMLs)
 #   logs/      all logs
 #   run/       pid files / sockets (may contain stale files after a reboot)
 #   data/      frames, images, wheel_status, bolt_data, state, models
@@ -105,7 +105,7 @@ cat <<EOF
 Done. Root: $ROOT
 
   code    $ROOT/code
-  config  $ROOT/config      (put secrets.env here, chmod 600, never commit it)
+  config  $ROOT/config      (put site.yaml here, chmod 600, never commit it)
   logs    $ROOT/logs
   run     $ROOT/run
   data    $DATA

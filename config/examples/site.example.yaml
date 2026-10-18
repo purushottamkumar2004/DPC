@@ -1,12 +1,14 @@
-# DPC site config, schema v1 (CONTRACTS section 7, D-047).
-# Copy to ~/INSIGHTZZ/config/site.yaml, replace every value marked EDIT, then check it:
+# DPC site config, schema v2 (CONTRACTS sections 7 and 9, D-047, D-048).
+# Copy to ~/INSIGHTZZ/config/site.yaml, replace every value marked EDIT, then:
+#     chmod 600 ~/INSIGHTZZ/config/site.yaml        # it holds secrets; the loader refuses it otherwise
 #     cd ~/INSIGHTZZ/code && python3 -m common.config.site_config ~/INSIGHTZZ/config/site.yaml
-# Unknown keys are errors. Quote serials. Relative paths are relative to paths.root.
-# Secrets (DB, mail, MQTT logins) are NOT here: they go in ~/INSIGHTZZ/config/secrets.env
-# (copy secrets.example.env, chmod 600).
+# Never commit the real file. To share it (chat, mirror, UI), use only the redacted copy:
+#     python3 -m common.config.site_config ~/INSIGHTZZ/config/site.yaml --redacted
+# Never write a secret in a comment: comments are copied as they are.
+# Unknown keys are errors. Quote serials and secrets. Relative paths are relative to paths.root.
 # All values below are placeholders, not a real site.
 
-schema_version: 1
+schema_version: 2
 
 site:
   id: example_site                # EDIT; lowercase letters, digits, - or _
@@ -23,10 +25,14 @@ db:
   port: 3306
   name: example_db                # EDIT
   health_table: health_status     # new sites: health_status; existing sites set their own table
+  user: dpc_app                   # EDIT; secret; never root (D-030)
+  password: "CHANGE_ME"           # EDIT; secret
 
 mqtt:
   host: localhost
   port: 1883
+  user: ""                        # only when the broker has a login: give both user and password
+  password: ""                    # secret
 
 cameras:                          # 1 or 2 cameras; CAM1 = LEFT, CAM2 = RIGHT
   - id: CAM1
@@ -89,7 +95,16 @@ mail:
   report_dir: data/reports
   recipients: ["alerts@example.com"]   # EDIT
   cc: []
-  # smtp: {host: smtp.gmail.com, port: 587}   # only with sender: smtp
+  sender_address: "reports@example.com"     # EDIT; the mailbox mails are sent from
+  disk_report_to: ["alerts@example.com"]    # default = recipients; daily disk report
+  graph:                          # required with sender: graph, not allowed otherwise
+    tenant_id: "CHANGE_ME"        # EDIT; secret
+    client_id: "CHANGE_ME"        # EDIT; secret
+    client_secret: "CHANGE_ME"    # EDIT; secret
+  # smtp:                         # required with sender: smtp (remove graph then)
+  #   host: smtp.gmail.com
+  #   port: 587
+  #   password: "CHANGE_ME"       # secret
 
 retention:                        # all optional; these are the defaults
   raw_image_hours: 24
