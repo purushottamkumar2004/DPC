@@ -1,19 +1,24 @@
-"""Load and validate the site config `site.yaml` (schema v1, CONTRACTS section 7, D-047)
-and the site secrets `secrets.env` (CONTRACTS section 9).
+"""Load and validate the site config `site.yaml` (schema v2, CONTRACTS sections 7 and 9,
+D-047, D-048, D-049). Since v2 the file also holds the site's secrets.
 
 Public API
     load_site_config(path=None) -> SiteConfig
-    load_secrets(config, path=None) -> Secrets
     SiteConfigError            (.problems = list of "key.path: what is wrong")
+    redacted_copy(path=None) -> str      the file text with every secret replaced by ***
+    legacy_env_vars(config) -> dict      DPC_* env vars for legacy workers (CONTRACTS 9 env bridge)
 
 Command line
-    python -m common.config.site_config [path] [--with-secrets]
-    prints OK or every problem; exit code 0 (valid) or 1 (invalid).
+    python -m common.config.site_config [path]               prints OK or every problem; exit 0 or 1
+    python -m common.config.site_config [path] --redacted    prints a copy that is safe to share
 
 Why it is strict: one file sets up a whole 24x7 site, so a typo must stop the
 start-up with a clear message instead of silently falling back to a default.
 That is why unknown keys, duplicate keys and wrong types are all errors, and why
 every problem is collected before raising (fix them all in one go).
+
+Secrets: the file must be chmod 600 and owned by the user running the services, or
+it is refused before it is read. No problem message, repr or log line shows a secret
+value; secret values are shown as ***.
 
 This module checks the file only. Whether model files exist, cameras answer or
 the DB login works is the job of the preflight (`dpc-check`, STATUS item 5).
@@ -31,7 +36,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 CONFIG_ENV_VAR = "DPC_SITE_CONFIG"
 DEFAULT_CONFIG_PATH = "~/INSIGHTZZ/config/site.yaml"
 
@@ -87,10 +92,6 @@ class Paths:
         return os.path.join(self.config, "rendered")
 
     @property
-    def secrets_file(self) -> str:
-        return os.path.join(self.config, "secrets.env")
-
-    @property
     def logs(self) -> str:
         return os.path.join(self.root, "logs")
 
@@ -131,12 +132,16 @@ class DbConfig:
     port: int
     name: str
     health_table: str
+    user: str = field(repr=False)
+    password: str = field(repr=False)
 
 
 @dataclass(frozen=True)
 class MqttConfig:
     host: str
     port: int
+    user: Optional[str] = field(repr=False)        # None when the broker has no login
+    password: Optional[str] = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -211,6 +216,14 @@ class PlcConfig:
 class SmtpSettings:
     host: str
     port: int
+    password: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class GraphSettings:
+    tenant_id: str = field(repr=False)
+    client_id: str = field(repr=False)
+    client_secret: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -220,7 +233,10 @@ class MailConfig:
     report_dir: str      # absolute
     recipients: Tuple[str, ...]
     cc: Tuple[str, ...]
-    smtp: Optional[SmtpSettings]
+    sender_address: str
+    disk_report_to: Tuple[str, ...]
+    graph: Optional[GraphSettings]   # set when sender = graph
+    smtp: Optional[SmtpSettings]     # set when sender = smtp
 
 
 @dataclass(frozen=True)
@@ -312,15 +328,21 @@ class _Section:
 
     # ---- typed getters (return the default, or None, when the value is missing or wrong) ----
 
-    def string(self, name, required=True, default=None, choices=None, pattern=None, pattern_hint=""):
+    def string(self, name, required=True, default=None, choices=None, pattern=None, pattern_hint="",
+               secret=False, allow_empty=False):
+        """`secret=True`: the value never appears in a problem message.
+        `allow_empty=True`: "" counts as not set (returns the default)."""
         value = self._raw(name, required)
         if value is _MISSING:
             return default
+        shown = "***" if secret else repr(value)
         if not isinstance(value, str):
             hint = " (quote it)" if isinstance(value, (int, float)) else ""
-            self.problem(name, f"must be a string{hint}, got {value!r}")
+            self.problem(name, f"must be a string{hint}, got {shown}")
             return None
         if not value.strip():
+            if allow_empty:
+                return default
             self.problem(name, "must not be empty")
             return None
         if choices is not None and value not in choices:
@@ -434,14 +456,45 @@ def default_config_path() -> str:
     return os.path.expanduser(os.environ.get(CONFIG_ENV_VAR) or DEFAULT_CONFIG_PATH)
 
 
+def _check_file_is_private(path: str) -> List[str]:
+    """The file holds secrets: it must belong to the service user and be readable by nobody
+    else (chmod 600)."""
+    info = os.stat(path)
+    problems = []
+    if not stat.S_ISREG(info.st_mode):
+        problems.append("must be a regular file")
+    if info.st_mode & 0o077:
+        problems.append(f"permissions are {stat.S_IMODE(info.st_mode):o}; it holds secrets, run: chmod 600 {path}")
+    if hasattr(os, "geteuid") and info.st_uid != os.geteuid():
+        problems.append("is owned by another user; it must belong to the user running the services")
+    return problems
+
+
+def _yaml_error_message(exc: yaml.YAMLError) -> str:
+    """Only the problem and its position: PyYAML's full message can quote a line of the
+    file, and that line could hold a secret."""
+    mark = getattr(exc, "problem_mark", None)
+    where = f" (line {mark.line + 1}, column {mark.column + 1})" if mark is not None else ""
+    return f"not valid YAML: {getattr(exc, 'problem', None) or 'cannot be parsed'}{where}"
+
+
+def _read_text(path: str) -> str:
+    if not os.path.isfile(path):
+        raise SiteConfigError(path, ["file not found"])
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
 def _read_yaml(path: str) -> Any:
     if not os.path.isfile(path):
         raise SiteConfigError(path, ["file not found"])
+    problems = _check_file_is_private(path)
+    if problems:      # refuse before reading: the file holds secrets
+        raise SiteConfigError(path, problems)
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return yaml.load(f, Loader=_StrictLoader)
+        return yaml.load(_read_text(path), Loader=_StrictLoader)
     except yaml.YAMLError as exc:
-        raise SiteConfigError(path, [f"not valid YAML: {exc}"]) from None
+        raise SiteConfigError(path, [_yaml_error_message(exc)]) from None
 
 
 # ======================================================================
@@ -488,7 +541,11 @@ def _read_db(top: _Section) -> DbConfig:
         name=s.string("name", pattern=_SQL_IDENTIFIER_RE, pattern_hint=hint),
         health_table=s.string("health_table", required=False, default="health_status",
                               pattern=_SQL_IDENTIFIER_RE, pattern_hint=hint),
+        user=s.string("user", secret=True),
+        password=s.string("password", secret=True),
     )
+    if cfg.user == "root":
+        s.problem("user", "must not be root; use a dedicated user with limited rights (D-030)")
     s.finish()
     return cfg
 
@@ -498,7 +555,12 @@ def _read_mqtt(top: _Section) -> MqttConfig:
     cfg = MqttConfig(
         host=s.string("host", required=False, default="localhost"),
         port=s.integer("port", required=False, default=1883, low=1, high=65535),
+        # "" means "no login", as in the example file
+        user=s.string("user", required=False, secret=True, allow_empty=True),
+        password=s.string("password", required=False, secret=True, allow_empty=True),
     )
+    if (cfg.user is None) != (cfg.password is None):
+        s.problem("user", "give both user and password, or neither")
     s.finish()
     return cfg
 
@@ -670,26 +732,53 @@ def _read_mail(top: _Section, paths: Paths) -> MailConfig:
     recipients = s.string_list("recipients", item_pattern=_EMAIL_RE, item_hint=email_hint)
     if recipients is not None and not recipients:
         s.problem("recipients", "needs at least one address")
-    smtp = None
-    if sender == "smtp":
-        sm = s.section("smtp", required=False)
-        # Defaults are the values hardcoded in today's SMTP sender.
-        smtp = SmtpSettings(host=sm.string("host", required=False, default="smtp.gmail.com"),
-                            port=sm.integer("port", required=False, default=587, low=1, high=65535))
-        sm.finish()
-    elif s.present("smtp"):
-        s.used.add("smtp")
-        s.problem("smtp", "only allowed when sender is smtp")
     cfg = MailConfig(
         sender=sender,
         project_name=s.string("project_name"),
         report_dir=_resolve(paths, s.string("report_dir", required=False, default="data/reports")),
         recipients=recipients,
         cc=s.string_list("cc", required=False, default=(), item_pattern=_EMAIL_RE, item_hint=email_hint),
-        smtp=smtp,
+        sender_address=s.string("sender_address", pattern=_EMAIL_RE, pattern_hint=email_hint),
+        disk_report_to=s.string_list("disk_report_to", required=False, default=recipients,
+                                     item_pattern=_EMAIL_RE, item_hint=email_hint),
+        graph=_read_graph(s, sender),
+        smtp=_read_smtp(s, sender),
     )
     s.finish()
     return cfg
+
+
+def _sender_block(s: _Section, name: str, sender: Optional[str]) -> Optional[_Section]:
+    """The `graph` / `smtp` block: required when `sender` names it, not allowed otherwise."""
+    if sender == name:
+        return s.section(name)
+    s.used.add(name)
+    if sender is not None and s.present(name):
+        s.problem(name, f"only allowed when sender is {name}")
+    return None
+
+
+def _read_graph(s: _Section, sender: Optional[str]) -> Optional[GraphSettings]:
+    g = _sender_block(s, "graph", sender)
+    if g is None:
+        return None
+    graph = GraphSettings(tenant_id=g.string("tenant_id", secret=True),
+                          client_id=g.string("client_id", secret=True),
+                          client_secret=g.string("client_secret", secret=True))
+    g.finish()
+    return graph
+
+
+def _read_smtp(s: _Section, sender: Optional[str]) -> Optional[SmtpSettings]:
+    sm = _sender_block(s, "smtp", sender)
+    if sm is None:
+        return None
+    # host and port defaults are the values hardcoded in today's SMTP sender
+    smtp = SmtpSettings(host=sm.string("host", required=False, default="smtp.gmail.com"),
+                        port=sm.integer("port", required=False, default=587, low=1, high=65535),
+                        password=sm.string("password", secret=True))
+    sm.finish()
+    return smtp
 
 
 def _read_keep_limit(s: _Section, name: str, days: int, items: int) -> KeepLimit:
@@ -744,9 +833,12 @@ def _join(folder: Optional[str], name: Optional[str]) -> Optional[str]:
 def load_site_config(path: Optional[str] = None) -> SiteConfig:
     """Read, default and validate site.yaml. Raises SiteConfigError listing every problem."""
     path = os.path.abspath(os.path.expanduser(path)) if path else default_config_path()
-    problems: List[str] = []
-    top = _Section(_read_yaml(path), "", problems)
+    data = _read_yaml(path)
+    if isinstance(data, dict) and data.get("schema_version") == 1:
+        raise SiteConfigError(path, [_v1_upgrade_message(data)])
 
+    problems: List[str] = []
+    top = _Section(data, "", problems)
     version = top.integer("schema_version")
     if version is not None and version != SCHEMA_VERSION:
         top.problem("schema_version", f"must be {SCHEMA_VERSION}, got {version}")
@@ -772,133 +864,130 @@ def load_site_config(path: Optional[str] = None) -> SiteConfig:
                       retention=retention, source_path=path)
 
 
-# ======================================================================
-# Public: secrets.env
-# ======================================================================
+def _v1_upgrade_message(data: Dict[str, Any]) -> str:
+    """A v1 file lacks the secrets (they were in secrets.env). Say exactly what to add."""
+    def block(*keys):
+        node = data
+        for key in keys:
+            node = node.get(key) if isinstance(node, dict) else None
+        return node if isinstance(node, dict) else {}
 
-SECRET_KEYS = (
-    "DPC_DB_USER", "DPC_DB_PASS",
-    "DPC_MS_TENANT_ID", "DPC_MS_CLIENT_ID", "DPC_MS_CLIENT_SECRET",
-    "DPC_MAIL_SENDER", "DPC_SMTP_PASSWORD", "DPC_DISK_REPORT_TO",
-    "DPC_MQTT_USER", "DPC_MQTT_PASS",
-)
-# Retired keys are accepted with a warning so an old secrets.env does not stop a site.
-# DPC_SITE_NAME: replaced by site.name (D-047); workers/cleanup/delete_script.py still reads it.
-RETIRED_SECRET_KEYS = {"DPC_SITE_NAME": "retired, the site name is site.name in site.yaml (D-047)"}
-PLACEHOLDER = "CHANGE_ME"
-
-
-@dataclass(frozen=True)
-class Secrets:
-    """Values from secrets.env. repr never shows a value."""
-    values: Dict[str, str] = field(repr=False)
-    source_path: str
-    warnings: Tuple[str, ...] = ()
-
-    def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
-        return self.values.get(key, default)
-
-    def __getitem__(self, key: str) -> str:
-        return self.values[key]
-
-    def __repr__(self) -> str:
-        return f"Secrets(source_path={self.source_path!r}, keys={sorted(self.values)})"
-
-
-def required_secret_keys(config: SiteConfig) -> List[str]:
-    """Which keys this site needs, from what site.yaml says (CONTRACTS 9)."""
-    keys = ["DPC_DB_USER", "DPC_DB_PASS"]
-    if config.mail.sender == "graph":
-        keys += ["DPC_MS_TENANT_ID", "DPC_MS_CLIENT_ID", "DPC_MS_CLIENT_SECRET", "DPC_MAIL_SENDER"]
-    elif config.mail.sender == "smtp":
-        keys += ["DPC_MAIL_SENDER", "DPC_SMTP_PASSWORD"]
-    return keys
-
-
-def _check_file_is_private(path: str) -> List[str]:
-    """secrets.env must belong to the service user and be readable by nobody else (chmod 600)."""
-    info = os.stat(path)
-    problems = []
-    if not stat.S_ISREG(info.st_mode):
-        problems.append("must be a regular file")
-    if info.st_mode & 0o077:
-        problems.append(f"permissions are {stat.S_IMODE(info.st_mode):o}; run: chmod 600 {path}")
-    if hasattr(os, "geteuid") and info.st_uid != os.geteuid():
-        problems.append("is owned by another user; it must belong to the user running the services")
-    return problems
-
-
-def _parse_env_file(path: str, problems: List[str]) -> Dict[str, str]:
-    """KEY=VALUE per line, # comments, optional matching quotes (systemd EnvironmentFile style).
-    Problems name the line and key, never the value."""
-    values: Dict[str, str] = {}
-    with open(path, "r", encoding="utf-8") as f:
-        for number, line in enumerate(f, start=1):
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" not in line:
-                problems.append(f"line {number}: expected KEY=VALUE")
-                continue
-            key, value = (part.strip() for part in line.split("=", 1))
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                value = value[1:-1]
-            if key in values:
-                problems.append(f"line {number}: {key} is set more than once")
-            values[key] = value
-    return values
-
-
-def load_secrets(config: SiteConfig, path: Optional[str] = None) -> Secrets:
-    """Read <root>/config/secrets.env (or `path`). Secrets come only from this file, never
-    from site.yaml. Raises SiteConfigError if the file is missing, not chmod 600, or lacks a
-    key this site needs."""
-    path = os.path.abspath(os.path.expanduser(path)) if path else config.paths.secrets_file
-    if not os.path.isfile(path):
-        raise SiteConfigError(path, ["file not found (copy config/examples/secrets.example.env, chmod 600)"])
-    problems = _check_file_is_private(path)
-    if problems:   # refuse to read a file others can read
-        raise SiteConfigError(path, problems)
-
-    values = _parse_env_file(path, problems)
-    warnings = []
-    for key in values:
-        if key in RETIRED_SECRET_KEYS:
-            warnings.append(f"{key}: {RETIRED_SECRET_KEYS[key]}")
-        elif key not in SECRET_KEYS:
-            close = difflib.get_close_matches(key, SECRET_KEYS, n=1)
-            problems.append(f"{key}: unknown key" + (f" (did you mean '{close[0]}'?)" if close else ""))
-
-    for key in required_secret_keys(config):
-        if not values.get(key):
-            problems.append(f"{key}: missing")
-    for key, value in values.items():
-        if value == PLACEHOLDER:
-            problems.append(f"{key}: still the placeholder {PLACEHOLDER}")
-    if bool(values.get("DPC_MQTT_USER")) != bool(values.get("DPC_MQTT_PASS")):
-        problems.append("DPC_MQTT_USER and DPC_MQTT_PASS: set both or neither")
-
-    if problems:
-        raise SiteConfigError(path, problems)
-    return Secrets(values=values, source_path=path, warnings=tuple(warnings))
+    db, mail = block("db"), block("mail")
+    to_add = [key for key, present in (("db.user", db.get("user")), ("db.password", db.get("password")),
+                                       ("mail.sender_address", mail.get("sender_address"))) if not present]
+    if mail.get("sender") == "smtp":
+        if not block("mail", "smtp").get("password"):
+            to_add.append("mail.smtp.password")
+    elif not block("mail", "graph"):
+        to_add.append("mail.graph (tenant_id, client_id, client_secret)")
+    what = f"add {', '.join(to_add)} (the values from the old secrets.env), then " if to_add else ""
+    return f"schema_version: this is a v1 file; {what}set schema_version: 2 (CONTRACTS 7, D-048)"
 
 
 # ======================================================================
-# Command line check
+# Public: redacted copy (safe to paste into a chat, mirror or UI)
+# ======================================================================
+
+# Secret keys from CONTRACTS 7 and 9, as key paths.
+SECRET_KEY_PATHS = {
+    ("db", "user"), ("db", "password"),
+    ("mqtt", "user"), ("mqtt", "password"),
+    ("mail", "graph", "tenant_id"), ("mail", "graph", "client_id"), ("mail", "graph", "client_secret"),
+    ("mail", "smtp", "password"),
+}
+# Belt and braces: also hide anything whose key name looks secret, wherever it is
+# (a misspelt "pasword:" or a key added by hand must not leak either).
+_SECRET_NAME_RE = re.compile(r"pass|pasw|pwd|secret|token|api_?key|tenant|client_id", re.IGNORECASE)
+_ANCHOR_OR_TAG_RE = re.compile(r"^(?:[&!]\S*\s+)*")   # "&name " / "!!str " before a value: keep them
+REDACTED = '"***"'
+
+
+def _secret_spans(node, path=(), inside_secret=False) -> List[Tuple[int, int]]:
+    """Character ranges of every secret value in the composed YAML tree."""
+    if isinstance(node, yaml.ScalarNode):
+        quoted = node.style in ("'", '"')
+        is_set = node.value != "" and (quoted or node.value not in ("~", "null"))   # "" and null stay visible
+        if inside_secret and is_set:
+            return [(node.start_mark.index, node.end_mark.index)]
+        return []
+    spans = []
+    if isinstance(node, yaml.MappingNode):
+        for key_node, value_node in node.value:
+            key = key_node.value if isinstance(key_node, yaml.ScalarNode) else ""
+            child = path + (key,)
+            secret = inside_secret or child in SECRET_KEY_PATHS or bool(_SECRET_NAME_RE.search(key))
+            spans += _secret_spans(value_node, child, secret)
+    elif isinstance(node, yaml.SequenceNode):
+        for index, item in enumerate(node.value):
+            spans += _secret_spans(item, path + (index,), inside_secret)
+    return spans
+
+
+def redact_text(text: str, source: str = "<text>") -> str:
+    """The same text, comments and layout kept, with each secret value replaced by "***"."""
+    try:
+        root = yaml.compose(text, Loader=yaml.SafeLoader)
+    except yaml.YAMLError as exc:
+        # Cannot tell where the secrets are, so print nothing of the file.
+        raise SiteConfigError(source, [_yaml_error_message(exc)]) from None
+    spans = set(_secret_spans(root)) if root is not None else set()   # a set: YAML aliases repeat a node
+    for start, end in sorted(spans, reverse=True):
+        value = text[start:end]
+        start += _ANCHOR_OR_TAG_RE.match(value).end()      # keep anchors so aliases still resolve
+        end = start + len(text[start:end].rstrip())        # keep the line break after a block scalar
+        text = text[:start] + REDACTED + text[end:]
+    return text
+
+
+def redacted_copy(path: Optional[str] = None) -> str:
+    """site.yaml with every secret replaced by "***". Does not validate the file, so a broken
+    file can still be shared to get help. Comments are kept as they are: never write a
+    secret in a comment."""
+    path = os.path.abspath(os.path.expanduser(path)) if path else default_config_path()
+    return redact_text(_read_text(path), path)
+
+
+# ======================================================================
+# Public: env vars for legacy workers (CONTRACTS 9 env bridge, D-049)
+# ======================================================================
+
+def legacy_env_vars(config: SiteConfig) -> Dict[str, str]:
+    """The DPC_* variables the Supervisor exports to workers with `env_from_site: true`.
+    Only variables that have a value are returned (e.g. no DPC_SMTP_PASSWORD on a Graph site)."""
+    mail = config.mail
+    env = {
+        "DPC_DB_USER": config.db.user,
+        "DPC_DB_PASS": config.db.password,
+        "DPC_MAIL_SENDER": mail.sender_address,
+        "DPC_DISK_REPORT_TO": ",".join(mail.disk_report_to),
+        "DPC_SITE_NAME": config.site.name,
+    }
+    if mail.graph is not None:
+        env.update({"DPC_MS_TENANT_ID": mail.graph.tenant_id, "DPC_MS_CLIENT_ID": mail.graph.client_id,
+                    "DPC_MS_CLIENT_SECRET": mail.graph.client_secret})
+    if mail.smtp is not None:
+        env["DPC_SMTP_PASSWORD"] = mail.smtp.password
+    if config.mqtt.user is not None:
+        env.update({"DPC_MQTT_USER": config.mqtt.user, "DPC_MQTT_PASS": config.mqtt.password})
+    return env
+
+
+# ======================================================================
+# Command line
 # ======================================================================
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m common.config.site_config",
-                                     description="Check a DPC site.yaml (schema v1).")
+                                     description="Check a DPC site.yaml (schema v2).")
     parser.add_argument("path", nargs="?", help=f"site.yaml (default: ${CONFIG_ENV_VAR} or {DEFAULT_CONFIG_PATH})")
-    parser.add_argument("--with-secrets", action="store_true",
-                        help="also check <root>/config/secrets.env (permissions and required keys)")
+    parser.add_argument("--redacted", action="store_true",
+                        help="print the file with every secret replaced by *** (safe to share); no check")
     args = parser.parse_args(argv)
     try:
-        config = load_site_config(args.path)
-        if args.with_secrets:
-            for warning in load_secrets(config).warnings:
-                print(f"WARNING {warning}")
+        if args.redacted:
+            print(redacted_copy(args.path), end="")
+            return 0
+        load_site_config(args.path)
     except SiteConfigError as exc:
         print(exc)
         return 1
