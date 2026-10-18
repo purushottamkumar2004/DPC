@@ -25,7 +25,7 @@ db:
   port: 3306
   name: example_db                # EDIT
   health_table: health_status     # new sites: health_status; existing sites set their own table
-  user: dpc_app                   # EDIT; secret; never root (D-030)
+  user: dpc_app                   # EDIT; secret; root works but prints a warning (D-050); a dedicated user is recommended
   password: "CHANGE_ME"           # EDIT; secret
 
 mqtt:

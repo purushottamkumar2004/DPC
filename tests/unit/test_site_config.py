@@ -357,6 +357,17 @@ class CommandLine(_TempDirTest):
         code, out = self.run_cli(self.write_yaml(self.config_data()))
         self.assertEqual((code, out.strip()), (0, "OK"))
 
+    def test_root_db_user_prints_ok_and_one_warning(self):        # follow-up 9 done when
+        data = self.config_data()
+        data["db"]["user"] = "root"
+        code, out = self.run_cli(self.write_yaml(data))
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines(), [
+            "OK",
+            "WARNING db.user is root; a dedicated user with limited rights is recommended (D-030)",
+        ])
+        self.assertNotIn(SECRETS[("db", "password")], out)
+
     def test_problems_and_exit_1(self):
         data = self.config_data()
         del data["db"]["name"]
@@ -432,13 +443,22 @@ class SecretFields(_TempDirTest):                                    # 1b done w
         self.assertEqual(cfg.db.password, SECRETS[("db", "password")])
         self.assertEqual(cfg.mail.graph.client_secret, SECRETS[("mail", "graph", "client_secret")])
 
-    def test_db_login_required_and_not_root(self):
+    def test_db_login_required(self):
         data = self.config_data()
         del data["db"]["password"]
         self.assertEqual(self.problems_for(data), ["db.password: missing"])
+
+    def test_root_db_user_is_a_warning(self):                    # follow-up 9 (D-050)
         data = self.config_data()
         data["db"]["user"] = "root"
-        self.assertProblem(self.problems_for(data), r"^db\.user: must not be root")
+        cfg = sc.load_site_config(self.write_yaml(data))
+        self.assertEqual(cfg.db.user, "root")
+        self.assertEqual(cfg.warnings,
+                         ("db.user is root; a dedicated user with limited rights is recommended (D-030)",))
+
+    def test_no_warning_for_a_dedicated_user(self):
+        cfg = sc.load_site_config(self.write_yaml(self.config_data()))
+        self.assertEqual(cfg.warnings, ())
 
     def test_graph_block_required_for_graph(self):
         data = self.config_data()
@@ -496,7 +516,7 @@ class NoSecretInMessages(_TempDirTest):                              # 1b done w
     def test_broken_files_never_print_a_secret(self):
         breakers = [
             lambda d: d["db"].update(port="x"),
-            lambda d: d["db"].update(user="root"),
+            lambda d: d["db"].update(name="bad name"),
             lambda d: d.update(schema_version=1),
             lambda d: d["mail"].update(sender="smtp"),
             lambda d: d["mail"]["graph"].update(extra_key=SECRETS[("db", "password")]),
