@@ -88,10 +88,10 @@ Open risks / follow-ups: ...
 - One logical change per commit; message `<worker>: <what> (D-xxx)`.
 - Tag releases `v0.<n>`. A site pins a tag (`git fetch && git checkout v0.<n>`); updating = a newer tag, rollback = an older one. Golden images pull a tag. Record the tag each site runs in `docs/SITES.md`.
 - Docs change in the same PR as the code that changes them.
-- Never in git: `secrets.env`, `site.yaml`, real XML configs, models, images, logs (see `.gitignore`). Commit only `*.example.*` files. Site settings (no secrets) may live in a separate private `dpc-sites` repo, one folder per site.
+- Never in git: `site.yaml` (holds the secrets, D-048), real XML configs, models, images, logs (see `.gitignore`). Commit only `*.example.*` files. Site settings (no secrets) may live in a separate private `dpc-sites` repo, one folder per site.
 
 ## GitHub and Claude
 - **Project knowledge**: instructions = `docs/PROJECT_INSTRUCTIONS.md`; knowledge = the small docs in `docs/`. Add the repo with **"+" > GitHub**; it is a read-only snapshot, refreshed with **Sync now** after each merge. Use **Configure files** to leave out large files (`LeftAlgorithm.py`, `RightAlgorithm.py` are about 125-155 KB each): attach those only in the chat that edits them.
 - **Chat to repo**: the chat produces files, you copy them in, review the diff, commit.
 - **Claude Code** on your machine, in the repo, for multi-file work (supervisor, config loader, renames, merges): it reads files itself, runs tests and can commit, and does not fill a chat.
-- Rotate any secret that appears in a chat; never paste `secrets.env`.
+- Secrets may be shared in chats (D-042); paste `site.yaml` only as a `--redacted` copy.

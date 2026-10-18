@@ -31,7 +31,7 @@ Copy the Tadipatri column as the starting point; mark anything not yet known.
 | Wheel count, expected cycle total, object sizes, wheel-stand counts | machine specification and calibration | to fill |
 | Model files and thresholds | developer | to fill |
 
-Passwords and secrets are written only into that machine's `secrets.env`: never into this repo, SITES.md or a chat.
+Passwords and secrets are written only into that machine's `site.yaml` (chmod 600, D-048): never into this repo or SITES.md; share it only as a `--redacted` copy.
 
 ## 2. Procedure
 Each step ends with a **Check**. Do not continue until it passes.
@@ -86,7 +86,7 @@ chmod 600 ~/INSIGHTZZ/config/BASLER_CONFIG1.xml
 cp ~/INSIGHTZZ/config/BASLER_CONFIG1.xml ~/INSIGHTZZ/config/BASLER_CONFIG2.xml
 sed -i 's#/CAM1/#/CAM2/#g; s#24824427#24874775#' ~/INSIGHTZZ/config/BASLER_CONFIG2.xml
 chmod 600 ~/INSIGHTZZ/config/BASLER_CONFIG2.xml
-cp ~/INSIGHTZZ/code/secrets.env.example ~/INSIGHTZZ/config/secrets.env && chmod 600 ~/INSIGHTZZ/config/secrets.env
+cp ~/INSIGHTZZ/code/config/examples/site.example.yaml ~/INSIGHTZZ/config/site.yaml && chmod 600 ~/INSIGHTZZ/config/site.yaml
 ```
 Check: `grep -E "SERIAL|CAM[12]" ~/INSIGHTZZ/config/BASLER_CONFIG2.xml` shows the second serial and `data/frames/CAM2/` paths. (For another site, replace the serials in the `sed` line.)
 
@@ -110,7 +110,7 @@ CREATE DATABASE <db_name>;
 CREATE USER '<db_user>'@'localhost' IDENTIFIED BY '<new generated password>';
 GRANT SELECT, INSERT, UPDATE, DELETE ON <db_name>.* TO '<db_user>'@'localhost';
 ```
-Put the user and password only in `secrets.env` (and the Basler XML while it still holds them). Tables: created from the schemas in CONTRACTS section 5; a schema script does not exist yet. Capture alone does not need the DB today. Check: you can log in with the new user; `root` is not used by any config.
+Put the user and password only in `site.yaml` (and the Basler XML while it still holds them). Tables: created from the schemas in CONTRACTS section 5; a schema script does not exist yet. Capture alone does not need the DB today. Check: you can log in with the new user; `root` is not used by any config.
 
 **Step 9. Model files**
 Copy the model folder into `~/INSIGHTZZ/data/models/<model_name>/` (weights, YAML, class JSON). Check: the files are present and readable; sizes match the source. The model paths in the algorithm configs are not config-driven yet (D-023).
@@ -125,7 +125,7 @@ Update `docs/SITES.md` (serials, sides, release tag, quirks), commit it through 
 - [ ] Layout script printed `OK`; code is at the intended release tag (`git describe --tags`)
 - [ ] Both serials detected; CAM1/CAM2 and sides confirmed by looking at the images
 - [ ] Each camera: live image updates, `INF` fills at the configured fps, `_tmp` empty, rotation correct, log clean
-- [ ] Config files and `secrets.env` are `chmod 600`, outside the repo, and not in `git status`
+- [ ] Config files and `site.yaml` are `chmod 600`, outside the repo, and not in `git status`
 - [ ] No `root` DB login in any config; DB password unique to this site
 - [ ] `INF` queues emptied after the test; disk usage noted
 - [ ] `docs/SITES.md` updated and committed
@@ -154,7 +154,7 @@ Roll back by checking out the previous tag. Never edit code on the site; update 
 |---|---|
 | 5 | Detects cameras and lists the serials; the installer assigns CAM1/CAM2 and the side |
 | 5, 7 | Test-opens each camera with the chosen fps and exposure, and shows a preview image to confirm the side and rotation |
-| 6 | Writes `site.yaml` and `secrets.env`, runs the renderer to produce the legacy XMLs and `workers.yaml`; paths are derived from one root, never typed |
+| 6 | Writes `site.yaml` (with the secrets, chmod 600), runs the renderer to produce the legacy XMLs and `workers.yaml`; paths are derived from one root, never typed |
 | 8 | Creates the DB, a limited user and a generated password, and the tables |
 | 9 | Checks that the model files exist and match their checksum |
 | 3, 11 | Records the installed release tag and the site data sheet |

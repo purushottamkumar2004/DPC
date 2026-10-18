@@ -15,7 +15,6 @@ ui/            Django UI / API                                                  
 config/        schema/, renderer/, examples/ (site.example.yaml)                  (planned)
 scripts/       setup_dpc_layout.sh
 tests/         unit/, golden/, replay/
-secrets.env.example
 ```
 
 ## Machine layout (new machines)
@@ -25,7 +24,7 @@ Run `bash scripts/setup_dpc_layout.sh` as your normal user (no sudo). It creates
 - Worker code under `workers/` other than `frame_capture_basler/` is the production code of the Maihar site, copied as is (only `cleanup/delete_script.py` reads its Microsoft Graph credentials from `DPC_*` environment variables).
 - `frame_capture_basler/` is the new single-camera version with atomic hand-off (D-031); the legacy FLIR version still copies in place.
 - `*.example.*` files are real configs with secrets and recipients replaced by placeholders; XML tag order is unchanged because the programs read XML **by position**.
-- Real configs, `site.yaml` and `secrets.env` stay on the machine and are git-ignored.
+- Real configs and `site.yaml` (which holds the secrets, D-048) stay on the machine and are git-ignored.
 
 ## Working with Claude
 One-time Project setup and the routine after every task: `docs/CLAUDE_PROJECT_SETUP.md`. Current state and next steps: `docs/STATUS.md`.
@@ -38,7 +37,7 @@ One `main` branch for all sites; releases are tags (`v0.<n>`). A site pins a tag
 
 ## Before first use
 1. Rotate the Microsoft Graph client secret and the DB passwords (they were in plaintext in the old files and in chats). Use a dedicated DB user, not `root`.
-2. Create `~/INSIGHTZZ/config/secrets.env` from `secrets.env.example` (chmod 600).
+2. Create `~/INSIGHTZZ/config/site.yaml` from `config/examples/site.example.yaml` (chmod 600); it holds the passwords (D-048).
 3. Read `docs/CODE_AUDIT.md` and `docs/CHAT_WORKFLOW.md`.
 
 ## Not committed on purpose

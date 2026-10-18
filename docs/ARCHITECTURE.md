@@ -102,7 +102,7 @@ dpc-platform/                     one monorepo on GitHub (supersedes the earlier
   scripts/     setup_dpc_layout.sh, install helpers
   tests/       unit/  golden/ (renderer output)  replay/ (image sequences)
 ```
-- **Site config** (one source of truth: file-first `site.yaml`, validated; DB-backed later, D-014/D-033) -> **renderer** writes the legacy XML files and `workers.yaml` in exact tag order, so existing programs run unchanged. Secrets stay in `secrets.env`.
+- **Site config** (one source of truth: file-first `site.yaml`, validated; DB-backed later, D-014/D-033) -> **renderer** writes the legacy XML files and `workers.yaml` in exact tag order, so existing programs run unchanged. Secrets are part of `site.yaml` (chmod 600, D-048).
 - **Setup wizard**: site name -> model upload (validate, GPU test-load, class list) -> cameras (discover, assign LEFT/RIGHT) -> PLC (test) -> mail/retention -> Apply -> **self-test** (frames arrive, inference runs, DB insert, PLC read/write, test mail).
 - **Monitoring UI**: Django subscribes to MQTT status/events; actions via authenticated API -> MQTT command.
 - **Installer**: preflight (GPU driver, CUDA, Detectron2 version), pinned deps, systemd units for mosquitto, supervisor, Django.
@@ -112,7 +112,7 @@ dpc-platform/                     one monorepo on GitHub (supersedes the earlier
 A golden OS image holds the OS, the code, the services and an empty `site.yaml`. On first boot the commissioning step:
 1. enumerates connected cameras (pypylon, PySpin) and shows their serials; the installer picks CAM1/CAM2, side, fps and exposure from the detected list (no typing of serials);
 2. test-opens each camera with those settings and fails loudly if it cannot;
-3. writes `site.yaml` and `secrets.env` (chmod 600), runs `scripts/setup_dpc_layout.sh`, runs the renderer (legacy XMLs) and generates `workers.yaml` (one `frame_capture_<cam>` worker per camera);
+3. writes `site.yaml` (chmod 600, holds the secrets, D-048), runs `scripts/setup_dpc_layout.sh`, runs the renderer (legacy XMLs) and generates `workers.yaml` (one `frame_capture_<cam>` worker per camera);
 4. enables mosquitto, MySQL and `dpc-supervisor` (systemd); the Supervisor starts the workers.
 
 Start with a command-line wizard, a local web page later. Changing a setting = edit `site.yaml` (or the wizard), then restart that instance. Later a validated `command` over MQTT rewrites the file (versioned, previous copy kept) and restarts the instance; the file stays the truth.
@@ -130,7 +130,7 @@ Created by `scripts/setup_dpc_layout.sh`: run as the normal user, no sudo; `--ro
 ```
 INSIGHTZZ/
   code/      git checkout of the platform
-  config/    site.yaml, secrets.env (chmod 600), rendered/ (generated legacy XMLs and workers.yaml)
+  config/    site.yaml (chmod 600, holds the secrets), rendered/ (generated legacy XMLs and workers.yaml)
   logs/      all logs
   run/       pid files, sockets
   data/
@@ -153,7 +153,7 @@ Why one root: everything visible in one place, one value (`paths.root`) in confi
 | `TEMP_IMG_DIR/PLATE_DIR/{LEFT,RIGHT}` | `data/images/PLATE/{LEFT,RIGHT}` |
 | `WHEEL_STATUS`, `bolt_data*`, `MODELS` | `data/wheel_status`, `data/bolt_data`, `data/models` |
 | `DJANGO_UI/.../CAMn/TMP.jpg` (inside UI code) | `data/ui_live/CAMn/TMP.jpg` (planned) |
-| config XMLs, passwords | `config/` (`rendered/`, `secrets.env`) |
+| config XMLs, passwords | `config/` (`site.yaml`, `rendered/`) |
 
 The algorithms still hardcode legacy paths (D-023): they cannot use this layout until their paths come from config. New machines get the new layout first through the config-driven workers.
 

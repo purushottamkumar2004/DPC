@@ -1,6 +1,6 @@
 # Sites
 
-One entry per site; a SITE chat works from its entry. No secrets here (DB passwords, mail secrets stay in that site's `secrets.env`).
+One entry per site; a SITE chat works from its entry. No secrets here (DB passwords and mail secrets stay in that site's `site.yaml` on the machine, D-048).
 
 All sites run tagged releases of the same `main` branch (D-039): there are no site branches. Record the tag each site runs in its `RELEASE` line and update it whenever the site moves to a new tag.
 

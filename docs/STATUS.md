@@ -4,7 +4,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-12.
 
 ## Current state (summary)
 1. Docs are at v3: architecture, contracts, decisions D-001 to D-041, code audit, owners, chat workflow, commissioning checklist. The Project environment has been verified from a fresh chat.
-2. Releases: one `main` branch with tags `v0.<n>`. Sites differ only by config (D-039, accepted through D-040). Secrets go in `<root>/config/secrets.env` (D-030).
+2. Releases: one `main` branch with tags `v0.<n>`. Sites differ only by config (D-039, accepted through D-040). Secrets go in `<root>/config/site.yaml` (chmod 600, D-048).
 3. Deployed layout `~/INSIGHTZZ/{code,config,logs,run,data}` is built by `scripts/setup_dpc_layout.sh` and exists on the Tadipatri machine.
 4. Basler single-camera FrameCapture with atomic hand-off (D-031) **has been tested on the real Tadipatri cameras and works**: `live` updates, `INF` fills, `_tmp` stays empty, the log is clean.
 5. Tadipatri cameras mapped and tuned: CAM1 = LEFT = 24824427 (4 fps, 1500 us), CAM2 = RIGHT = 24874775 (4 fps, 2000 us). No image rotation is wanted, but the code still rotates every frame by 90 until item 2 (D-041).
@@ -85,9 +85,9 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 |---|---|
 | Owner chat | CONFIG |
 | Files | `scripts/dpc_check.py` *(proposed)*, `tests/unit/test_dpc_check.py` |
-| Checks, in order | layout exists and the frame folders share one filesystem; `site.yaml` is valid (item 1 loader); `secrets.env` is chmod 600 and outside git; free disk is above the cleanup threshold; each configured serial is detected (pypylon); DB login works with a non-`root` user; MQTT broker is reachable (a warning only, per D-034) |
+| Checks, in order | layout exists and the frame folders share one filesystem; `site.yaml` is valid (item 1 loader); `site.yaml` is chmod 600, owned by the service user and outside git; free disk is above the cleanup threshold; each configured serial is detected (pypylon); DB login works with a non-`root` user; MQTT broker is reachable (a warning only, per D-034) |
 | Contract impact | **Small.** Exit codes 0 = pass, 1 = fail, 2 = pass with warnings, plus one result line per check. Add to CONTRACTS as the commissioning interface (D-035). |
-| Done when | (a) On Tadipatri all checks pass without sudo. (b) Each check can be made to fail on purpose (unplug a camera, `chmod 644 secrets.env`, a wrong serial, `root` as DB user) and then fails with a one-line reason. (c) It runs in under 30 s. (d) It never prints a secret. |
+| Done when | (a) On Tadipatri all checks pass without sudo. (b) Each check can be made to fail on purpose (unplug a camera, `chmod 644 site.yaml`, a wrong serial, `root` as DB user) and then fails with a one-line reason. (c) It runs in under 30 s. (d) It never prints a secret. |
 
 ### Follow-ups from handoffs (small, any order)
 | # | Owner chat | What | Done when |

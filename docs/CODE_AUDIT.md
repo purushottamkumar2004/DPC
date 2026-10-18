@@ -66,7 +66,7 @@ Reviewed: the single-camera Basler `FrameCapture` (now `workers/frame_capture_ba
 **Still open:**
 | Sev | Finding | Fix |
 |---|---|---|
-| P0 | `BASLER_CONFIG1.xml` holds a plaintext DB login for the `root` MySQL user (the password was also pasted into a chat). | Rotate; dedicated DB user with limited rights; `secrets.env` (D-018). |
+| P0 | `BASLER_CONFIG1.xml` holds a plaintext DB login for the `root` MySQL user (the password was also pasted into a chat). | Rotate; dedicated DB user with limited rights; credentials in `site.yaml` (D-048). |
 | P1 | `updateHealthStatus` updates a table literally named `tadipatri_health_status_table`. | Table name from config (D-038). |
 | P1 | If `IsGrabbing()` is false the loop reuses the previous `grabResult` and republishes the same frame. | Only publish a grab retrieved in this iteration. |
 | P1 | The camera restart (`self.initCam()` after `while True`) is unreachable. A lost camera ends in 5 s retrieve timeouts forever, with no recovery and no health signal. | Device-lost handling with reopen; health via heartbeat or `file_activity` on `live/IMG_1.jpg`. |

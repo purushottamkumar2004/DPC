@@ -39,7 +39,7 @@ OUTPUT: markdown I can paste into docs/STATUS.md.
 ```
 Without me pasting anything: (1) list the doc files you can see in Project knowledge, (2) state the release/branching model we decided, (3) state the deployed folder layout root and where secrets live, (4) name the first three backlog items.
 ```
-Expected: the docs listed (including `COMMISSIONING.md`, `OWNERS.md`, `SITES.md`, `STATUS.md`); one `main` branch with tagged releases (D-039); root `~/INSIGHTZZ` with secrets in `config/secrets.env`; backlog led by the config loader and `site.yaml` schema. If it cannot see the docs, press **Sync now** again and check **Configure files**.
+Expected: the docs listed (including `COMMISSIONING.md`, `OWNERS.md`, `SITES.md`, `STATUS.md`); one `main` branch with tagged releases (D-039); root `~/INSIGHTZZ` with secrets in `config/site.yaml` (D-048); backlog led by the config loader and `site.yaml` schema. If it cannot see the docs, press **Sync now** again and check **Configure files**.
 
 ## D. Routine after every task
 1. The worker chat produces the handoff block (`CHAT_WORKFLOW.md`).
@@ -51,5 +51,5 @@ Expected: the docs listed (including `COMMISSIONING.md`, `OWNERS.md`, `SITES.md`
 ## E. Secrets and repo access (D-042)
 - **Chats may hold secrets.** To let Claude work on the repo directly, paste the GitHub token at the start of a chat (or keep it in a Project knowledge text file added by hand, not through GitHub). Claude clones, edits, commits and pushes; you do not download or upload code.
 - **Token:** fine-grained, only the `DPC` repo, Contents read and write, an expiry you choose. Replace it when it expires or if the chat history is ever shared.
-- **Never in the repo:** passwords, tokens, `secrets.env`, real configs with credentials, models, images, logs. Git history is permanent and every site installs from this repo.
+- **Never in the repo:** passwords, tokens, `site.yaml` (it holds the secrets, D-048), real configs with credentials, models, images, logs. Git history is permanent and every site installs from this repo.
 - **What Claude pushes where:** docs (MASTER) go straight to `main`. Code goes to a `feat/` or `hotfix/` branch; you test it on a machine and merge it, because code runs on the plants.

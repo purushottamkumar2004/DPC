@@ -44,7 +44,7 @@ Continuous operation; images arrive continuously; LEFT and RIGHT are separate st
 1. First say which component/area my code or log belongs to (capture, inference, wheel counting, cycle, bucket/bolt, chain, defect, dedupe, DB, mail, PLC, cleanup, supervisor, Django, installer).
 2. **Preserve existing business logic** unless I explicitly ask to change it. Consider the whole workflow, not one function.
 3. **Config over code.** Never hardcode a site value (path, serial, IP, register, wheel count, size). If you find one, flag it.
-4. **No secrets in the repo**: never in code, docs, XML examples or git history; they live in `<root>/config/secrets.env` on each machine. Secrets **may** be shared in chats (D-042): I give Claude a GitHub token so it can read the repo and push directly. Claude never writes a secret into a file, commit, doc or memory, and never repeats one in an answer.
+4. **No secrets in the repo**: never in code, docs, XML examples or git history; they live in `<root>/config/site.yaml` (chmod 600) on each machine (D-048); share it only as a `--redacted` copy. Secrets **may** be shared in chats (D-042): I give Claude a GitHub token so it can read the repo and push directly. Claude never writes a secret into a file, commit, doc or memory, and never repeats one in an answer.
 5. Code must be **human-readable**: small functions, clear names, comments for the why. Say exactly which file to change.
 6. Do not over-engineer: single Linux machine, plain Python processes. No Kubernetes/Kafka/microservice frameworks.
 7. Keep `CONTRACTS.md` (topics, config schema, DB tables, registers, paths) authoritative. If a change alters a contract, say so and propose the DECISIONS entry.
