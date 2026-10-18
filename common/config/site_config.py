@@ -2,7 +2,7 @@
 D-047, D-048, D-049). Since v2 the file also holds the site's secrets.
 
 Public API
-    load_site_config(path=None) -> SiteConfig
+    load_site_config(path=None) -> SiteConfig      (.warnings = non-fatal notes, e.g. db.user root)
     SiteConfigError            (.problems = list of "key.path: what is wrong")
     redacted_copy(path=None) -> str      the file text with every secret replaced by ***
     legacy_env_vars(config) -> dict      DPC_* env vars for legacy workers (CONTRACTS 9 env bridge)
@@ -270,6 +270,7 @@ class SiteConfig:
     mail: MailConfig
     retention: RetentionConfig
     source_path: str
+    warnings: Tuple[str, ...] = ()   # the file is valid, but these deserve a look (printed by the CLI)
 
     def camera(self, camera_id: str) -> Camera:
         for cam in self.cameras:
@@ -544,8 +545,6 @@ def _read_db(top: _Section) -> DbConfig:
         user=s.string("user", secret=True),
         password=s.string("password", secret=True),
     )
-    if cfg.user == "root":
-        s.problem("user", "must not be root; use a dedicated user with limited rights (D-030)")
     s.finish()
     return cfg
 
@@ -861,7 +860,16 @@ def load_site_config(path: Optional[str] = None) -> SiteConfig:
         raise SiteConfigError(path, problems)
     return SiteConfig(schema_version=version, site=site, paths=paths, logging=logging_cfg, db=db,
                       mqtt=mqtt, cameras=cameras, machine=machine, model=model, plc=plc, mail=mail,
-                      retention=retention, source_path=path)
+                      retention=retention, source_path=path, warnings=tuple(_warnings(db)))
+
+
+def _warnings(db: DbConfig) -> List[str]:
+    """Allowed but not recommended settings. Never include a secret value here."""
+    warnings = []
+    if db.user == "root":
+        # Allowed since D-050; a leaked site.yaml would then open every database on the server.
+        warnings.append("db.user is root; a dedicated user with limited rights is recommended (D-030)")
+    return warnings
 
 
 def _v1_upgrade_message(data: Dict[str, Any]) -> str:
@@ -987,11 +995,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.redacted:
             print(redacted_copy(args.path), end="")
             return 0
-        load_site_config(args.path)
+        config = load_site_config(args.path)
     except SiteConfigError as exc:
         print(exc)
         return 1
     print("OK")
+    for warning in config.warnings:
+        print(f"WARNING {warning}")
     return 0
 
 
