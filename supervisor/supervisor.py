@@ -7,7 +7,7 @@ It does not know what the workers do. It only knows: command, health, restart po
 Usage
 -----
   python3 supervisor.py run                 start everything and keep monitoring
-  python3 supervisor.py check-config        validate workers.yaml and exit
+  python3 supervisor.py check-config        validate workers.yaml (and site.yaml when a worker needs it) and exit
   python3 supervisor.py status              show worker status (via MQTT)
   python3 supervisor.py start   <worker_id> control a running supervisor (via MQTT)
   python3 supervisor.py stop    <worker_id>
@@ -32,7 +32,9 @@ from core.monitor import Monitor                                # noqa: E402
 from core.process_manager import ProcessManager, Worker, WorkerStatus  # noqa: E402
 from core.recovery_manager import RecoveryManager               # noqa: E402
 from core.runtime_manager import RuntimeManager                 # noqa: E402
+from core.site_env import SiteEnv                               # noqa: E402
 from health.basic_health_check import build_health_check       # noqa: E402
+from health.heartbeat import parse_heartbeat                    # noqa: E402
 
 log = logging.getLogger("supervisor")
 DEFAULT_CONFIG = os.path.join(BASE_DIR, "config", "workers.yaml")
@@ -42,31 +44,45 @@ DEFAULT_CONFIG = os.path.join(BASE_DIR, "config", "workers.yaml")
 # The Supervisor
 # ======================================================================
 class Supervisor:
-    def __init__(self, config: ConfigurationManager):
+    def __init__(self, config: ConfigurationManager, mqtt=None, site_env: SiteEnv = None):
         self.settings = config.settings
-        self.mqtt = MqttClient(self.settings.mqtt)
-        self.heartbeats = {}                  # worker_id -> time of last MQTT heartbeat
+        self.mqtt = mqtt or MqttClient(self.settings.mqtt)
+        self.heartbeats = {}                  # worker_id -> Heartbeat of the last MQTT heartbeat
         self.commands = queue.Queue()         # commands from MQTT, handled in the main loop
         self.running = True
 
         mqtt_env = {"DPC_MQTT_HOST": self.settings.mqtt.host,
                     "DPC_MQTT_PORT": str(self.settings.mqtt.port)}
-        self.process_manager = ProcessManager(self.settings.log_dir, extra_env=mqtt_env)
+        self.process_manager = ProcessManager(self.settings.log_dir, extra_env=mqtt_env,
+                                              site_env=site_env or SiteEnv())
         self.runtime = RuntimeManager(self.settings.runtime_root)
         self.recovery = RecoveryManager(self.process_manager, self.mqtt)
 
-        # one Worker object per enabled worker in the config
+        # one Worker object per enabled worker, in START order (start_after respected);
+        # shutdown walks the same dict backwards
         self.workers = {}
-        for wc in config.workers:
+        for wc in config.start_order:
             w = Worker(config=wc)
             w.health_check = build_health_check(wc, self.heartbeats)
             self.workers[wc.id] = w
 
         self.monitor = Monitor(self.workers, self.process_manager, self.recovery,
                                self.mqtt, self.settings.monitoring)
+        self._not_started = []                # worker ids still waiting for their turn at startup
+        self._began_at = 0.0                  # when the staged start began
+        self._next_launch_at = 0.0
+        self._next_check = 0.0
 
     # ------------------------------------------------------------------
     def run(self):
+        self.start()
+        while self.running:
+            self.tick()
+            time.sleep(0.5)
+        self.shutdown()
+
+    def start(self):
+        """Connect MQTT, create the folders and begin the staged start of the workers."""
         log.info("Supervisor starting with %d worker(s): %s",
                  len(self.workers), ", ".join(self.workers) or "-")
 
@@ -74,25 +90,78 @@ class Supervisor:
         self.mqtt.subscribe(self.mqtt.worker_topic("+", "health"), self._on_health)
         self.mqtt.subscribe(self.mqtt.worker_topic("+", "command"), self._on_command)
 
-        # 1. create folders  2. start workers
         for worker in self.workers.values():
             self.runtime.prepare(worker.config)
+        self._not_started = list(self.workers)
+        self._began_at = time.time()
+        self._next_check = time.time() + self.settings.monitoring.check_interval_seconds
+        self._launch_ready_workers()
+
+    def tick(self):
+        """One pass of the main loop (every 0.5 s): commands, staged start, periodic runs,
+        health checks every check_interval, status publishing."""
+        self._handle_pending_commands()
+        self._launch_ready_workers()
+        self._start_due_periodic_runs()
+        if time.time() >= self._next_check:
+            self.monitor.check_all()
+            self._next_check = time.time() + self.settings.monitoring.check_interval_seconds
+        self.monitor.publish_changes()
+
+    # ---- staged start (start_after) ----------------------------------------
+    def _launch_ready_workers(self):
+        """Launch at most one waiting worker per startup_stagger_seconds, in start order,
+        once everything in its start_after is ready. Never blocks: the monitor keeps
+        watching the workers that are already running while the others wait."""
+        if not self._not_started or time.time() < self._next_launch_at:
+            return
+        for worker_id in self._not_started:
+            worker = self.workers[worker_id]
+            go, why = self._may_launch(worker)
+            if not go:
+                if why:
+                    worker.message = why
+                continue
+            self._not_started.remove(worker_id)
+            if why:                                        # started although a dependency is not ready
+                log.warning("[%s] starting anyway: %s", worker_id, why)
+            worker.message = ""
+            self._start(worker, unmet=why)
+            self._next_launch_at = time.time() + self.settings.monitoring.startup_stagger_seconds
+            return
+
+    def _may_launch(self, worker: Worker):
+        """(go, text). text explains a wait, or an 'anyway' start (unready dependency)."""
+        deps = [self.workers[d] for d in worker.config.start_after]
+        if any(d.id in self._not_started for d in deps):
+            return False, f"waiting for {', '.join(d.id for d in deps if d.id in self._not_started)} to start"
+        waiting = [d for d in deps if not self._is_ready(d)]
+        if not waiting:
+            return True, ""
+        names = ", ".join(d.id for d in waiting)
+        if any(d.status == WorkerStatus.FAILED for d in waiting):
+            return True, f"start_after not met, FAILED: {names}"
+        since = max(d.first_started_at or self._began_at for d in deps)
+        limit = self.settings.monitoring.start_after_timeout_seconds
+        if time.time() - since >= limit:
+            return True, f"start_after not ready after {limit:.0f}s: {names}"
+        return False, f"waiting for {names} to be ready"
+
+    @staticmethod
+    def _is_ready(worker: Worker) -> bool:
+        """service: healthy (RUNNING). oneshot / periodic: has finished a run with exit code 0."""
+        if worker.config.mode == "service":
+            return worker.status == WorkerStatus.RUNNING
+        return worker.completed_runs > 0
+
+    # ---- periodic workers -----------------------------------------------------
+    def _start_due_periodic_runs(self):
+        now = time.time()
         for worker in self.workers.values():
-            self._start(worker)
-            time.sleep(self.settings.monitoring.startup_stagger_seconds)
-
-        # 3. main loop: handle commands often, run health checks every interval
-        interval = self.settings.monitoring.check_interval_seconds
-        next_check = time.time() + interval
-        while self.running:
-            self._handle_pending_commands()
-            if time.time() >= next_check:
-                self.monitor.check_all()
-                next_check = time.time() + interval
-            self.monitor.publish_changes()
-            time.sleep(0.5)
-
-        self.shutdown()
+            if (worker.config.mode == "periodic" and worker.status == WorkerStatus.STOPPED
+                    and worker.next_run_at is not None and now >= worker.next_run_at
+                    and worker.id not in self._not_started):
+                self._start(worker)
 
     def request_stop(self, *_):
         log.info("Stop requested")
@@ -109,19 +178,26 @@ class Supervisor:
         log.info("Supervisor stopped")
 
     # ------------------------------------------------------------------
-    def _start(self, worker: Worker) -> bool:
+    def _start(self, worker: Worker, unmet: str = "") -> bool:
         ok = self.process_manager.start_worker(worker)
         if ok:
-            self.mqtt.publish_event(worker.id, "worker_started", pid=worker.pid)
+            extra = {"start_after_unmet": unmet} if unmet else {}
+            self.mqtt.publish_event(worker.id, "worker_started", pid=worker.pid, **extra)
         else:
-            self.recovery.handle_failure(worker, worker.message or "could not start process")
+            self.recovery.handle_start_failure(worker)
         return ok
 
     # ---- MQTT callbacks (run in MQTT thread - only touch thread-safe things) ----
     def _on_health(self, topic, payload):
         worker_id = topic.split("/")[-2]
-        if payload.get("healthy", True):
-            self.heartbeats[worker_id] = time.time()
+        beat = parse_heartbeat(payload)              # old and extended payloads (D-034)
+        if beat is None:
+            log.warning("[%s] ignoring a health message that is not a heartbeat", worker_id)
+            return
+        self.heartbeats[worker_id] = beat
+        worker = self.workers.get(worker_id)
+        if worker is not None:
+            worker.heartbeat = beat
 
     def _on_command(self, topic, payload):
         worker_id = topic.split("/")[-2]
@@ -145,11 +221,16 @@ class Supervisor:
                 log.exception("[%s] command '%s' failed", worker_id, command)
 
     def _run_command(self, worker: Worker, command: str, reason: str):
+        if worker.id in self._not_started and command in ("start", "restart"):
+            self._not_started.remove(worker.id)           # the operator overrules start_after
         if command == "start":
             worker.retry_count = 0
             self._start(worker)
         elif command == "stop":
             self.process_manager.stop_worker(worker)      # status STOPPED -> monitor ignores it
+            worker.next_run_at = None                     # a stopped periodic worker stays stopped
+            if worker.id in self._not_started:
+                self._not_started.remove(worker.id)
             worker.message = f"stopped by command {reason}".strip()
             self.mqtt.publish_event(worker.id, "worker_stopped", reason=reason)
         elif command == "restart":
@@ -157,7 +238,7 @@ class Supervisor:
             if self.process_manager.restart_worker(worker):
                 self.mqtt.publish_event(worker.id, "worker_restarted", reason=reason, pid=worker.pid)
             else:
-                self.recovery.handle_failure(worker, worker.message or "could not start process")
+                self.recovery.handle_start_failure(worker)
         elif command == "status":
             self.monitor.publish_changes(force=True)
         else:
@@ -182,9 +263,9 @@ def setup_logging(log_dir: str):
     logging.getLogger("paho").setLevel(logging.WARNING)
 
 
-def cmd_run(config):
+def cmd_run(config, site_env):
     setup_logging(config.settings.log_dir)
-    sup = Supervisor(config)
+    sup = Supervisor(config, site_env=site_env)
     signal.signal(signal.SIGINT, sup.request_stop)
     signal.signal(signal.SIGTERM, sup.request_stop)
     sup.run()
@@ -230,6 +311,9 @@ def main():
     parser.add_argument("action", choices=["run", "check-config", "status", "start", "stop", "restart"])
     parser.add_argument("worker_id", nargs="?", help="needed for start/stop/restart")
     parser.add_argument("-c", "--config", default=DEFAULT_CONFIG)
+    parser.add_argument("--site-config", default=None,
+                        help="site.yaml for workers with env_from_site (default: $DPC_SITE_CONFIG, "
+                             "then ~/INSIGHTZZ/config/site.yaml)")
     args = parser.parse_args()
 
     config = ConfigurationManager(args.config, BASE_DIR)
@@ -239,11 +323,20 @@ def main():
         print(f"Configuration error: {e}")
         return 2
 
+    site_env = SiteEnv(args.site_config)
     if args.action == "check-config":
-        print(f"OK - {len(config.workers)} enabled worker(s): {', '.join(w.id for w in config.workers)}")
+        print(f"OK - {len(config.workers)} enabled worker(s) in start order: "
+              f"{', '.join(w.id for w in config.start_order)}")
+        users = [w.id for w in config.workers if w.env_from_site]
+        if users:
+            problem = site_env.check()        # prints the loader's message, never a value
+            if problem:
+                print(f"Site config error (needed by {', '.join(users)}): {problem}")
+                return 2
+            print(f"OK - site.yaml loads; DPC_* variables are exported to: {', '.join(users)}")
         return 0
     if args.action == "run":
-        cmd_run(config)
+        cmd_run(config, site_env)
         return 0
     if args.action == "status":
         return cmd_status(config)

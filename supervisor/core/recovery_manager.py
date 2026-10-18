@@ -7,6 +7,15 @@ RecoveryManager - decides what to do AFTER the monitor says a worker failed.
 The wait is NOT a sleep: the worker is just marked WAITING_RESTART and the
 monitor loop comes back to it later, so one broken worker never delays the
 checks of the others.
+
+Modes (D-019): a process that ended on its own is judged by the worker's mode.
+    service   any exit is a failure                    -> retry policy, then FAILED
+    oneshot   exit 0 = done, ends as STOPPED, never restarted
+              exit != 0 = a failure                    -> retry policy, then FAILED
+    periodic  exit 0 = run done, next run in interval_s
+              exit != 0 = a failed run: event + counter, and the NEXT RUN is the retry.
+              It never goes FAILED: a PLC that is down for ten minutes must not switch
+              the light check off for good on a 24x7 site.
 """
 
 import logging
@@ -21,6 +30,60 @@ class RecoveryManager:
     def __init__(self, process_manager: ProcessManager, mqtt):
         self.pm = process_manager
         self.mqtt = mqtt
+
+    # ------------------------------------------------------------------
+    def handle_exit(self, worker: Worker):
+        """The process is gone and nobody asked it to stop (called by the Monitor)."""
+        mode = worker.config.mode
+        code = worker.exit_code
+        if mode != "service" and code == 0:
+            self._run_completed(worker)
+        elif mode == "periodic":
+            self.periodic_run_failed(worker, f"run exited with code {code}")
+        else:
+            self.handle_failure(worker, f"process exited (exit code {code})")
+
+    def handle_start_failure(self, worker: Worker):
+        """The process could not even be created (missing script, bad working directory...)."""
+        reason = worker.message or "could not start process"
+        if worker.config.mode == "periodic":
+            self.periodic_run_failed(worker, reason, started=False)
+        else:
+            self.handle_failure(worker, reason)
+
+    def periodic_run_failed(self, worker: Worker, reason: str, started: bool = True):
+        log.warning("[%s] failure: %s", worker.id, reason)
+        self.mqtt.publish_event(worker.id, "worker_failure", reason=reason, exit_code=worker.exit_code)
+        self.pm.stop_worker(worker)
+        worker.consecutive_failures += 1
+        self._schedule_next_run(worker, started)
+        worker.message = (f"last run failed ({reason}), {worker.consecutive_failures} in a row; "
+                          f"next run {self._next_run_text(worker)}")
+
+    def _run_completed(self, worker: Worker):
+        code = worker.exit_code
+        self.pm.stop_worker(worker)               # clears the dead process; status STOPPED
+        worker.completed_runs += 1
+        worker.retry_count = 0
+        worker.consecutive_failures = 0
+        if worker.config.mode == "periodic":
+            self._schedule_next_run(worker, started=True)
+            worker.message = f"run done; next run {self._next_run_text(worker)}"
+            log.info("[%s] %s", worker.id, worker.message)
+        else:
+            worker.message = "completed (exit code 0)"
+            log.info("[%s] %s", worker.id, worker.message)
+            self.mqtt.publish_event(worker.id, "worker_stopped", reason="completed", exit_code=code)
+
+    def _schedule_next_run(self, worker: Worker, started: bool):
+        """Runs are spaced from the START of the previous run, and never overlap."""
+        now = time.time()
+        base = worker.started_at if started and worker.started_at else now
+        worker.next_run_at = max(base + worker.config.interval_s, now)
+
+    @staticmethod
+    def _next_run_text(worker: Worker) -> str:
+        return time.strftime("at %H:%M:%S", time.localtime(worker.next_run_at))
 
     # ------------------------------------------------------------------
     def handle_failure(self, worker: Worker, reason: str):

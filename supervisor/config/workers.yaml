@@ -7,7 +7,9 @@
 monitoring:
   check_interval_seconds: 5      # how often every worker is checked
   worker_timeout_seconds: 10     # a failing health check must last this long before restart
+  high_cost_timeout_seconds: 120 # the same, for restart_cost: high workers (algorithms, D-020)
   startup_stagger_seconds: 1     # pause between starting workers
+  start_after_timeout_seconds: 120   # longest wait for a start_after dependency, then start anyway
   status_publish_interval_seconds: 30
 
 # Default restart policy (each worker can override it with its own "restart:" block)
@@ -30,10 +32,19 @@ log_dir: logs
 
 # ======================================================================
 # Workers
+#   mode:            service (default, runs forever) | oneshot (runs once; exit 0 = done)
+#                    | periodic (runs every interval_s seconds, start to start, never overlapping)
+#   restart_cost:    normal (default) | high: must fail high_cost_timeout_seconds before a restart
+#   start_after:     [ids] started first and ready (service RUNNING, oneshot/periodic finished OK)
+#   env_from_site:   true = gets the DPC_* variables from site.yaml (CONTRACTS 9); never logged
 #   health.type:
 #     process        - only "is the process alive"
 #     file_activity  - a file/folder must have changed within max_age_seconds
 #     heartbeat      - worker publishes to dpc/worker/<id>/health
+#     queue_lag      - oldest file in path (INF) younger than max_oldest_age_seconds;
+#                      require_heartbeat: true also needs a fresh heartbeat (max_age_seconds)
+# Paths: never a site value here. ~ and relative paths are fine; the real file per site
+# lives in <root>/config/ (STATUS item 4).
 # ======================================================================
 workers:
 
@@ -58,52 +69,57 @@ workers:
       max_age_seconds: 8
       startup_grace_seconds: 8
 
-  # ---------------- real workers (disabled until you connect them) ----------------
-  - id: frame_capture
+  # ---------------- real workers: shapes only, disabled (site entries: STATUS item 4) ----------------
+  - id: plc_light                # oneshot: switch the light on once, then exit 0 (D-019)
+    type: plc
+    enabled: false
+    mode: oneshot
+    command: python3 light.py
+    working_directory: ~/INSIGHTZZ/code/workers/plc
+
+  - id: frame_capture_cam1       # one capture per camera (D-033)
     type: frame_capture
     enabled: false
-    command: python3 FrameCapture.py
-    working_directory: /home/insightzz-server/Insightzz/Code/FrameCapture
-    stop_signal: SIGINT          # FrameCapture.py only cleans up the cameras on Ctrl+C (KeyboardInterrupt)
+    start_after: [plc_light]
+    command: python3 FrameCapture_Basler.py
+    working_directory: ~/INSIGHTZZ/code/workers/frame_capture_basler
+    env: {BASLER_CONFIG: ~/INSIGHTZZ/config/rendered/BASLER_CONFIG1.xml}
+    stop_signal: SIGINT          # releases the camera on Ctrl+C
     stop_timeout_seconds: 30
-    directories:                 # absolute paths are created exactly as written
-      - /media/disk3/DPC_02/TempRawImgDir/LIVE_RAW_DATA/LEFT/INF
-      - /media/disk3/DPC_02/TempRawImgDir/LIVE_RAW_DATA/RIGHT/INF
     health:
-      type: file_activity        # the capture script rewrites IMG_1.jpg on every frame
-      path:                      # a list: ALL cameras must be producing frames
-        - /media/disk3/DPC_02/TempRawImgDir/LIVE_RAW_DATA/LEFT/IMG_1.jpg
-        - /media/disk3/DPC_02/TempRawImgDir/LIVE_RAW_DATA/RIGHT/IMG_1.jpg
-      max_age_seconds: 30        # cameras run at 3-4 FPS, so 30 s without a frame is a real problem
+      type: file_activity        # live/IMG_1.jpg is replaced on every frame (atomic hand-off)
+      path: ~/INSIGHTZZ/data/frames/CAM1/live/IMG_1.jpg
+      max_age_seconds: 30
       startup_grace_seconds: 60
 
   - id: left_algorithm
     type: algorithm
     enabled: false
+    start_after: [frame_capture_cam1]
+    restart_cost: high           # a restart loses wheel counter + plate state and the INF backlog
     command: python3 LeftAlgorithm.py
-    working_directory: /home/dpc_tadipatri/INSIGHTZZ/CODE/ALGORITHM
+    working_directory: ~/INSIGHTZZ/code/workers/inspection
     stop_timeout_seconds: 20
+    restart: { max_retries: 2, retry_delay_seconds: 30 }
     health:
-      type: file_activity        # watch the algorithm's own log file (use the real path)
-      path: /home/dpc_tadipatri/INSIGHTZZ/CODE/LOGS/left_algorithm.log
-      max_age_seconds: 120
-      startup_grace_seconds: 120   # Detectron2 model loading takes a while
+      type: queue_lag            # D-020; keep the limit above the normal backlog at this site's fps
+      path: ~/INSIGHTZZ/data/frames/CAM1/INF
+      max_oldest_age_seconds: 120
+      require_heartbeat: false   # true once the algorithm publishes heartbeats (D-049, Q1)
+      max_age_seconds: 60        # heartbeat limit, used only with require_heartbeat: true
+      startup_grace_seconds: 180 # Detectron2 model loading
 
-  - id: right_algorithm
-    type: algorithm
+  - id: cleanup
+    type: cleanup
     enabled: false
-    command: python3 RightAlgorithm.py
-    working_directory: /home/dpc_tadipatri/INSIGHTZZ/CODE/ALGORITHM
-    stop_timeout_seconds: 20
-    health:
-      type: file_activity
-      path: /home/dpc_tadipatri/INSIGHTZZ/CODE/LOGS/right_algorithm.log
-      max_age_seconds: 120
-      startup_grace_seconds: 120
+    env_from_site: true          # delete_script.py reads DPC_DB_*, DPC_MS_*, DPC_DISK_REPORT_TO
+    command: python3 delete_script.py
+    working_directory: ~/INSIGHTZZ/code/workers/cleanup
 
-  - id: plc_service
+  - id: light_reassert           # example periodic job (a PLC reboot leaves the light off, D-024)
     type: plc
     enabled: false
-    command: python3 plc_service.py
-    working_directory: /home/dpc_tadipatri/INSIGHTZZ/CODE/PLC
-    # health defaults to "process" (alive only) until the script sends heartbeats
+    mode: periodic
+    interval_s: 60
+    command: python3 light.py
+    working_directory: ~/INSIGHTZZ/code/workers/plc
