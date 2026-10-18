@@ -36,7 +36,7 @@ Follow `docs/COMMISSIONING.md`: site data sheet, step-by-step procedure with a c
 One `main` branch for all sites; releases are tags (`v0.<n>`). A site pins a tag (`git checkout v0.<n>`), and sites differ by config in `~/INSIGHTZZ/config`, never by branch (D-039). The tag per site is recorded in `docs/SITES.md`.
 
 ## Before first use
-1. Rotate the Microsoft Graph client secret and the DB passwords (they were in plaintext in the old files and in chats). Use a dedicated DB user, not `root`.
+1. Rotate the Microsoft Graph client secret and the DB passwords (they were in plaintext in the old files and in chats). A dedicated DB user is recommended; `root` is allowed (D-050).
 2. Create `~/INSIGHTZZ/config/site.yaml` from `config/examples/site.example.yaml` (chmod 600); it holds the passwords (D-048).
 3. Read `docs/CODE_AUDIT.md` and `docs/CHAT_WORKFLOW.md`.
 

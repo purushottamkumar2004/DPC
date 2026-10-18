@@ -24,7 +24,7 @@ Copy the Tadipatri column as the starting point; mark anything not yet known.
 | Which serial is CAM1 / CAM2, which side (LEFT/RIGHT) | physical mounting: look at the image | CAM1 = LEFT = 24824427, CAM2 = RIGHT = 24874775 |
 | fps, exposure, rotation per camera | defaults from a similar site, tuned on site | CAM1: 4.0 fps, 1500 us; CAM2: 4.0 fps, 2000 us; no rotation (rotate 0, needs D-041 in code) |
 | DB name | you choose | tadipatri4 |
-| DB user and password | generated on the machine: a new password per site, never `root` | to create |
+| DB user and password | a new password per site; a dedicated user is recommended, `root` is allowed (D-050) | to create |
 | Health table name | per site (hardcoded in code today, D-038) | tadipatri_health_status_table |
 | PLC type, IP, registers | plant network and PLC program | to fill |
 | Mail sender, credentials, recipients | customer or IT | to fill |
@@ -126,7 +126,7 @@ Update `docs/SITES.md` (serials, sides, release tag, quirks), commit it through 
 - [ ] Both serials detected; CAM1/CAM2 and sides confirmed by looking at the images
 - [ ] Each camera: live image updates, `INF` fills at the configured fps, `_tmp` empty, rotation correct, log clean
 - [ ] Config files and `site.yaml` are `chmod 600`, outside the repo, and not in `git status`
-- [ ] No `root` DB login in any config; DB password unique to this site
+- [ ] DB password unique to this site (`root` allowed, D-050)
 - [ ] `INF` queues emptied after the test; disk usage noted
 - [ ] `docs/SITES.md` updated and committed
 

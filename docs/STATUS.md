@@ -33,8 +33,8 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-12.
 
 ## Next (ordered)
 
-**0. You, not a chat (prerequisite).** Rotate the DB `root` password and the MS Graph secret. Create a limited DB user per site. Make the repo Private and confirm `v0.1` exists. Set `RELEASE` for Tadipatri in `SITES.md`.
-Done when: no config on the machine uses `root`; the old secrets are revoked; `SITES.md` shows the Tadipatri release tag.
+**0. You, not a chat (prerequisite).** Rotate the DB `root` password and the MS Graph secret. Make the repo Private and confirm `v0.1` exists. Set `RELEASE` for Tadipatri in `SITES.md`.
+Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release tag.
 
 ### 1. `site.yaml` schema and loader: DONE (merged PR #4, `cc191e1`; no handoff received yet)
 | | |
@@ -85,13 +85,14 @@ Done when: no config on the machine uses `root`; the old secrets are revoked; `S
 |---|---|
 | Owner chat | CONFIG |
 | Files | `scripts/dpc_check.py` *(proposed)*, `tests/unit/test_dpc_check.py` |
-| Checks, in order | layout exists and the frame folders share one filesystem; `site.yaml` is valid (item 1 loader); `site.yaml` is chmod 600, owned by the service user and outside git; free disk is above the cleanup threshold; each configured serial is detected (pypylon); DB login works with a non-`root` user; MQTT broker is reachable (a warning only, per D-034) |
+| Checks, in order | layout exists and the frame folders share one filesystem; `site.yaml` is valid (item 1 loader); `site.yaml` is chmod 600, owned by the service user and outside git; free disk is above the cleanup threshold; each configured serial is detected (pypylon); DB login works (a `root` user is a warning, D-050); MQTT broker is reachable (a warning only, per D-034) |
 | Contract impact | **Small.** Exit codes 0 = pass, 1 = fail, 2 = pass with warnings, plus one result line per check. Add to CONTRACTS as the commissioning interface (D-035). |
-| Done when | (a) On Tadipatri all checks pass without sudo. (b) Each check can be made to fail on purpose (unplug a camera, `chmod 644 site.yaml`, a wrong serial, `root` as DB user) and then fails with a one-line reason. (c) It runs in under 30 s. (d) It never prints a secret. |
+| Done when | (a) On Tadipatri all checks pass without sudo. (b) Each check can be made to fail on purpose (unplug a camera, `chmod 644 site.yaml`, a wrong serial) and then fails with a one-line reason. (c) It runs in under 30 s. (d) It never prints a secret. |
 
 ### Follow-ups from handoffs (small, any order)
 | # | Owner chat | What | Done when |
 |---|---|---|---|
+| 9 | CONFIG | D-050: `db.user: root` becomes a warning, not an error, in `common/config/site_config.py`; update the comment in `config/examples/site.example.yaml` and the test | A file with `user: root` prints `OK` plus one warning line and exits 0; tests pass |
 | 6 (DONE, PR #3) | W-mail | `workers/mail/immediate_mail_sender.py` line ~329 uses `defect['id']` on a DictCursor row whose key is `ID`: KeyError the first time a duplicate defect is found (the outlook sender already uses `ID`). Verified in code. | A duplicate defect is marked ignored (2) without an exception; send path unchanged |
 | 7 | W-frame_capture_basler | Health "matched no row" warning can be false: MySQL returns changed rows, not matched rows, when the value is unchanged. Connect with `client_flag=CLIENT.FOUND_ROWS`. | Repeating the same health value on an existing row logs no warning; a missing row still warns |
 | 8 | DB | Bring the Tadipatri DB to schema version 1 with a reviewed upgrade script, run only after a full backup. | Script reviewed by you; after it, `db/test_seed.py` checks pass against `tadipatri4`; backup restorable |

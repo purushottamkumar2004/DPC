@@ -152,7 +152,7 @@ db:
   port: 3306                      # default 3306
   name: tadipatri4                # required
   health_table: health_status     # default health_status (D-043); existing sites set their own table
-  user: dpc_app                   # required; never root (D-030)
+  user: dpc_app                   # required; root allowed with a warning (D-050), dedicated user recommended
   password: "<secret>"           # required; secret
 
 mqtt:
@@ -246,4 +246,4 @@ Topics, status fields, event names, XML tag order and DB columns are append-only
 
 ## 9. Secrets [ACCEPTED] (D-048; supersedes the `secrets.env` part of D-018, D-030, D-047)
 Secrets live in `site.yaml` (section 7: `db.user`, `db.password`, `mqtt.user`, `mqtt.password`, `mail.graph.*`, `mail.smtp.password`; addresses `mail.sender_address`, `mail.disk_report_to`). `secrets.env` is retired. Never committed: the repo holds only `config/examples/site.example.yaml` with placeholders. A `dpc-sites` mirror (Q17), chats and the UI get `--redacted` copies only.
-**Legacy env bridge (Supervisor):** programs that still read env vars get them from the Supervisor, which loads `site.yaml` and exports, per worker that asks for it (`env_from_site: true` in `workers.yaml`): `DPC_DB_USER`, `DPC_DB_PASS`, `DPC_MS_TENANT_ID`, `DPC_MS_CLIENT_ID`, `DPC_MS_CLIENT_SECRET`, `DPC_MAIL_SENDER`, `DPC_SMTP_PASSWORD`, `DPC_DISK_REPORT_TO` (comma-separated), `DPC_MQTT_USER`, `DPC_MQTT_PASS`, `DPC_SITE_NAME` (= `site.name`). Today only `workers/cleanup/delete_script.py` needs it. Use a dedicated DB user with limited rights instead of `root`.
+**Legacy env bridge (Supervisor):** programs that still read env vars get them from the Supervisor, which loads `site.yaml` and exports, per worker that asks for it (`env_from_site: true` in `workers.yaml`): `DPC_DB_USER`, `DPC_DB_PASS`, `DPC_MS_TENANT_ID`, `DPC_MS_CLIENT_ID`, `DPC_MS_CLIENT_SECRET`, `DPC_MAIL_SENDER`, `DPC_SMTP_PASSWORD`, `DPC_DISK_REPORT_TO` (comma-separated), `DPC_MQTT_USER`, `DPC_MQTT_PASS`, `DPC_SITE_NAME` (= `site.name`). Today only `workers/cleanup/delete_script.py` needs it. A dedicated DB user with limited rights is recommended; `root` is allowed (D-050).

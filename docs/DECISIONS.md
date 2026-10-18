@@ -146,6 +146,9 @@ MASTER review (2026-10-13): not implemented yet (loader is v1). Only `workers/cl
 ## D-049 | 2026-10 | Accepted | D-019, D-020, D-034 and D-048 accepted; Q1 answered
 Developer decision 2026-10-13. **D-019** (worker `mode` service | oneshot | periodic), **D-020** (algorithm health = queue lag; `restart_cost: high`), **D-034** (config from local files, MQTT for supervision only, extended heartbeat) and **D-048** (secrets in `site.yaml`, schema v2, `secrets.env` retired) are Accepted. D-048 legacy route: the **Supervisor exports `DPC_*` env vars from `site.yaml`** for workers with `env_from_site: true` (CONTRACTS section 9); `delete_script.py` stays unchanged. **Q1:** an algorithm is healthy when its queue lag is under the threshold **and** its heartbeat is fresh. CONTRACTS sections 7 and 9 updated.
 
+## D-050 | 2026-10 | Accepted | The DB user may be `root`; it is a warning, not an error
+Developer decision 2026-10-13: sites may keep using MySQL `root` for the programs. Supersedes the "never `root`" rule of D-030 and CONTRACTS section 7/9. The loader accepts `db.user: root` and prints one warning line ("db.user is root; a dedicated user with limited rights is recommended (D-030)"); `--redacted` and every other check are unchanged; `dpc-check` reports it as a warning (exit 2), not a failure. A dedicated user stays the recommendation, not a requirement. Accepted risk: a leaked `site.yaml` gives full access to every database on that MySQL server, not only the site's own.
+
 ## Open questions
 - Q1 (answered, D-049): queue lag plus heartbeat.
 - Q2: Light register 4109: does 1 mean ON or OFF? Is cleaning ever triggered by the algorithm today, or by an operator/script?
