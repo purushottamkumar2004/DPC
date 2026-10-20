@@ -171,7 +171,7 @@ A model version is the folder `<root>/data/models/<name>/<version>/` with weight
 A periodic worker under the Supervisor moves data to and from OneDrive through Microsoft Graph. **Upload** (automation case A7): weekly, images from both sides in chunks, resumable uploads; local data is not deleted or marked by the transfer (disk-based cleanup handles local space as today). **Model download** (D-056): checks the OneDrive folder `DPC/models/<name>/<version>/` for a newer version of the model named in `site.yaml`; a version counts as complete only when its `manifest.json` is present (uploaded last); downloads into `data/models/<name>/<version>/`, verifies every checksum, deletes and reports a failed version, marks a good one ready. It never switches models (D-056). This answers the model-hosting question: OneDrive, subject to Graph file permissions (admin consent in the Microsoft 365 tenant).
 
 ## Open questions
-- Q18: Who in the Microsoft 365 tenant grants admin consent for Graph file permissions (D-057), and is the target a OneDrive or a SharePoint document library?
+- Q18: Who in the Microsoft 365 tenant grants admin consent for Graph file permissions (D-057), and is the target a OneDrive or a SharePoint document library? (Not blocking: the developer settles it while testing item 9.)
 - Q19: What does the existing DataSync do today (the `is_data_sync` columns)? Absorb it into the transfer service (D-057) or keep it separate?
 - Q1 (answered, D-049): queue lag plus heartbeat.
 - Q2: Light register 4109: does 1 mean ON or OFF? Is cleaning ever triggered by the algorithm today, or by an operator/script?
