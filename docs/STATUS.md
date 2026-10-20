@@ -26,6 +26,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-12.
 - **Tadipatri first real capture test passed (2026-10-12)** for both Basler cameras. COMMISSIONING step 7 checks passed: `live/IMG_1.jpg` updates every frame, `INF` grows at the configured fps, `_tmp` is empty, the log is clean, the image is correct. `INF` queues were emptied after the test.
 - Tadipatri camera mapping and tuning confirmed: CAM1 = LEFT = 24824427 (4 fps, 1500 us), CAM2 = RIGHT = 24874775 (4 fps, 2000 us), no rotation wanted. Recorded in `SITES.md`; Q16 answered.
 - Tadipatri camera health working (2026-10-12): both captures started with `BASLER_CONFIG` pointing at `~/INSIGHTZZ/config/`, element 16 `HEALTH_TABLE` = `tadipatri4_health_status_table`; `OK` written at start, every 10 min, and `NOK` at once on a camera loss.
+- Tadipatri 2026-10-20: real `site.yaml` v2 created (`site`, `db`, `cameras` filled; `machine`, `model`, `plc`, `mail` still example values marked TODO) and validated with the loader, incl. the chmod 600 refusal. Cable-pull test passed on CAM1: frames resume and health goes NOK then OK with no restart. Health table renamed to `health_status` (lowercase).
 
 ## In progress
 - Repo hygiene: the repo is **public** (checked 2026-10-12). Make it Private (GitHub, Settings, General, Danger Zone, Change visibility). A history scan found only `CHANGE_ME` placeholders, no real passwords; tag `v0.1` still to confirm.
@@ -52,7 +53,7 @@ Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release t
 | Contract impact | None new: build against CONTRACTS sections 7 (v2) and 9 |
 | Done when | (a) v2 example loads; a v1 file fails with a message saying which keys to add. (b) A file that is not chmod 600 is refused. (c) `--redacted` output contains no secret value (test with known secrets). (d) No error message or log line contains a secret. (e) graph/smtp blocks validated (required for their sender, not allowed otherwise). |
 
-### 2. Basler capture robustness: BUILT (PR #2), in use at Tadipatri; cable-pull test (b) still to run
+### 2. Basler capture robustness: DONE (PR #2); cable-pull recovery test passed at Tadipatri 2026-10-20
 | | |
 |---|---|
 | Owner chat | W-frame_capture_basler |
@@ -96,6 +97,8 @@ Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release t
 | 10 | SUPERVISOR | A hung oneshot/periodic run has no time limit: add optional `run_timeout_seconds` (append-only key in CONTRACTS 1) | A run longer than the limit is stopped, reported as `worker_failure`, and the next run still happens |
 | 11 | CONFIG + SUPERVISOR | The Supervisor's own MQTT login still comes from `workers.yaml`, while `site.yaml` holds `mqtt.user`/`mqtt.password` (D-048). Proposed: the Supervisor reads its MQTT login from `site.yaml` too; `workers.yaml` keeps only host/port/topic | One place for MQTT credentials; `workers.yaml` holds no secret; tests pass |
 | 12 | SUPERVISOR (item 4) | `supervisor/dpc-supervisor.service` hardcodes the Tadipatri user and paths | Unit file is a template (user and root filled at install); covers the "how the Supervisor starts on boot" gap |
+| 13 | DB | Tadipatri renamed its health table to `health_status` (2026-10-20): update CONTRACTS section 5 and `db/README.md` (both still name `tadipatri4_health_status_table`); check whether the renamed table lacks the unique `ITEM` key of the standard one and, if so, add it in the Tadipatri upgrade script (follow-up 8) | Docs name `health_status` for Tadipatri; `SHOW CREATE TABLE health_status` on Tadipatri matches `db/schema.sql` or the upgrade script fixes it |
+| 14 | You (Tadipatri) | Anything else that used the old name `tadipatri4_health_status_table` (UI, data sync, reports) stops working after the rename: `grep -rn tadipatri4_health_status_table ~/INSIGHTZZ` and fix what it finds | The grep finds nothing outside backups and `db/reference/` |
 | 6 (DONE, PR #3) | W-mail | `workers/mail/immediate_mail_sender.py` line ~329 uses `defect['id']` on a DictCursor row whose key is `ID`: KeyError the first time a duplicate defect is found (the outlook sender already uses `ID`). Verified in code. | A duplicate defect is marked ignored (2) without an exception; send path unchanged |
 | 7 | W-frame_capture_basler | Health "matched no row" warning can be false: MySQL returns changed rows, not matched rows, when the value is unchanged. Connect with `client_flag=CLIENT.FOUND_ROWS`. | Repeating the same health value on an existing row logs no warning; a missing row still warns |
 | 8 | DB | Bring the Tadipatri DB to schema version 1 with a reviewed upgrade script, run only after a full backup. | Script reviewed by you; after it, `db/test_seed.py` checks pass against `tadipatri4`; backup restorable |
