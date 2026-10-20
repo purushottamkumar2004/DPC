@@ -251,7 +251,7 @@ retention:                        # all optional; defaults = today's deleter_con
 | `deleter_config.xml` | derived image folders, `retention.*` |
 | `workers.yaml` | one `frame_capture_<camn>` worker per camera plus the other workers (D-033) |
 
-## 7.1 Site config v3 [ACCEPTED, not built] (D-055; replaces the v2 layout when CONFIG builds loader v3)
+## 7.1 Site config v3 [BUILT, PR #10; the loader accepts only schema 3] (D-055; replaces the v2 layout when CONFIG builds loader v3)
 Same rules as v2 (chmod 600, `--redacted`, unknown keys are errors, every problem listed with its key). Grouped by program:
 ```yaml
 schema_version: 3
@@ -284,12 +284,14 @@ transfer: {upload: {weekday: sunday, chunk_mb: 500, remote_folder: "DPC/data/<si
 models:   {remote_folder: "DPC/models", check_interval_hours: 6, auto_update: off}   # off | download | install (D-056)
 ```
 Values above are examples. `mail.smtp` is a block (host, port, password) only when `sender: smtp`. Which keys each program reads is fixed when that program is migrated; new keys are append-only (section 8).
+**Built details (PR #10):** optional keys kept from v2: `plc.timeout_s`, `plc.legacy_db_numbers`, `mail.report_dir` (defaults as v2). `model.detect_labels` is dropped (append a key if inspection needs it). `graph` is required when `mail.sender: graph` or a `transfer` section exists. `transfer` is optional (absent = no transfer service); `transfer.upload` optional (absent = download only); defaults `weekday: sunday`, `chunk_mb: 500` (upload batch size, not the Graph request size), `remote_folder: "DPC/data/<site.id>"`. `models.auto_update: download|install` requires a `transfer` section. `mail.disk_report_to` empty or absent = `recipients`. `auto_roi` defaults: `mode: observe`, `learn_images: 30`. A v2 file is refused with one line per moved key; `scripts/convert_site_yaml_v3.py` converts it.
 
 ## 11. Learned values [ACCEPTED, not built] (D-054)
 `<root>/data/state/<program>/<topic>.json`, one writer each, atomic write, JSON with `schema_version`, `learned_from` {camera serial, rotate, model name, model version, images, time} and the values. Ignored and relearned when `learned_from` no longer matches; `site.yaml` fixed values win; delete to reset; unreadable = relearn, never crash.
 
-## 12. Model packages and switch [ACCEPTED, not built] (D-056, D-057)
+## 12. Model packages and switch [reader BUILT PR #10; switch and download not built] (D-056, D-057)
 `<root>/data/models/<name>/<version>/` = weights, Detectron yaml, `classes.json` (class list + label mapping), `manifest.json` {name, version, trained_at, files: {file: sha256}}; `<root>/data/models/<name>/current` points to the running version. OneDrive source `DPC/models/<name>/<version>/`, `manifest.json` uploaded last. Transfer service: download, verify, mark ready (`ready` file in the version folder); never switches. Supervisor: switch = test on saved images, move `current`, restart inspection once, keep previous for rollback; publishes `model_switched` / `model_switch_failed` events.
+**Formats (built, PR #10):** `classes.json` = `{"classes": [...], "label_map": {...}}`. `manifest.json` lists `classes.json`, exactly one `.pth` (weights) and one `.yaml`/`.yml` (Detectron config), each with its sha256; extra keys allowed; a `classes` key in the manifest, if present, must equal `classes.json`. `current` is a relative symlink to the version folder (a plain file holding the version name is also read); `set_current()` switches it atomically. API in `common/config/model_package.py`: `load_model_package(cfg)`, `verify_package()`, `set_current()`. Which version runs: see D-058.
 
 ## 8. Compatibility rules
 Topics, status fields, event names, XML tag order and DB columns are append-only; renaming/removing needs a DECISIONS entry plus a migration note. New optional config keys must not break existing files.
@@ -300,7 +302,7 @@ Secrets live in `site.yaml` (section 7: `db.user`, `db.password`, `mqtt.user`, `
 
 ## 10. Commissioning check `dpc-check` [BUILT, PR #9] (D-035)
 **Command:** `python3 <root>/code/scripts/dpc_check.py [site.yaml]` (default site.yaml as in section 7). Read-only: never writes, never opens a camera (enumeration only).
-**Output:** one line per check, `<PASS|WARN|FAIL|SKIP> <name> <reason>`, in this order: `site.yaml`, `git`, `layout`, `disk`, `cameras`, `database`, `mqtt`; then `RESULT ... (exit N) in T s`. No secret value is ever printed.
+**Output:** one line per check, `<PASS|WARN|FAIL|SKIP> <name> <reason>`, in this order: `site.yaml`, `git`, `layout`, `disk`, `cameras`, `database`, `mqtt`, `model` (not installed = WARN, bad package = FAIL, `current` differs from `site.yaml` = WARN; PR #10); then `RESULT ... (exit N) in T s`. No secret value is ever printed.
 **Exit:** 0 = all pass; 1 = any FAIL or SKIP; 2 = warnings only.
 **Grading:** `db.user` root = WARN (D-050); MQTT broker unreachable = WARN (D-034); disk used/(used+free) below `retention.disk_percent.delete` = PASS, between `delete` and `mail` = WARN, at or above `mail` = FAIL (same measure as cleanup). The layout check does not check `data/wheel_status` yet (Q13).
 
