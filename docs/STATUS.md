@@ -73,7 +73,7 @@ Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release t
 | Contract impact | **Yes.** New `workers.yaml` keys: `mode`, `interval_s` (periodic), `restart_cost`, `start_after`, `env_from_site` (D-048 env bridge), and a `queue_lag` health block (folder, max age). The heartbeat payload is extended append-only (D-034). Decisions accepted (D-049). |
 | Done when | Tested with dummy workers: (a) a oneshot that exits 0 ends as STOPPED and is not restarted, while a non-zero exit counts as a failure; (b) a periodic worker runs every `interval_s`; (c) `queue_lag` goes UNHEALTHY when the oldest `INF` file is older than the threshold and recovers when the folder drains; (d) workers start in `start_after` order; (e) both the old and the extended heartbeat are accepted; (f) a worker with `restart_cost: high` uses the longer timeout. |
 
-### 4. First real workers under the Supervisor (Tadipatri)
+### 4. First real workers under the Supervisor (Tadipatri): code DONE (PR #8, `6dc4125`, 113 tests); site test (a)-(d) in progress
 | | |
 |---|---|
 | Owner chat | SUPERVISOR (worker entries); SITE-tadipatri records the result in `SITES.md` |
@@ -96,9 +96,11 @@ Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release t
 | 9 (DONE, PR #6) | CONFIG | D-050: `db.user: root` becomes a warning, not an error, in `common/config/site_config.py`; update the comment in `config/examples/site.example.yaml` and the test | A file with `user: root` prints `OK` plus one warning line and exits 0; tests pass |
 | 10 | SUPERVISOR | A hung oneshot/periodic run has no time limit: add optional `run_timeout_seconds` (append-only key in CONTRACTS 1) | A run longer than the limit is stopped, reported as `worker_failure`, and the next run still happens |
 | 11 | CONFIG + SUPERVISOR | The Supervisor's own MQTT login still comes from `workers.yaml`, while `site.yaml` holds `mqtt.user`/`mqtt.password` (D-048). Proposed: the Supervisor reads its MQTT login from `site.yaml` too; `workers.yaml` keeps only host/port/topic | One place for MQTT credentials; `workers.yaml` holds no secret; tests pass |
-| 12 | SUPERVISOR (item 4) | `supervisor/dpc-supervisor.service` hardcodes the Tadipatri user and paths | Unit file is a template (user and root filled at install); covers the "how the Supervisor starts on boot" gap |
+| 12 (DONE, PR #8) | SUPERVISOR (item 4) | `supervisor/dpc-supervisor.service` hardcodes the Tadipatri user and paths | Unit file is a template (user and root filled at install); covers the "how the Supervisor starts on boot" gap |
 | 13 | DB | Tadipatri renamed its health table to `health_status` (2026-10-20): update CONTRACTS section 5 and `db/README.md` (both still name `tadipatri4_health_status_table`); check whether the renamed table lacks the unique `ITEM` key of the standard one and, if so, add it in the Tadipatri upgrade script (follow-up 8) | Docs name `health_status` for Tadipatri; `SHOW CREATE TABLE health_status` on Tadipatri matches `db/schema.sql` or the upgrade script fixes it |
 | 14 | You (Tadipatri) | Anything else that used the old name `tadipatri4_health_status_table` (UI, data sync, reports) stops working after the rename: `grep -rn tadipatri4_health_status_table ~/INSIGHTZZ` and fix what it finds | The grep finds nothing outside backups and `db/reference/` |
+| 15 | MASTER (decision) | Capture `max_retries: 30` means a camera unplugged for more than about 20 min ends FAILED and needs a manual start. Proposed (contract change): an unlimited-retry option for cheap-restart workers, in the spirit of D-051 rule 1 | Decided; if accepted, SUPERVISOR adds it append-only to CONTRACTS 1 |
+| 16 | You (Tadipatri) | Nothing consumes `INF` yet (about 690k files/day at 2 x 4 fps): drain it during the 24 h test, and before the algorithms run under the Supervisor, configure cleanup for the new layout | No disk alarm during the 24 h run |
 | 6 (DONE, PR #3) | W-mail | `workers/mail/immediate_mail_sender.py` line ~329 uses `defect['id']` on a DictCursor row whose key is `ID`: KeyError the first time a duplicate defect is found (the outlook sender already uses `ID`). Verified in code. | A duplicate defect is marked ignored (2) without an exception; send path unchanged |
 | 7 | W-frame_capture_basler | Health "matched no row" warning can be false: MySQL returns changed rows, not matched rows, when the value is unchanged. Connect with `client_flag=CLIENT.FOUND_ROWS`. | Repeating the same health value on an existing row logs no warning; a missing row still warns |
 | 8 | DB | Bring the Tadipatri DB to schema version 1 with a reviewed upgrade script, run only after a full backup. | Script reviewed by you; after it, `db/test_seed.py` checks pass against `tadipatri4`; backup restorable |
@@ -136,8 +138,6 @@ Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release t
 | D-041 Proposed (Basler XML elements 16 to 18) | 2 | Accept D-041 and add the elements to CONTRACTS section 3 |
 | `health_status` schema unknown (Q5) | 2 (DB health part) | Export the schema from Maihar and Tadipatri |
 | No `start_after` / `restart_cost` keys in the `workers.yaml` contract | 3, 4 | Add to CONTRACTS together with item 3 |
-| Where the site `workers.yaml` lives | 4 | Proposed: `<root>/config/workers.yaml` until the renderer exists, then `rendered/` |
-| How the Supervisor itself is started on boot (systemd user unit? assumed) | 4 | Decide; note it in COMMISSIONING |
 | `dpc-check` exit code and output format | 5 | Add to CONTRACTS (D-035 refinement) |
 | Secrets rotation and a dedicated DB user (item 0) | 2, 4, 5 (anything touching the DB) | Owner: you |
 | Tadipatri model and object sizes must match unrotated 1920x1080 frames | Tadipatri inspection (not items 1 to 5) | Confirm before the algorithms run on this site |

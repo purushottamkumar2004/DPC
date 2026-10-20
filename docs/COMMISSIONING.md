@@ -121,6 +121,13 @@ These still use the legacy configs and hardcoded paths. Do not install them with
 **Step 11. Record the site**
 Update `docs/SITES.md` (serials, sides, release tag, quirks), commit it through the normal workflow, and keep a photo or note of where each camera is mounted.
 
+## 2b. Put the cameras under the Supervisor (D-052)
+1. `cp ~/INSIGHTZZ/code/supervisor/config/workers.basler-2cam.yaml ~/INSIGHTZZ/config/workers.yaml`, then `cd ~/INSIGHTZZ/code/supervisor && python3 supervisor.py check-config -c ~/INSIGHTZZ/config/workers.yaml`.
+2. Stop any capture started by hand, then a first run in the foreground: `python3 supervisor.py run -c ~/INSIGHTZZ/config/workers.yaml` (Ctrl+C stops it and both captures).
+3. Checks: both `live/IMG_1.jpg` files update; `kill -9` on one capture is restarted within 10 s (`logs/supervisor.log`); a cable out for 2 min is seen and recovered.
+4. Install for boot, from the Python that has pypylon: `cd ~/INSIGHTZZ/code/supervisor && ./install_service.sh --dry-run`, then without `--dry-run`; `sudo systemctl start dpc-supervisor`; `systemctl status dpc-supervisor`.
+5. Until the algorithms run, nothing empties `INF`: drain it or configure cleanup (STATUS follow-up 16).
+
 ## 3. Acceptance checklist (sign-off)
 - [ ] Layout script printed `OK`; code is at the intended release tag (`git describe --tags`)
 - [ ] Both serials detected; CAM1/CAM2 and sides confirmed by looking at the images
