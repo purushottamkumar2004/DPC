@@ -16,7 +16,7 @@ PLC: type Modbus TCP | S7, ip <..>, light <..>, cleaning <..>, conveyor status <
 MODEL: folder <..>, yaml <..>, threshold <..>, classes <..>
 MAIL: sender SMTP|Graph, recipients managed in <..>
 WHEELS/REV: <n>   wheel_stand counts: <..>   object sizes: <..>   disk thresholds: <..>
-QUIRKS: <..>
+QUIRKS: <..>; both cameras share one Ethernet port on the server: if that port is down, both cameras stop (check it first when both fail together); MQTT broker: mosquitto on localhost, no login
 ```
 
 ## tadipatri (new machine)
