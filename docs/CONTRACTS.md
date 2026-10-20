@@ -251,6 +251,46 @@ retention:                        # all optional; defaults = today's deleter_con
 | `deleter_config.xml` | derived image folders, `retention.*` |
 | `workers.yaml` | one `frame_capture_<camn>` worker per camera plus the other workers (D-033) |
 
+## 7.1 Site config v3 [ACCEPTED, not built] (D-055; replaces the v2 layout when CONFIG builds loader v3)
+Same rules as v2 (chmod 600, `--redacted`, unknown keys are errors, every problem listed with its key). Grouped by program:
+```yaml
+schema_version: 3
+site:   {id: tadipatri, name: "Tadipatri DPC"}
+paths:  {root: ~/INSIGHTZZ}
+db:     {host: localhost, port: 3306, name: tadipatri4, user: root, password: "<secret>", health_table: health_status}
+mqtt:   {host: localhost, port: 1883, user: "", password: ""}
+graph:  {tenant_id: "<secret>", client_id: "<secret>", client_secret: "<secret>"}   # shared by mail and transfer
+
+capture:
+  log: {backup_count: 5}
+  cameras:
+    - {id: CAM1, side: LEFT,  driver: basler, serial: "24824427", fps: 4.0, exposure_us: 1500, rotate: 0}
+    - {id: CAM2, side: RIGHT, driver: basler, serial: "24874775", fps: 4.0, exposure_us: 2000, rotate: 0}
+
+inspection:
+  log: {backup_count: 5}
+  model: {name: dpc_maskrcnn, version: "2026.10.1"}    # files, classes, label map come from the model package (D-056)
+  threshold: 0.5
+  machine: {total_wheel_count: 190, expected_cycle_total: 188, wheel_stand_required_counts: {34: 3}}
+  sides:
+    LEFT:  {object_sizes: {wheel_w: 530, wheel_h: 495, bucket_clip_w: 300, chain_w: 880, half_bucket_clip_w: 150}}
+    RIGHT: {object_sizes: {wheel_w: 530, wheel_h: 495, bucket_clip_w: 300, chain_w: 880, half_bucket_clip_w: 150}}
+  auto_roi: {mode: observe, learn_images: 30}          # off | observe | filter (D-054)
+
+plc:      {type: modbus_tcp, ip: 192.168.2.5, port: 502, light_register: 4109, cleaning_register: 4106, conveyor_status_register: 4098, cleaning_pulse_seconds: 10, log: {backup_count: 5}}
+mail:     {sender: graph, sender_address: "dpc@example.com", project_name: "Tadipatri_dpc", recipients: ["a@example.com"], cc: [], disk_report_to: [], smtp: null, log: {backup_count: 5}}
+cleanup:  {raw_image_hours: 24, interval_seconds: 10, repeated: {days: 20, items: 200}, plate_days: 10, defective: {days: 10, items: 200}, disk_percent: {delete: 75, raw_delete: 85, mail: 90, inference_delete: 95}, log: {backup_count: 5}}
+transfer: {upload: {weekday: sunday, chunk_mb: 500, remote_folder: "DPC/data/<site.id>"}, log: {backup_count: 5}}
+models:   {remote_folder: "DPC/models", check_interval_hours: 6, auto_update: off}   # off | download | install (D-056)
+```
+Values above are examples. `mail.smtp` is a block (host, port, password) only when `sender: smtp`. Which keys each program reads is fixed when that program is migrated; new keys are append-only (section 8).
+
+## 11. Learned values [ACCEPTED, not built] (D-054)
+`<root>/data/state/<program>/<topic>.json`, one writer each, atomic write, JSON with `schema_version`, `learned_from` {camera serial, rotate, model name, model version, images, time} and the values. Ignored and relearned when `learned_from` no longer matches; `site.yaml` fixed values win; delete to reset; unreadable = relearn, never crash.
+
+## 12. Model packages and switch [ACCEPTED, not built] (D-056, D-057)
+`<root>/data/models/<name>/<version>/` = weights, Detectron yaml, `classes.json` (class list + label mapping), `manifest.json` {name, version, trained_at, files: {file: sha256}}; `<root>/data/models/<name>/current` points to the running version. OneDrive source `DPC/models/<name>/<version>/`, `manifest.json` uploaded last. Transfer service: download, verify, mark ready (`ready` file in the version folder); never switches. Supervisor: switch = test on saved images, move `current`, restart inspection once, keep previous for rollback; publishes `model_switched` / `model_switch_failed` events.
+
 ## 8. Compatibility rules
 Topics, status fields, event names, XML tag order and DB columns are append-only; renaming/removing needs a DECISIONS entry plus a migration note. New optional config keys must not break existing files.
 

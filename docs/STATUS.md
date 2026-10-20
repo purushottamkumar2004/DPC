@@ -91,6 +91,15 @@ Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release t
 | Contract impact | **Small.** Exit codes 0 = pass, 1 = fail, 2 = pass with warnings, plus one result line per check. Add to CONTRACTS as the commissioning interface (D-035). |
 | Done when | (a) On Tadipatri all checks pass without sudo. (b) Each check can be made to fail on purpose (unplug a camera, `chmod 644 site.yaml`, a wrong serial) and then fails with a one-line reason. (c) It runs in under 30 s. (d) It never prints a secret. |
 
+### Phase 3 (ordered, decided 2026-10-20: D-053 to D-057)
+| # | Owner chat | What | Done when |
+|---|---|---|---|
+| 6 | CONFIG | Loader v3 grouped by program (CONTRACTS 7.1, D-055) incl. shared `graph`, `transfer`, `models`; v2 file gives a message naming each moved key; model package reader (manifest + checksums, `current` pointer) | v3 example loads; v2 file rejected with the moves listed; manifest with a wrong checksum rejected; tests pass; Tadipatri file converted and `dpc-check` still passes |
+| 7 | W-inspection | `LeftAlgorithm`/`RightAlgorithm` read v3 `site.yaml` and the model package (D-053, D-056); folders from the layout; heartbeat (D-034); no business-logic change | Replay of saved Tadipatri images gives the same detections and defects as the old code; runs under the Supervisor with `restart_cost: high` and `queue_lag`; `INF` drains so the temporary cron can go |
+| 8 | SUPERVISOR | Model switch (D-056): test on saved images, move `current`, restart inspection once, rollback; events | Switch to a test version and back without manual steps; a broken version is refused before any restart |
+| 9 | new W-transfer | Transfer service (D-057): weekly chunked upload, model download + verify + mark ready | Upload resumes after a cut connection; a version without `manifest.json` is ignored; a bad checksum is rejected and reported |
+| 10 | W-inspection | Auto-ROI in observe mode (D-054, case A9 groundwork) | Learned file written per side; log lines show what filtering would remove; nothing removed |
+
 ### Follow-ups from handoffs (small, any order)
 | # | Owner chat | What | Done when |
 |---|---|---|---|
@@ -115,8 +124,8 @@ Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release t
 | A3 | Camera below the configured fps | Measure real fps, report it, warn below a threshold | W-frame_capture_basler, SUPERVISOR | Heartbeat `fps` (D-034, item 3) |
 | A4 | Camera parameters changed | Read settings back periodically and re-apply config values | W-frame_capture_basler | New |
 | A5 | Inference delay | Detect a growing `INF` backlog | SUPERVISOR | `queue_lag` (D-020, item 3) |
-| A6 | Model deployment | Fetch a model by version with checksum, switch, roll back | CONFIG | Installer; waits for the model-hosting decision |
-| A7 | Weekly data upload | Chunk images from both sides, upload weekly | new worker (W-data_upload) | New; needs a target (where to upload) |
+| A6 | Model deployment | Fetch a model by version with checksum, switch, roll back | W-transfer, SUPERVISOR | Phase 3 items 8 and 9 (D-056, D-057); hosting = OneDrive |
+| A7 | Weekly data upload | Chunk images from both sides, upload weekly | W-transfer | Phase 3 item 9 (D-057); target = OneDrive |
 | A8 | Light off | Detect a dark view, switch the light on via PLC | W-plc | PLC service (D-024) |
 | A9 | Sunlight on the view | Mask that image region, set per camera in config | W-inspection, CONFIG | New; needs a `site.yaml` key (contract change) |
 | A10 | Dust on the view | Detect a dirty view, trigger the cleaning pulse | W-plc, W-inspection | PLC service (D-024) |
