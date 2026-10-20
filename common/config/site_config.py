@@ -2,9 +2,10 @@
 CONTRACTS sections 7.1 and 9, D-048, D-050, D-055). The file holds the site's secrets.
 
 v3 layout: shared sections first (site, paths, db, mqtt, graph), then one section per
-program (capture, inspection, plc, mail, cleanup, transfer), then models. Model files,
-classes and the label map are not in site.yaml: they come from the model package
-(common/config/model_package.py, CONTRACTS 12). A v2 file is refused with one line per
+program (capture, inspection, plc, mail, cleanup, transfer). Model files, classes and the
+label map are not in site.yaml: they come from the model package (common/config/model_package.py,
+CONTRACTS 12). site.yaml names only WHICH model; the running version is the `current` pointer,
+managed by the Supervisor (D-060). A v2 file is refused with one line per
 moved key; scripts/convert_site_yaml_v3.py converts one.
 
 Public API
@@ -12,7 +13,7 @@ Public API
     SiteConfigError            (.problems = list of "key.path: what is wrong")
     redacted_copy(path=None) -> str      the file text with every secret replaced by ***
     legacy_env_vars(config) -> dict      DPC_* env vars for legacy workers (CONTRACTS 9 env bridge)
-    v2_moves(data), convert_v2_to_v3(data, model_name, model_version)   v2 -> v3 (D-055)
+    v2_moves(data), convert_v2_to_v3(data, model_name)   v2 -> v3 (D-055)
 
 Command line
     python -m common.config.site_config [path]               prints OK or every problem; exit 0 or 1
@@ -55,16 +56,14 @@ IMAGE_KINDS = ("DEFECTIVE", "REPEATED", "RAW", "PLATE")
 OBJECT_SIZE_KEYS = ("wheel_w", "wheel_h", "bucket_clip_w", "chain_w", "half_bucket_clip_w")
 DISK_PERCENT_ORDER = ("delete", "raw_delete", "mail", "inference_delete")   # must increase in this order
 AUTO_ROI_MODES = ("off", "observe", "filter")          # D-054
-AUTO_UPDATE_MODES = ("off", "download", "install")     # D-056
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
-CURRENT_POINTER = "current"                            # <root>/data/models/<name>/current (CONTRACTS 12)
 SITE_ID_TOKEN = "<site.id>"                            # replaced in transfer.upload.remote_folder
 
 _SITE_ID_RE = re.compile(r"^[a-z0-9_-]+$")
 # DB and table names end up inside SQL text, so only plain identifiers are allowed.
 _SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-# Model name and version are folder names: no slashes, no leading dot.
+# Model names (and versions, in model_package) are folder names: no slashes, no leading dot.
 _MODEL_PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -223,12 +222,11 @@ class MachineConfig:
 
 @dataclass(frozen=True)
 class ModelRef:
-    """Which model package inspection uses (D-056). Files, classes and the label map are in
-    the package itself, read with common.config.model_package."""
+    """Which model inspection uses. Only the name: the running version is the `current`
+    pointer in `root`, managed by the Supervisor (D-060). Files, classes and the label map are
+    in the package, read with common.config.model_package.load_model_package()."""
     name: str
-    version: str
-    root: str            # <root>/data/models/<name>: holds the versions and the `current` pointer
-    dir: str             # <root>/data/models/<name>/<version>
+    root: str            # <root>/data/models/<name>: the versions, `current` and `pinned`
 
 
 @dataclass(frozen=True)
@@ -308,14 +306,8 @@ class TransferUpload:
 @dataclass(frozen=True)
 class TransferConfig:
     upload: Optional[TransferUpload]   # None = no weekly upload (model download only)
+    models_folder: str                 # OneDrive folder with <name>/<version>/ (D-060)
     log: LogSettings
-
-
-@dataclass(frozen=True)
-class ModelsConfig:
-    remote_folder: str
-    check_interval_hours: int
-    auto_update: str     # off | download | install (D-056)
 
 
 @dataclass(frozen=True)
@@ -332,7 +324,6 @@ class SiteConfig:
     mail: MailConfig
     cleanup: CleanupConfig
     transfer: Optional[TransferConfig]   # None = no transfer service on this site
-    models: ModelsConfig
     source_path: str
     warnings: Tuple[str, ...] = ()   # the file is valid, but these deserve a look (printed by the CLI)
 
@@ -769,18 +760,19 @@ def _read_machine(parent: _Section) -> MachineConfig:
     return cfg
 
 
+MOVED_TO_SUPERVISOR = ("moved to the Supervisor (D-060): the running version is "
+                       "data/models/<name>/current, managed with the Supervisor's model commands")
+
+
 def _read_model_ref(parent: _Section, paths: Paths) -> ModelRef:
     s = parent.section("model")
-    hint = "use letters, digits, '.', '_' or '-' (it is a folder name)"
-    name = s.string("name", pattern=_MODEL_PART_RE, pattern_hint=hint)
-    version = s.string("version", pattern=_MODEL_PART_RE, pattern_hint=hint)
-    if version == CURRENT_POINTER:
-        s.problem("version", f"'{CURRENT_POINTER}' is the pointer name, give a real version")
-        version = None
+    name = s.string("name", pattern=_MODEL_PART_RE,
+                    pattern_hint="use letters, digits, '.', '_' or '-' (it is a folder name)")
+    if "version" in s.data:
+        s.used.add("version")
+        s.problem("version", MOVED_TO_SUPERVISOR)
     s.finish()
-    models_root = os.path.join(paths.data, "models", name) if name and paths.root else None
-    return ModelRef(name=name, version=version, root=models_root,
-                    dir=os.path.join(models_root, version) if models_root and version else None)
+    return ModelRef(name=name, root=os.path.join(paths.data, "models", name) if name and paths.root else None)
 
 
 def _read_auto_roi(parent: _Section) -> AutoRoi:
@@ -918,7 +910,7 @@ def _read_cleanup(top: _Section) -> CleanupConfig:
     return cfg
 
 
-# ---- transfer and models (D-057, D-056) ----
+# ---- transfer (D-057, D-060) ----
 
 def _read_transfer(top: _Section, site_id: Optional[str]) -> Optional[TransferConfig]:
     """Optional: absent means this site runs no transfer service."""
@@ -938,18 +930,9 @@ def _read_transfer(top: _Section, site_id: Optional[str]) -> Optional[TransferCo
         u.finish()
     else:
         s.used.add("upload")
-    cfg = TransferConfig(upload=upload, log=_read_log(s))
-    s.finish()
-    return cfg
-
-
-def _read_models(top: _Section) -> ModelsConfig:
-    s = top.section("models", required=False)
-    cfg = ModelsConfig(
-        remote_folder=s.string("remote_folder", required=False, default="DPC/models"),
-        check_interval_hours=s.integer("check_interval_hours", required=False, default=6, low=1, high=8760),
-        auto_update=s.choice("auto_update", AUTO_UPDATE_MODES, default="off"),
-    )
+    cfg = TransferConfig(upload=upload,
+                         models_folder=s.string("models_folder", required=False, default="DPC/models"),
+                         log=_read_log(s))
     s.finish()
     return cfg
 
@@ -992,18 +975,18 @@ def load_site_config(path: Optional[str] = None) -> SiteConfig:
     mail = _read_mail(top, paths)
     cleanup = _read_cleanup(top)
     transfer = _read_transfer(top, site.id)
-    models = _read_models(top)
     graph = _read_graph(top, _graph_users(mail, transfer))
-    if models.auto_update not in (None, "off") and transfer is None:
-        top.problem("models", f"auto_update {models.auto_update} needs a transfer section: "
-                              f"the transfer service downloads models (D-057)")
+    if "models" in top.data:
+        top.used.add("models")
+        top.problem("models", "moved to the Supervisor config (workers.yaml section models, D-060); "
+                              "the OneDrive folder is transfer.models_folder")
     top.finish()
 
     if problems:
         raise SiteConfigError(path, problems)
     return SiteConfig(schema_version=version, site=site, paths=paths, db=db, mqtt=mqtt, graph=graph,
                       capture=capture, inspection=inspection, plc=plc, mail=mail, cleanup=cleanup,
-                      transfer=transfer, models=models, source_path=path, warnings=tuple(_warnings(db)))
+                      transfer=transfer, source_path=path, warnings=tuple(_warnings(db)))
 
 
 def _graph_users(mail: MailConfig, transfer: Optional[TransferConfig]) -> List[str]:
@@ -1080,11 +1063,12 @@ def v2_move_problems(data: Dict[str, Any]) -> List[str]:
             lines.append(f"{old} -> remove: it comes from the model package now (CONTRACTS 12)")
         else:
             lines.append(f"{old} -> {new}")
-    lines.append("inspection.model -> add {name, version} of the model package (D-056)")
+    lines.append("inspection.model -> add {name} of the model package (D-056); "
+                 "the version is managed by the Supervisor (D-060)")
     return lines
 
 
-def convert_v2_to_v3(data: Dict[str, Any], model_name: str, model_version: str) -> Dict[str, Any]:
+def convert_v2_to_v3(data: Dict[str, Any], model_name: str) -> Dict[str, Any]:
     """A v3 mapping built from a v2 mapping, following v2_moves(). Values are copied, never
     printed. Keys that did not move are copied as they are; the result still has to pass
     load_site_config (run the check after converting)."""
@@ -1107,7 +1091,7 @@ def convert_v2_to_v3(data: Dict[str, Any], model_name: str, model_version: str) 
     if graph is not None:
         new["graph"] = graph
     new["capture"] = {"log": dict(log), "cameras": old.pop("cameras", [])}
-    inspection = {"log": dict(log), "model": {"name": model_name, "version": model_version}}
+    inspection = {"log": dict(log), "model": {"name": model_name}}
     if "threshold" in model:
         inspection["threshold"] = model["threshold"]
     inspection["machine"] = machine

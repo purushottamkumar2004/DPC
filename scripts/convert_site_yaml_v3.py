@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Convert a v2 site.yaml to v3 (grouped by program, CONTRACTS 7.1, D-055).
 
-    python3 ~/INSIGHTZZ/code/scripts/convert_site_yaml_v3.py --model-version 2026.10.1
+    python3 ~/INSIGHTZZ/code/scripts/convert_site_yaml_v3.py
     python3 ~/INSIGHTZZ/code/scripts/convert_site_yaml_v3.py path/to/site.yaml \
-        --model-name dpc_maskrcnn --model-version 2026.10.1 --output path/to/site.v3.yaml
+        --model-name dpc_maskrcnn --output path/to/site.v3.yaml
 
 What it does:
 - reads the v2 file (it must be chmod 600, like any site.yaml),
 - moves every key as listed by the loader (secrets included, values are never printed),
 - drops the model file keys (dir, weights, class_json, detectron_yaml, classes, detect_labels):
-  they come from the model package now (CONTRACTS 12),
+  they come from the model package now (CONTRACTS 12); only the model name stays, the
+  version is managed by the Supervisor (D-060),
 - writes a NEW file (default site.v3.yaml next to the input, chmod 600) and checks it.
 The original file is not touched. Comments are not carried over. Review the new file, keep the
 old one as a backup, then rename:  mv site.yaml site.v2.bak.yaml && mv site.v3.yaml site.yaml
@@ -45,8 +46,6 @@ def write_private(path: str, text: str) -> None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="convert_site_yaml_v3.py", description="Convert site.yaml v2 to v3.")
     parser.add_argument("path", nargs="?", help="v2 site.yaml (default: $DPC_SITE_CONFIG or ~/INSIGHTZZ/config/site.yaml)")
-    parser.add_argument("--model-version", required=True,
-                        help="version of the model package inspection will use, e.g. 2026.10.1 (D-056)")
     parser.add_argument("--model-name", help="model package name (default: the last folder of v2 model.dir)")
     parser.add_argument("--output", help="new file (default: site.v3.yaml next to the input)")
     args = parser.parse_args(argv)
@@ -73,13 +72,13 @@ def main(argv=None) -> int:
         return 1
 
     moves = sc.v2_moves(data)
-    converted = sc.convert_v2_to_v3(data, model_name, args.model_version)
+    converted = sc.convert_v2_to_v3(data, model_name)
     write_private(output, HEADER + yaml.safe_dump(converted, sort_keys=False, allow_unicode=True))
 
     print(f"Wrote {output} (chmod 600). Moved keys:")
     for old, new in moves:
         print(f"  {old} -> {new if new else 'removed (now in the model package)'}")
-    print(f"  added inspection.model = {model_name}/{args.model_version}")
+    print(f"  added inspection.model.name = {model_name} (version: data/models/{model_name}/current, D-060)")
     try:
         sc.load_site_config(output)
     except sc.SiteConfigError as exc:

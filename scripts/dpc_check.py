@@ -37,7 +37,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from common.config.model_package import ModelPackageError, read_current, verify_package  # noqa: E402
+from common.config.model_package import ModelPackageError, read_current, read_pinned, verify_package  # noqa: E402
 from common.config.site_config import (  # noqa: E402
     FRAME_SUBDIRS, IMAGE_KINDS, SiteConfig, SiteConfigError, default_config_path, load_site_config,
 )
@@ -246,32 +246,31 @@ def check_mqtt(cfg: SiteConfig) -> Result:
 
 
 def check_model(cfg: SiteConfig) -> Result:
-    """The model package inspection would run (CONTRACTS 12): `current` if set, else the version
-    in site.yaml. Not installed = WARN (captures can run without it); a bad package = FAIL."""
+    """The version inspection would run: data/models/<name>/current (D-060). Shows the running
+    version and whether it is pinned. Not installed = WARN (captures run without it); a broken
+    pointer or package = FAIL; pinned to another version than current = WARN."""
     model = cfg.inspection.model
     try:
         current = read_current(model.root)
+        pinned = read_pinned(model.root)
     except ModelPackageError as exc:
-        return Result(FAIL, "model", f"{model.name}/current: {exc.problems[0]}")
-    version = current or model.version
-    label = f"{model.name}/{version}"
-    if not os.path.isdir(os.path.join(model.root, version)):
-        return Result(WARN, "model", f"{label} not installed in data/models; inspection cannot start yet")
+        return Result(FAIL, "model", f"{model.name}: {os.path.basename(exc.source)} {exc.problems[0]}")
+    if current is None:
+        return Result(WARN, "model", f"{model.name}: no version installed (no current pointer); "
+                                     f"package one with scripts/make_model_package.py")
+    label = f"{model.name}/{current}"
+    if not os.path.isdir(os.path.join(model.root, current)):
+        return Result(FAIL, "model", f"{label}: current points to a missing version folder")
     try:
-        package = verify_package(os.path.join(model.root, version), name=model.name)
+        package = verify_package(os.path.join(model.root, current), name=model.name)
     except ModelPackageError as exc:
         return Result(FAIL, "model", f"{label}: " + "; ".join(exc.problems))
-    notes = []
-    if current is None:
-        notes.append("no current pointer yet")
-    elif current != model.version:
-        notes.append(f"current is {current}, site.yaml names {model.version}")
-    if not package.ready:
-        notes.append("no ready marker")
-    detail = f"{label} verified ({len(package.classes)} classes, all checksums match)"
-    if current is not None and current != model.version:
-        return Result(WARN, "model", f"{detail}; " + "; ".join(notes))
-    return Result(PASS, "model", detail + (f"; {'; '.join(notes)}" if notes else ""))
+    detail = f"running {label} (verified, {len(package.classes)} classes)"
+    if pinned is None:
+        return Result(PASS, "model", f"{detail}; not pinned")
+    if pinned != current:
+        return Result(WARN, "model", f"{detail}; pinned to {pinned}, which is not the running version")
+    return Result(PASS, "model", f"{detail}; pinned")
 
 
 # ======================================================================
