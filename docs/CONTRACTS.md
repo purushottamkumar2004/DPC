@@ -257,3 +257,10 @@ Topics, status fields, event names, XML tag order and DB columns are append-only
 ## 9. Secrets [ACCEPTED] (D-048; supersedes the `secrets.env` part of D-018, D-030, D-047)
 Secrets live in `site.yaml` (section 7: `db.user`, `db.password`, `mqtt.user`, `mqtt.password`, `mail.graph.*`, `mail.smtp.password`; addresses `mail.sender_address`, `mail.disk_report_to`). `secrets.env` is retired. Never committed: the repo holds only `config/examples/site.example.yaml` with placeholders. A `dpc-sites` mirror (Q17), chats and the UI get `--redacted` copies only.
 **Legacy env bridge (Supervisor):** programs that still read env vars get them from the Supervisor, which loads `site.yaml` and exports, per worker that asks for it (`env_from_site: true` in `workers.yaml`): `DPC_DB_USER`, `DPC_DB_PASS`, `DPC_MS_TENANT_ID`, `DPC_MS_CLIENT_ID`, `DPC_MS_CLIENT_SECRET`, `DPC_MAIL_SENDER`, `DPC_SMTP_PASSWORD`, `DPC_DISK_REPORT_TO` (comma-separated), `DPC_MQTT_USER`, `DPC_MQTT_PASS`, `DPC_SITE_NAME` (= `site.name`). Today only `workers/cleanup/delete_script.py` needs it. A dedicated DB user with limited rights is recommended; `root` is allowed (D-050).
+
+## 10. Commissioning check `dpc-check` [BUILT, PR #9] (D-035)
+**Command:** `python3 <root>/code/scripts/dpc_check.py [site.yaml]` (default site.yaml as in section 7). Read-only: never writes, never opens a camera (enumeration only).
+**Output:** one line per check, `<PASS|WARN|FAIL|SKIP> <name> <reason>`, in this order: `site.yaml`, `git`, `layout`, `disk`, `cameras`, `database`, `mqtt`; then `RESULT ... (exit N) in T s`. No secret value is ever printed.
+**Exit:** 0 = all pass; 1 = any FAIL or SKIP; 2 = warnings only.
+**Grading:** `db.user` root = WARN (D-050); MQTT broker unreachable = WARN (D-034); disk used/(used+free) below `retention.disk_percent.delete` = PASS, between `delete` and `mail` = WARN, at or above `mail` = FAIL (same measure as cleanup). The layout check does not check `data/wheel_status` yet (Q13).
+

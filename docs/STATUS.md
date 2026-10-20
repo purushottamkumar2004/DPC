@@ -81,7 +81,7 @@ Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release t
 | Contract impact | Worker ids `frame_capture_cam1` and `frame_capture_cam2` (D-033). Decide where the site `workers.yaml` lives (see gaps). No DB change. |
 | Done when | (a) The Supervisor starts both captures. (b) `kill -9` on one capture leads to a restart within 10 s and a `worker_restarted` event on MQTT. (c) A pulled cable produces UNHEALTHY and then recovery, without exhausting `max_retries`. (d) A 24 h unattended run with both cameras has no FAILED state and the `INF` folders are drained (manually, until the algorithms run). |
 
-### 5. `dpc-check` preflight
+### 5. `dpc-check` preflight: code DONE (PR #9, `05ba5ef`; 134 tests pass on main); Tadipatri run with both captures running pending
 | | |
 |---|---|
 | Owner chat | CONFIG |
@@ -101,6 +101,7 @@ Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release t
 | 14 | You (Tadipatri) | Anything else that used the old name `tadipatri4_health_status_table` (UI, data sync, reports) stops working after the rename: `grep -rn tadipatri4_health_status_table ~/INSIGHTZZ` and fix what it finds | The grep finds nothing outside backups and `db/reference/` |
 | 15 | MASTER (decision) | Capture `max_retries: 30` means a camera unplugged for more than about 20 min ends FAILED and needs a manual start. Proposed (contract change): an unlimited-retry option for cheap-restart workers, in the spirit of D-051 rule 1 | Decided; if accepted, SUPERVISOR adds it append-only to CONTRACTS 1 |
 | 16 | You (Tadipatri) | **Urgent while captures run under the service:** nothing consumes `INF` (about 690k files/day at 2 x 4 fps). The terminal drain loop stops when the terminal closes; replace it with a cron entry until the algorithms run, and configure cleanup for the new layout before they do | Cron entry in place; disk usage flat over a day |
+| 17 | W-cleanup | `workers/cleanup/delete_script.py` measures disk usage at `os.getcwd()`, not the data folder: started from another directory (e.g. by the Supervisor) it watches the wrong disk. Use the data folder from config (D-023 path edits) | Disk percentage is measured on the filesystem of `<root>/data` whatever the working directory |
 | 6 (DONE, PR #3) | W-mail | `workers/mail/immediate_mail_sender.py` line ~329 uses `defect['id']` on a DictCursor row whose key is `ID`: KeyError the first time a duplicate defect is found (the outlook sender already uses `ID`). Verified in code. | A duplicate defect is marked ignored (2) without an exception; send path unchanged |
 | 7 | W-frame_capture_basler | Health "matched no row" warning can be false: MySQL returns changed rows, not matched rows, when the value is unchanged. Connect with `client_flag=CLIENT.FOUND_ROWS`. | Repeating the same health value on an existing row logs no warning; a missing row still warns |
 | 8 | DB | Bring the Tadipatri DB to schema version 1 with a reviewed upgrade script, run only after a full backup. | Script reviewed by you; after it, `db/test_seed.py` checks pass against `tadipatri4`; backup restorable |
