@@ -146,3 +146,14 @@ retry counter back, so one crash per day never ends in FAILED.
 Heartbeat: `{"healthy": true}` and the extended payload (`pid, version, config_hash, fps, last_frame_age_s, inf_queue_depth`) are both accepted; the known fields are type-checked and shown under `heartbeat` in the worker status. `{"healthy": false}` makes the check fail at once (the timeout still applies).
 
 Tests: `python3 -m unittest tests.unit.test_supervisor_v2 -v` from the repo root (about 30 s).
+
+## Running on a site (STATUS item 4)
+
+1. Workers file: copy `config/workers.basler-2cam.yaml` to `~/INSIGHTZZ/config/workers.yaml`
+   (two Basler captures; serials, fps, exposure and folders stay in `config/BASLER_CONFIG1.xml` / `2.xml`).
+   `env:` values that start with `~/` are expanded, like every path in the file.
+2. Check: `python3 supervisor.py check-config -c ~/INSIGHTZZ/config/workers.yaml`
+3. Boot service: `./install_service.sh --dry-run` shows the filled unit, `./install_service.sh` installs and
+   enables it. Run it as the site user, from the Python environment that has pypylon (`--python` to choose).
+   `dpc-supervisor.service` is a template (`@USER@`, `@ROOT@`, `@PYTHON@`, `@PYTHON_DIR@`); do not copy it by hand.
+4. Logs: `journalctl -u dpc-supervisor -f`, `~/INSIGHTZZ/logs/supervisor.log`, `~/INSIGHTZZ/logs/workers/<id>.log`.

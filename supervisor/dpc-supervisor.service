@@ -1,16 +1,36 @@
-# Copy to /etc/systemd/system/dpc-supervisor.service, edit User and paths, then:
-#   sudo systemctl daemon-reload && sudo systemctl enable --now dpc-supervisor
+# DPC Supervisor - systemd unit TEMPLATE. Do not copy this file by hand:
+#   ./install_service.sh            (fills @USER@, @ROOT@, @PYTHON@, @PYTHON_DIR@ and enables it)
+#   ./install_service.sh --dry-run  (prints the filled unit, changes nothing)
+#
+# A system unit that runs as the site user (no dedicated service user on these machines),
+# so it starts on boot without anyone logging in.
 [Unit]
-Description=DPC Supervisor
-After=network.target mosquitto.service
+Description=DPC Supervisor (starts and watches the inspection workers)
+# GigE cameras and the DB need the network; the MQTT broker is optional (D-034)
+Wants=network-online.target
+After=network-online.target mosquitto.service mysql.service
+
+# never give up restarting the Supervisor itself (24x7 site)
+StartLimitIntervalSec=0
 
 [Service]
-User=dpc_tadipatri
-WorkingDirectory=/home/dpc_tadipatri/INSIGHTZZ/CODE/supervisor
-ExecStart=/usr/bin/python3 supervisor.py run
+Type=simple
+User=@USER@
+WorkingDirectory=@ROOT@/code/supervisor
+# Workers are started with "python3 ...": this PATH makes that the same Python as the
+# Supervisor (the one with pypylon, cv2, ...), not /usr/bin/python3 by accident.
+Environment=PATH=@PYTHON_DIR@:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@PYTHON@ supervisor.py run -c @ROOT@/config/workers.yaml
 Restart=always
 RestartSec=5
-# give workers time to stop cleanly (FrameCapture releases the cameras)
+
+# Stop: SIGTERM goes to the Supervisor ONLY, which stops the workers in reverse start order
+# (each within its stop_timeout_seconds; the captures close their cameras). Whatever is
+# still running after TimeoutStopSec, or after a Supervisor crash, is killed, so a new
+# Supervisor never finds an old capture still holding a camera.
+KillMode=mixed
+KillSignal=SIGTERM
 TimeoutStopSec=90
 
 [Install]

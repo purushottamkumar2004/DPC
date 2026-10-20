@@ -1,0 +1,82 @@
+# =====================================================================
+# Supervisor workers file for a site with TWO Basler cameras (first used at Tadipatri).
+#
+# Deploy: copy to <root>/config/workers.yaml (hand-written until the renderer exists, D-022)
+#         and start the Supervisor with:  supervisor.py run -c ~/INSIGHTZZ/config/workers.yaml
+# Nothing in here is site-specific: the camera serial, fps, exposure, rotation, frame folders
+# and log file of each camera are in ~/INSIGHTZZ/config/BASLER_CONFIG1.xml and ..2.xml.
+# If paths.root in site.yaml is not ~/INSIGHTZZ, change the ~/INSIGHTZZ paths below.
+# No secrets in this file. `python3 supervisor.py check-config -c <this file>` validates it.
+# =====================================================================
+
+mqtt:
+  enabled: true
+  host: localhost            # local broker (D-034: the site keeps inspecting if it is down)
+  port: 1883
+  topic_prefix: dpc
+
+monitoring:
+  check_interval_seconds: 2      # a dead capture is seen within 2 s (STATUS 4b: restart within 10 s)
+  worker_timeout_seconds: 10     # a failing health check must last this long before a restart
+  high_cost_timeout_seconds: 120 # not used by captures (restart_cost normal); kept for the algorithms
+  startup_stagger_seconds: 1     # the two cameras are not opened in the same second
+  start_after_timeout_seconds: 120
+  status_publish_interval_seconds: 30
+
+restart_policy:                  # defaults; the captures set their own below
+  max_retries: 3
+  retry_delay_seconds: 5
+  reset_after_seconds: 300
+
+runtime:
+  root: ~/INSIGHTZZ/run          # pid files (CONTRACTS 4.1)
+log_dir: ~/INSIGHTZZ/logs        # supervisor.log here, each worker's stdout in logs/workers/<id>.log
+
+# ---------------------------------------------------------------------
+# Why these capture numbers (FrameCapture_Basler, PR #2):
+#  * The capture reopens a lost camera by itself: no good frame for 15 s -> reopen, retried
+#    every 2 s; frames resume within ~30 s of a replug (cable test 2026-10-20). The Supervisor
+#    should only step in when that did not work, so live/IMG_1.jpg may be 60 s old (at 4 fps
+#    it is replaced 4 times a second). Restart after 60 s stale + 10 s worker_timeout.
+#  * A restart is cheap (no in-memory state, D-031 hand-off is atomic, stale _tmp is cleared
+#    at start) and the capture keeps retrying the camera itself, so retries are many and fast.
+#    During a long cable-out one retry takes about 45 s (30 s grace + 10 s timeout + delay):
+#    30 retries = about 20 minutes before FAILED. After 300 s healthy the count is back to 0.
+#  * SIGTERM finishes the current frame and closes the camera (_tmp left empty); 15 s is ample.
+# ---------------------------------------------------------------------
+workers:
+  - id: frame_capture_cam1       # CAM1 = LEFT (CONTRACTS 4.1), worker id from D-033
+    type: frame_capture
+    command: python3 FrameCapture_Basler.py
+    working_directory: ~/INSIGHTZZ/code/workers/frame_capture_basler
+    env:
+      BASLER_CONFIG: ~/INSIGHTZZ/config/BASLER_CONFIG1.xml
+    stop_signal: SIGTERM
+    stop_timeout_seconds: 15
+    restart:
+      max_retries: 30
+      retry_delay_seconds: 2
+      reset_after_seconds: 300
+    health:
+      type: file_activity
+      path: ~/INSIGHTZZ/data/frames/CAM1/live/IMG_1.jpg
+      max_age_seconds: 60
+      startup_grace_seconds: 30  # camera open + settings take a few seconds
+
+  - id: frame_capture_cam2       # CAM2 = RIGHT
+    type: frame_capture
+    command: python3 FrameCapture_Basler.py
+    working_directory: ~/INSIGHTZZ/code/workers/frame_capture_basler
+    env:
+      BASLER_CONFIG: ~/INSIGHTZZ/config/BASLER_CONFIG2.xml
+    stop_signal: SIGTERM
+    stop_timeout_seconds: 15
+    restart:
+      max_retries: 30
+      retry_delay_seconds: 2
+      reset_after_seconds: 300
+    health:
+      type: file_activity
+      path: ~/INSIGHTZZ/data/frames/CAM2/live/IMG_1.jpg
+      max_age_seconds: 60
+      startup_grace_seconds: 30

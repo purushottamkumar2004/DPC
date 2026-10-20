@@ -111,6 +111,13 @@ def _build(cls, data, where):
     return cls(**data)
 
 
+def _expand_home(value: str) -> str:
+    """'~' or '~/...' in an env value becomes the home folder, like every path in this file.
+    A worker gets the value as-is from its environment and would otherwise see a literal '~'
+    (e.g. BASLER_CONFIG: ~/INSIGHTZZ/config/BASLER_CONFIG1.xml). Nothing else is expanded."""
+    return os.path.expanduser(value) if value == "~" or value.startswith("~/") else value
+
+
 def _require_positive_number(value, where):
     # bool is an int in Python: "interval_s: true" must not pass as 1
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
@@ -282,5 +289,5 @@ class ConfigurationManager:
         worker.start_after = list(dict.fromkeys(deps))   # drop duplicates, keep order
 
         worker.working_directory = self._abs(worker.working_directory) or self.base_dir
-        worker.env = {str(k): str(v) for k, v in (worker.env or {}).items()}
+        worker.env = {str(k): _expand_home(str(v)) for k, v in (worker.env or {}).items()}
         return worker
