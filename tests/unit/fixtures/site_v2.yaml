@@ -1,0 +1,116 @@
+# Schema v2 site.yaml (the example from before D-055), kept to test the v2 -> v3 message and converter.
+# DPC site config, schema v2 (CONTRACTS sections 7 and 9, D-047, D-048).
+# Copy to ~/INSIGHTZZ/config/site.yaml, replace every value marked EDIT, then:
+#     chmod 600 ~/INSIGHTZZ/config/site.yaml        # it holds secrets; the loader refuses it otherwise
+#     cd ~/INSIGHTZZ/code && python3 -m common.config.site_config ~/INSIGHTZZ/config/site.yaml
+# Never commit the real file. To share it (chat, mirror, UI), use only the redacted copy:
+#     python3 -m common.config.site_config ~/INSIGHTZZ/config/site.yaml --redacted
+# Never write a secret in a comment: comments are copied as they are.
+# Unknown keys are errors. Quote serials and secrets. Relative paths are relative to paths.root.
+# All values below are placeholders, not a real site.
+
+schema_version: 2
+
+site:
+  id: example_site                # EDIT; lowercase letters, digits, - or _
+  name: "Example DPC"             # EDIT
+
+paths:
+  root: ~/INSIGHTZZ
+
+logging:
+  backup_count: 5                 # days of rotated logs kept
+
+db:
+  host: localhost
+  port: 3306
+  name: example_db                # EDIT
+  health_table: health_status     # new sites: health_status; existing sites set their own table
+  user: dpc_app                   # EDIT; secret; root works but prints a warning (D-050); a dedicated user is recommended
+  password: "CHANGE_ME"           # EDIT; secret
+
+mqtt:
+  host: localhost
+  port: 1883
+  user: ""                        # only when the broker has a login: give both user and password
+  password: ""                    # secret
+
+cameras:                          # 1 or 2 cameras; CAM1 = LEFT, CAM2 = RIGHT
+  - id: CAM1
+    side: LEFT
+    driver: basler                # basler | flir
+    serial: "00000001"            # EDIT; quoted
+    fps: 4.0
+    exposure_us: 1500
+    rotate: 0                     # 0 | 90 | 180 | 270; must match the model's orientation
+  - id: CAM2
+    side: RIGHT
+    driver: basler
+    serial: "00000002"            # EDIT
+    fps: 4.0
+    exposure_us: 2000
+    rotate: 0
+  # A FLIR camera needs a flir block (and only a FLIR camera may have one):
+  # - id: CAM2
+  #   side: RIGHT
+  #   driver: flir
+  #   serial: "00000002"
+  #   fps: 4.0
+  #   exposure_us: 12000
+  #   rotate: 0
+  #   flir:
+  #     interface: "GEV Interface 1"
+  #     throughput_bps: 19662239
+
+machine:
+  total_wheel_count: 190          # EDIT; wheel positions per revolution
+  # expected_cycle_total: 188     # optional until the inspection reads it (D-023)
+  # wheel_stand_required_counts: {34: 3}   # optional; wheel number -> required wheel_stand count
+  object_sizes:                   # pixels; one entry per configured side; EDIT for the site's model
+    LEFT:  {wheel_w: 530, wheel_h: 495, bucket_clip_w: 300, chain_w: 880, half_bucket_clip_w: 150}
+    RIGHT: {wheel_w: 530, wheel_h: 495, bucket_clip_w: 300, chain_w: 880, half_bucket_clip_w: 150}
+
+model:
+  dir: data/models/example_model  # EDIT; folder with weights and class json
+  weights: model_final.pth        # file inside dir
+  class_json: classes.json        # EDIT; file inside dir
+  detectron_yaml: data/models/example_model/mask_rcnn.yaml   # EDIT
+  threshold: 0.5
+  classes: [wheel, half_wheel, wheel_stand, plate, bucket_clip, half_bucket_clip, nut_bolt]   # EDIT; per model
+  # detect_labels: [wheel, plate, bucket_clip, nut_bolt]   # default = classes
+
+plc:
+  type: modbus_tcp
+  ip: 192.0.2.10                  # EDIT; one PLC address per site
+  port: 502
+  timeout_s: 3
+  light_register: 4109
+  cleaning_register: 4106
+  conveyor_status_register: 4098
+  cleaning_pulse_seconds: 10
+  # legacy_db_numbers: {write: 12, read: 13}   # only for the legacy algorithm XML
+
+mail:
+  sender: graph                   # graph | smtp
+  project_name: "Example_dpc"     # EDIT; used in mail subjects
+  report_dir: data/reports
+  recipients: ["alerts@example.com"]   # EDIT
+  cc: []
+  sender_address: "reports@example.com"     # EDIT; the mailbox mails are sent from
+  disk_report_to: ["alerts@example.com"]    # default = recipients; daily disk report
+  graph:                          # required with sender: graph, not allowed otherwise
+    tenant_id: "CHANGE_ME"        # EDIT; secret
+    client_id: "CHANGE_ME"        # EDIT; secret
+    client_secret: "CHANGE_ME"    # EDIT; secret
+  # smtp:                         # required with sender: smtp (remove graph then)
+  #   host: smtp.gmail.com
+  #   port: 587
+  #   password: "CHANGE_ME"       # secret
+
+retention:                        # all optional; these are the defaults
+  raw_image_hours: 24
+  cleanup_interval_seconds: 10
+  repeated: {days: 20, items: 200}
+  plate_days: 10
+  defective: {days: 10, items: 200}
+  disk_percent: {delete: 75, raw_delete: 85, mail: 90, inference_delete: 95}   # strictly increasing

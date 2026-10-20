@@ -23,6 +23,9 @@ import yaml
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, REPO_ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from model_fixture import make_package  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("dpc_check", os.path.join(REPO_ROOT, "scripts", "dpc_check.py"))
 dc = importlib.util.module_from_spec(_spec)
@@ -70,6 +73,8 @@ class Site(unittest.TestCase):
         self.cfg = dc.load_site_config(cfg_path)
         for d in dc.expected_dirs(self.cfg):
             os.makedirs(d, exist_ok=True)
+        self.models_root = os.path.join(self.root, "data", "models")
+        make_package(self.models_root, "example_model", "2026.10.1")
 
         self.pymysql = fake_pymysql()
         self.patches = [
@@ -112,15 +117,15 @@ class AllGood(Site):
     def test_everything_passes(self):                                # done when (a)
         results, code = self.run_all()
         self.assertEqual(code, dc.EXIT_PASS, results)
-        self.assertEqual([r.status for r in results.values()], [dc.PASS] * 7)
+        self.assertEqual([r.status for r in results.values()], [dc.PASS] * 8)
 
     def test_one_line_per_check_and_a_summary(self):
         code, out = self.run_cli()
         lines = out.splitlines()
         self.assertEqual(code, 0)
-        self.assertEqual(len(lines), 8)
-        self.assertEqual([line.split()[1] for line in lines[:7]],
-                         ["site.yaml", "git", "layout", "disk", "cameras", "database", "mqtt"])
+        self.assertEqual(len(lines), 9)
+        self.assertEqual([line.split()[1] for line in lines[:8]],
+                         ["site.yaml", "git", "layout", "disk", "cameras", "database", "mqtt", "model"])
         self.assertTrue(lines[-1].startswith("RESULT PASS (exit 0)"))
 
     def test_db_login_uses_site_yaml_values(self):
@@ -251,13 +256,43 @@ class Warnings(Site):
         self.assertIn("timed out", results["mqtt"].detail)
 
     def test_flir_camera_is_not_checked(self):
-        self.data["cameras"][1]["driver"] = "flir"
-        self.data["cameras"][1]["flir"] = {"interface": "GEV Interface 1", "throughput_bps": 1}
+        self.data["capture"]["cameras"][1]["driver"] = "flir"
+        self.data["capture"]["cameras"][1]["flir"] = {"interface": "GEV Interface 1", "throughput_bps": 1}
         self.write_config()
         results, code = self.run_all(serials=["00000001"])
         self.assertEqual(results["cameras"].status, dc.WARN)
         self.assertIn("CAM2 (FLIR) not checked", results["cameras"].detail)
         self.assertEqual(code, dc.EXIT_WARN)
+
+
+class ModelCheck(Site):
+    def test_not_installed_is_a_warning(self):
+        shutil.rmtree(os.path.join(self.models_root, "example_model"))
+        results, code = self.run_all()
+        self.assertEqual(results["model"].status, dc.WARN)
+        self.assertIn("example_model/2026.10.1 not installed", results["model"].detail)
+        self.assertEqual(code, dc.EXIT_WARN)
+
+    def test_wrong_checksum_fails(self):
+        with open(os.path.join(self.models_root, "example_model", "2026.10.1", "model_final.pth"), "ab") as f:
+            f.write(b"x")
+        results, code = self.run_all()
+        self.assertEqual(results["model"].status, dc.FAIL)
+        self.assertIn("model_final.pth: checksum does not match", results["model"].detail)
+        self.assertEqual(code, dc.EXIT_FAIL)
+
+    def test_current_differs_from_site_yaml_is_a_warning(self):
+        make_package(self.models_root, "example_model", "2026.11.1")       # moves current
+        results, code = self.run_all()
+        self.assertEqual(results["model"].status, dc.WARN)
+        self.assertIn("current is 2026.11.1, site.yaml names 2026.10.1", results["model"].detail)
+        self.assertEqual(code, dc.EXIT_WARN)
+
+    def test_no_current_pointer_uses_site_yaml_version(self):
+        os.remove(os.path.join(self.models_root, "example_model", "current"))
+        results, _ = self.run_all()
+        self.assertEqual(results["model"].status, dc.PASS)
+        self.assertIn("no current pointer yet", results["model"].detail)
 
 
 class NeverPrintsASecret(Site):                                      # done when (d)
