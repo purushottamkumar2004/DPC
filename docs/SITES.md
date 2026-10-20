@@ -16,7 +16,7 @@ PLC: type Modbus TCP | S7, ip <..>, light <..>, cleaning <..>, conveyor status <
 MODEL: folder <..>, yaml <..>, threshold <..>, classes <..>
 MAIL: sender SMTP|Graph, recipients managed in <..>
 WHEELS/REV: <n>   wheel_stand counts: <..>   object sizes: <..>   disk thresholds: <..>
-QUIRKS: <..>; both cameras share one Ethernet port on the server: if that port is down, both cameras stop (check it first when both fail together); MQTT broker: mosquitto on localhost, no login
+QUIRKS: <..>; both cameras share one Ethernet port on the server: if that port is down, both cameras stop (check it first when both fail together); MQTT broker: mosquitto on localhost, no login; LEFT and RIGHT use the same model (same weights and class list, confirmed 2026-10-21): one inspection.model per site fits
 ```
 
 ## tadipatri (new machine)
