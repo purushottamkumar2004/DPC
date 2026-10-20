@@ -8,14 +8,18 @@ A model version is a folder:
         <config>.yaml    exactly one (Detectron config)
         ready            optional marker written by the transfer service after verifying (D-057)
     <root>/data/models/<name>/current  -> <version>   (symlink; the running version)
+    <root>/data/models/<name>/pinned                  (optional; holds the pinned version)
+`current` and `pinned` are written only by the Supervisor (D-060, one-writer rule D-054);
+the packaging tool sets `current` only when installing a model for the first time.
 
 Public API
     verify_package(version_dir, name=None, version=None) -> ModelPackage   (checks every sha256)
     read_manifest(version_dir) -> Manifest                                  (no checksums)
     read_current(model_root) -> Optional[str]      version `current` points to, None if not set
+    read_pinned(model_root) -> Optional[str]       pinned version, None if not pinned
     set_current(model_root, version)               atomic switch of `current` (for the Supervisor)
-    running_version(config) -> str                 `current` if set, else inspection.model.version
-    load_model_package(config) -> ModelPackage     verified package of the running version
+    running_version(config) -> Optional[str]       the version `current` points to (D-060)
+    load_model_package(config) -> ModelPackage     verified package `current` points to
     ModelPackageError (.problems)
 
 Why so strict: a half-copied or corrupted weights file still loads in Detectron2 and gives
@@ -33,6 +37,7 @@ MANIFEST_FILE = "manifest.json"
 CLASSES_FILE = "classes.json"
 READY_FILE = "ready"
 CURRENT_POINTER = "current"
+PINNED_MARKER = "pinned"
 WEIGHTS_EXTENSIONS = (".pth",)
 CONFIG_EXTENSIONS = (".yaml", ".yml")
 
@@ -251,11 +256,26 @@ def read_current(model_root: str) -> Optional[str]:
     return version
 
 
+def read_pinned(model_root: str) -> Optional[str]:
+    """The version `<model_root>/pinned` holds, or None when not pinned. The Supervisor writes it
+    (`model pin <version>`, D-060); while it exists, no automatic switch happens."""
+    marker = os.path.join(model_root, PINNED_MARKER)
+    if not os.path.exists(marker):
+        return None
+    if not os.path.isfile(marker):
+        raise ModelPackageError(marker, ["must be a file holding the pinned version"])
+    with open(marker, "r", encoding="utf-8") as f:
+        version = f.read().strip()
+    if not _PART_RE.match(version) or version in (CURRENT_POINTER, PINNED_MARKER):
+        raise ModelPackageError(marker, [f"holds {version!r}, which is not a version name"])
+    return version
+
+
 def set_current(model_root: str, version: str) -> None:
     """Point `current` at `version` atomically (new symlink, then rename over the old one),
     so a reader sees either the old or the new version, never nothing. For the Supervisor's
     model switch (D-056); verify the package first."""
-    if not _PART_RE.match(version) or version == CURRENT_POINTER:
+    if not _PART_RE.match(version) or version in (CURRENT_POINTER, PINNED_MARKER):
         raise ModelPackageError(model_root, [f"{version!r} is not a version name"])
     if not os.path.isdir(os.path.join(model_root, version)):
         raise ModelPackageError(model_root, [f"version folder {version} not found"])
@@ -271,16 +291,18 @@ def set_current(model_root: str, version: str) -> None:
 # From a loaded site.yaml
 # ======================================================================
 
-def running_version(config) -> str:
-    """`current` when it is set (the Supervisor moves it on a switch), else the version
-    site.yaml names. site.yaml is never edited by a program (D-054), so after a switch
-    the two can differ; dpc-check reports that."""
-    model = config.inspection.model
-    return read_current(model.root) or model.version
+def running_version(config) -> Optional[str]:
+    """The version `current` points to; None when no version is installed yet (D-060:
+    site.yaml names only the model, the Supervisor manages the version)."""
+    return read_current(config.inspection.model.root)
 
 
 def load_model_package(config) -> ModelPackage:
-    """The verified package inspection should run. Raises ModelPackageError."""
+    """The verified package `current` points to. Raises ModelPackageError, also when no
+    version is installed yet."""
     model = config.inspection.model
-    version = running_version(config)
+    version = read_current(model.root)
+    if version is None:
+        raise ModelPackageError(model.root, [f"no {CURRENT_POINTER} pointer: no version of {model.name} "
+                                             f"is installed (scripts/make_model_package.py, or the Supervisor)"])
     return verify_package(os.path.join(model.root, version), name=model.name)

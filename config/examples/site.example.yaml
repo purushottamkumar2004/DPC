@@ -62,9 +62,8 @@ capture:
 
 inspection:
   log: {backup_count: 5}
-  model:                          # data/models/<name>/<version>/; files, classes, label map come from the package
-    name: example_model           # EDIT
-    version: "2026.10.1"          # EDIT; quoted
+  model:                          # which model only; files, classes and label map come from the package
+    name: example_model           # EDIT; runs data/models/<name>/current, version managed by the Supervisor (D-060)
   threshold: 0.5
   machine:
     total_wheel_count: 190        # EDIT; wheel positions per revolution
@@ -109,9 +108,6 @@ cleanup:                          # all optional; these are the defaults
 
 transfer:                         # optional: leave out if this site runs no transfer service (D-057)
   upload: {weekday: sunday, chunk_mb: 500, remote_folder: "DPC/data/<site.id>"}   # optional weekly upload
+  models_folder: "DPC/models"     # OneDrive folder with <name>/<version>/ (default)
   log: {backup_count: 5}
-
-models:                           # optional; these are the defaults
-  remote_folder: "DPC/models"     # OneDrive folder with <name>/<version>/
-  check_interval_hours: 6
-  auto_update: "off"              # off | download | install (D-056); quote it ("off" unquoted reads as false)
+# Model updates (auto_update, check interval, pin) are Supervisor settings, not here (D-060).

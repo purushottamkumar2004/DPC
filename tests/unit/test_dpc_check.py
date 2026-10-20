@@ -265,34 +265,67 @@ class Warnings(Site):
         self.assertEqual(code, dc.EXIT_WARN)
 
 
-class ModelCheck(Site):
-    def test_not_installed_is_a_warning(self):
-        shutil.rmtree(os.path.join(self.models_root, "example_model"))
+class ModelCheck(Site):                                              # 6d (D-060)
+    def model_root(self):
+        return os.path.join(self.models_root, "example_model")
+
+    def test_running_version_not_pinned(self):
+        results, _ = self.run_all()
+        self.assertEqual(results["model"].status, dc.PASS)
+        self.assertIn("running example_model/2026.10.1", results["model"].detail)
+        self.assertIn("not pinned", results["model"].detail)
+
+    def test_pinned_to_the_running_version(self):
+        with open(os.path.join(self.model_root(), "pinned"), "w") as f:
+            f.write("2026.10.1\n")
+        results, code = self.run_all()
+        self.assertEqual(results["model"].status, dc.PASS)
+        self.assertTrue(results["model"].detail.endswith("; pinned"))
+        self.assertEqual(code, dc.EXIT_PASS)
+
+    def test_pinned_to_another_version_is_a_warning(self):
+        make_package(self.models_root, "example_model", "2026.11.1")      # moves current
+        with open(os.path.join(self.model_root(), "pinned"), "w") as f:
+            f.write("2026.10.1")
         results, code = self.run_all()
         self.assertEqual(results["model"].status, dc.WARN)
-        self.assertIn("example_model/2026.10.1 not installed", results["model"].detail)
+        self.assertIn("running example_model/2026.11.1", results["model"].detail)
+        self.assertIn("pinned to 2026.10.1, which is not the running version", results["model"].detail)
         self.assertEqual(code, dc.EXIT_WARN)
 
+    def test_no_version_installed_is_a_warning(self):
+        shutil.rmtree(self.model_root())
+        results, code = self.run_all()
+        self.assertEqual(results["model"].status, dc.WARN)
+        self.assertIn("example_model: no version installed", results["model"].detail)
+        self.assertIn("make_model_package.py", results["model"].detail)
+        self.assertEqual(code, dc.EXIT_WARN)
+
+    def test_installed_but_no_current_is_a_warning(self):
+        os.remove(os.path.join(self.model_root(), "current"))
+        results, _ = self.run_all()
+        self.assertEqual(results["model"].status, dc.WARN)
+
+    def test_current_to_missing_folder_fails(self):
+        os.remove(os.path.join(self.model_root(), "current"))
+        os.symlink("9.9.9", os.path.join(self.model_root(), "current"))
+        results, code = self.run_all()
+        self.assertEqual(results["model"].status, dc.FAIL)
+        self.assertIn("current points to a missing version folder", results["model"].detail)
+
     def test_wrong_checksum_fails(self):
-        with open(os.path.join(self.models_root, "example_model", "2026.10.1", "model_final.pth"), "ab") as f:
+        with open(os.path.join(self.model_root(), "2026.10.1", "model_final.pth"), "ab") as f:
             f.write(b"x")
         results, code = self.run_all()
         self.assertEqual(results["model"].status, dc.FAIL)
         self.assertIn("model_final.pth: checksum does not match", results["model"].detail)
         self.assertEqual(code, dc.EXIT_FAIL)
 
-    def test_current_differs_from_site_yaml_is_a_warning(self):
-        make_package(self.models_root, "example_model", "2026.11.1")       # moves current
-        results, code = self.run_all()
-        self.assertEqual(results["model"].status, dc.WARN)
-        self.assertIn("current is 2026.11.1, site.yaml names 2026.10.1", results["model"].detail)
-        self.assertEqual(code, dc.EXIT_WARN)
-
-    def test_no_current_pointer_uses_site_yaml_version(self):
-        os.remove(os.path.join(self.models_root, "example_model", "current"))
+    def test_bad_pinned_marker_fails(self):
+        os.makedirs(os.path.join(self.model_root(), "pinned"))
         results, _ = self.run_all()
-        self.assertEqual(results["model"].status, dc.PASS)
-        self.assertIn("no current pointer yet", results["model"].detail)
+        self.assertEqual(results["model"].status, dc.FAIL)
+        self.assertIn("pinned", results["model"].detail)
 
 
 class NeverPrintsASecret(Site):                                      # done when (d)

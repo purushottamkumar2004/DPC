@@ -51,12 +51,12 @@ class Convert(unittest.TestCase):
         return code, out.getvalue()
 
     def test_converts_and_checks(self):
-        code, out = self.run_main(self.source, "--model-version", "2026.10.1")
+        code, out = self.run_main(self.source)
         self.assertEqual(code, 0, out)
         target = os.path.join(self.dir, "site.v3.yaml")
         self.assertEqual(stat.S_IMODE(os.stat(target).st_mode), 0o600)
         cfg = sc.load_site_config(target)
-        self.assertEqual((cfg.inspection.model.name, cfg.inspection.model.version), ("example_model", "2026.10.1"))
+        self.assertEqual(cfg.inspection.model.name, "example_model")
         self.assertEqual(cfg.db.password, SECRET)
         self.assertIn("cameras -> capture.cameras", out)
         self.assertIn("model.classes -> removed (now in the model package)", out)
@@ -66,18 +66,18 @@ class Convert(unittest.TestCase):
             self.assertEqual(f.read(), self.original)             # original untouched
 
     def test_refuses_existing_output_and_non_v2(self):
-        self.run_main(self.source, "--model-version", "1")
-        code, out = self.run_main(self.source, "--model-version", "1")
+        self.run_main(self.source)
+        code, out = self.run_main(self.source)
         self.assertEqual(code, 1)
         self.assertIn("already exists", out)
         v3 = os.path.join(self.dir, "site.v3.yaml")
-        code, out = self.run_main(v3, "--model-version", "1", "--output", os.path.join(self.dir, "x.yaml"))
+        code, out = self.run_main(v3, "--output", os.path.join(self.dir, "x.yaml"))
         self.assertEqual(code, 1)
         self.assertIn("not a v2 file", out)
 
     def test_refuses_world_readable_input(self):
         os.chmod(self.source, 0o644)
-        code, out = self.run_main(self.source, "--model-version", "1")
+        code, out = self.run_main(self.source)
         self.assertEqual(code, 1)
         self.assertIn("chmod 600", out)
 
@@ -87,7 +87,7 @@ class Convert(unittest.TestCase):
         data["mystery"] = 1
         with open(self.source, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f)
-        code, out = self.run_main(self.source, "--model-version", "1")
+        code, out = self.run_main(self.source)
         self.assertEqual(code, 1)
         self.assertIn("mystery: unknown key", out)
         self.assertNotIn(SECRET, out)

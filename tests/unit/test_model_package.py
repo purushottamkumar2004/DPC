@@ -163,31 +163,59 @@ class CurrentPointer(_Models):
             mp.read_current(root)
 
 
-class FromSiteConfig(_Models):
+class Pinned(_Models):
+    def test_read_pinned(self):
+        make_package(self.models, NAME, VERSION)
+        root = os.path.join(self.models, NAME)
+        self.assertIsNone(mp.read_pinned(root))
+        with open(os.path.join(root, "pinned"), "w") as f:
+            f.write(VERSION + "\n")
+        self.assertEqual(mp.read_pinned(root), VERSION)
+        with open(os.path.join(root, "pinned"), "w") as f:
+            f.write("../x")
+        with self.assertRaises(mp.ModelPackageError):
+            mp.read_pinned(root)
+
+    def test_pinned_is_not_a_version_name(self):
+        make_package(self.models, NAME, VERSION)
+        with self.assertRaises(mp.ModelPackageError):
+            mp.set_current(os.path.join(self.models, NAME), "pinned")
+
+
+class FromSiteConfig(_Models):                                       # 6d: current only (D-060)
     def config(self):
         root = os.path.join(self.models, "INSIGHTZZ")
         with open(os.path.join(REPO_ROOT, "config", "examples", "site.example.yaml"), encoding="utf-8") as f:
             data = yaml.safe_load(f)
         data["paths"]["root"] = root
-        data["inspection"]["model"] = {"name": NAME, "version": VERSION}
+        data["inspection"]["model"] = {"name": NAME}
         path = os.path.join(self.models, "site.yaml")
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f)
         os.chmod(path, 0o600)
-        cfg = sc.load_site_config(path)
-        return cfg, os.path.join(root, "data", "models")
+        return sc.load_site_config(path), os.path.join(root, "data", "models")
 
-    def test_running_version_prefers_current(self):
+    def test_follows_current(self):
         cfg, models = self.config()
-        make_package(models, NAME, VERSION, set_current=False)
+        make_package(models, NAME, VERSION)
         self.assertEqual(mp.running_version(cfg), VERSION)
         self.assertEqual(mp.load_model_package(cfg).version, VERSION)
-        make_package(models, NAME, "2026.11.1")
+        make_package(models, NAME, "2026.11.1")                   # moves current
         self.assertEqual(mp.running_version(cfg), "2026.11.1")
         self.assertEqual(mp.load_model_package(cfg).version, "2026.11.1")
 
-    def test_missing_package(self):
-        cfg, _ = self.config()
+    def test_no_current_means_nothing_runs(self):
+        cfg, models = self.config()
+        make_package(models, NAME, VERSION, set_current=False)    # installed but not current
+        self.assertIsNone(mp.running_version(cfg))
+        with self.assertRaises(mp.ModelPackageError) as ctx:
+            mp.load_model_package(cfg)
+        self.assertIn("no current pointer", ctx.exception.problems[0])
+
+    def test_current_to_missing_folder(self):
+        cfg, models = self.config()
+        os.makedirs(os.path.join(models, NAME))
+        os.symlink("9.9.9", os.path.join(models, NAME, "current"))
         with self.assertRaises(mp.ModelPackageError) as ctx:
             mp.load_model_package(cfg)
         self.assertEqual(ctx.exception.problems, ["version folder not found"])

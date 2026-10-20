@@ -97,13 +97,15 @@ class ExampleLoads(_TempDirTest):
         self.assertEqual([c.id for c in cfg.capture.cameras], ["CAM1", "CAM2"])
         self.assertIs(cfg.cameras, cfg.capture.cameras)           # convenience for older callers
         self.assertEqual(cfg.camera_for_side("RIGHT").serial, "00000002")
-        self.assertEqual((cfg.inspection.model.name, cfg.inspection.model.version), ("example_model", "2026.10.1"))
+        self.assertEqual(cfg.inspection.model.name, "example_model")
+        self.assertFalse(hasattr(cfg.inspection.model, "version"))           # D-060
         self.assertEqual(cfg.inspection.sides["LEFT"].object_sizes.wheel_w, 530)
         self.assertEqual(cfg.inspection.auto_roi.mode, "observe")
         self.assertEqual(cfg.mail.sender, "graph")
         self.assertIsNotNone(cfg.graph)
         self.assertEqual(cfg.transfer.upload.remote_folder, "DPC/data/example_site")   # <site.id> replaced
-        self.assertEqual(cfg.models.auto_update, "off")
+        self.assertEqual(cfg.transfer.models_folder, "DPC/models")
+        self.assertFalse(hasattr(cfg, "models"))                              # D-060
         for section in (cfg.capture, cfg.inspection, cfg.plc, cfg.mail, cfg.cleanup, cfg.transfer):
             self.assertEqual(section.log.backup_count, 5)
 
@@ -116,7 +118,8 @@ class ExampleLoads(_TempDirTest):
         data = yaml.safe_load(block.replace("<secret>", "x"))
         data["paths"]["root"] = self.root
         cfg = sc.load_site_config(self.write_yaml(data))
-        self.assertEqual(cfg.models.auto_update, "off")              # unquoted off read as false
+        self.assertEqual(cfg.inspection.model.name, "dpc_maskrcnn")
+        self.assertEqual(cfg.transfer.models_folder, "DPC/models")
         self.assertEqual(cfg.transfer.upload.remote_folder, "DPC/data/tadipatri")
         self.assertEqual(cfg.warnings, ("db.user is root; a dedicated user with limited rights "
                                         "is recommended (D-030)",))
@@ -125,11 +128,10 @@ class ExampleLoads(_TempDirTest):
         cfg = sc.load_site_config(self.write_yaml(self.config_data()))
         model_root = os.path.join(self.root, "data", "models", "example_model")
         self.assertEqual(cfg.inspection.model.root, model_root)
-        self.assertEqual(cfg.inspection.model.dir, os.path.join(model_root, "2026.10.1"))
 
     def test_defaults(self):
         data = self.config_data()
-        for key in ("mqtt", "cleanup", "transfer", "models"):
+        for key in ("mqtt", "cleanup", "transfer"):
             del data[key]
         for program in ("capture", "inspection", "plc", "mail"):
             del data[program]["log"]
@@ -138,8 +140,6 @@ class ExampleLoads(_TempDirTest):
             del data["mail"][key]
         cfg = sc.load_site_config(self.write_yaml(data))
         self.assertIsNone(cfg.transfer)
-        self.assertEqual((cfg.models.remote_folder, cfg.models.check_interval_hours, cfg.models.auto_update),
-                         ("DPC/models", 6, "off"))
         self.assertEqual((cfg.inspection.auto_roi.mode, cfg.inspection.auto_roi.learn_images), ("observe", 30))
         self.assertEqual(cfg.cleanup.interval_seconds, 10)
         self.assertEqual(cfg.cleanup.disk_percent["delete"], 75)
@@ -156,6 +156,7 @@ class ExampleLoads(_TempDirTest):
         data["transfer"] = {"log": {"backup_count": 3}}
         cfg = sc.load_site_config(self.write_yaml(data))
         self.assertIsNone(cfg.transfer.upload)
+        self.assertEqual(cfg.transfer.models_folder, "DPC/models")         # default
 
 
 # ======================================================================
@@ -185,7 +186,7 @@ class V2Files(_TempDirTest):
             "mail.graph.client_secret -> graph.client_secret",
             "retention.cleanup_interval_seconds -> cleanup.interval_seconds",
             "retention.disk_percent -> cleanup.disk_percent",
-            "inspection.model -> add {name, version}",
+            "inspection.model -> add {name} of the model package",
         ]
         text = "\n".join(problems)
         for line in expected:
@@ -210,8 +211,9 @@ class V2Files(_TempDirTest):
         with open(V2_FIXTURE, encoding="utf-8") as f:
             v2 = yaml.safe_load(f)
         v2["paths"]["root"] = self.root
-        v3 = sc.convert_v2_to_v3(v2, "example_model", "2026.10.1")
+        v3 = sc.convert_v2_to_v3(v2, "example_model")
         cfg = sc.load_site_config(self.write_yaml(v3))
+        self.assertEqual(cfg.inspection.model.name, "example_model")
         self.assertEqual(cfg.capture.cameras[0].serial, "00000001")
         self.assertEqual(cfg.inspection.threshold, 0.5)
         self.assertEqual(cfg.inspection.sides["RIGHT"].object_sizes.chain_w, 880)
@@ -224,7 +226,7 @@ class V2Files(_TempDirTest):
             v2 = yaml.safe_load(f)
         v2["paths"]["root"] = self.root
         v2["extra_thing"] = 1
-        problems = self.problems_for(sc.convert_v2_to_v3(v2, "m", "1"))
+        problems = self.problems_for(sc.convert_v2_to_v3(v2, "m"))
         self.assertEqual(problems, ["extra_thing: unknown key"])
 
 
@@ -283,20 +285,41 @@ class Grouping(_TempDirTest):
         data["inspection"]["model"]["classes"] = ["wheel"]
         self.assertEqual(self.problems_for(data), ["inspection.model.classes: unknown key"])
 
-    def test_model_name_and_version_are_folder_names(self):
+    def test_model_name_is_a_folder_name(self):
         data = self.config_data()
-        data["inspection"]["model"]["version"] = "../etc"
         data["inspection"]["model"]["name"] = "a/b"
-        problems = self.problems_for(data)
-        self.assertProblem(problems, r"^inspection\.model\.version: use letters")
-        self.assertProblem(problems, r"^inspection\.model\.name: use letters")
-        data["inspection"]["model"].update(name="m", version="current")
-        self.assertProblem(self.problems_for(data), r"^inspection\.model\.version: 'current' is the pointer")
+        self.assertProblem(self.problems_for(data), r"^inspection\.model\.name: use letters")
 
-    def test_unquoted_numeric_version_must_be_quoted(self):
+
+class MovedToSupervisor(_TempDirTest):                                # 6d done when (D-060)
+    def test_model_version_moved(self):
         data = self.config_data()
-        data["inspection"]["model"]["version"] = 2026.1
-        self.assertProblem(self.problems_for(data), r"^inspection\.model\.version: must be a string \(quote it\)")
+        data["inspection"]["model"]["version"] = "2026.10.1"
+        self.assertEqual(self.problems_for(data), [
+            "inspection.model.version: moved to the Supervisor (D-060): the running version is "
+            "data/models/<name>/current, managed with the Supervisor's model commands"])
+
+    def test_models_section_moved(self):
+        data = self.config_data()
+        data["models"] = {"remote_folder": "DPC/models", "check_interval_hours": 6, "auto_update": "off"}
+        self.assertEqual(self.problems_for(data), [
+            "models: moved to the Supervisor config (workers.yaml section models, D-060); "
+            "the OneDrive folder is transfer.models_folder"])
+
+    def test_both_at_once_and_any_value(self):
+        data = self.config_data()
+        data["inspection"]["model"]["version"] = None          # even an empty key is reported
+        data["models"] = None
+        problems = self.problems_for(data)
+        self.assertEqual(len(problems), 2)
+        self.assertTrue(all("D-060" in p for p in problems))
+
+    def test_models_folder(self):
+        data = self.config_data()
+        data["transfer"]["models_folder"] = "Shared/DPC/models"
+        self.assertEqual(sc.load_site_config(self.write_yaml(data)).transfer.models_folder, "Shared/DPC/models")
+        data["transfer"]["models_folder"] = 5
+        self.assertProblem(self.problems_for(data), r"^transfer\.models_folder: must be a string")
 
     def test_sides_must_match_cameras(self):
         data = self.config_data()
@@ -313,24 +336,14 @@ class Grouping(_TempDirTest):
         del data["inspection"]["sides"]["RIGHT"]
         self.assertEqual(len(sc.load_site_config(self.write_yaml(data)).cameras), 1)
 
-    def test_auto_roi_and_auto_update_choices(self):
+    def test_auto_roi_choices(self):
         data = self.config_data()
         data["inspection"]["auto_roi"]["mode"] = False            # unquoted off in YAML
-        data["models"]["auto_update"] = "install"
-        cfg = sc.load_site_config(self.write_yaml(data))
-        self.assertEqual((cfg.inspection.auto_roi.mode, cfg.models.auto_update), ("off", "install"))
+        self.assertEqual(sc.load_site_config(self.write_yaml(data)).inspection.auto_roi.mode, "off")
         data["inspection"]["auto_roi"]["mode"] = "learn"
-        data["models"]["auto_update"] = True                      # "on" is not a choice
-        problems = self.problems_for(data)
-        self.assertProblem(problems, r"^inspection\.auto_roi\.mode: must be one of off, observe, filter")
-        self.assertProblem(problems, r"^models\.auto_update: must be a string")
-
-    def test_auto_update_needs_transfer(self):
-        data = self.config_data()
-        del data["transfer"]
-        data["models"]["auto_update"] = "download"
-        self.assertEqual(self.problems_for(data), [
-            "models: auto_update download needs a transfer section: the transfer service downloads models (D-057)"])
+        self.assertProblem(self.problems_for(data), r"^inspection\.auto_roi\.mode: must be one of off, observe, filter")
+        data["inspection"]["auto_roi"]["mode"] = True             # "on" is not a choice
+        self.assertProblem(self.problems_for(data), r"^inspection\.auto_roi\.mode: must be a string")
 
     def test_transfer_upload_values(self):
         data = self.config_data()
