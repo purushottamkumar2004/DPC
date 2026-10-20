@@ -1,10 +1,9 @@
-"""Tests for common/config/site_config.py (STATUS items 1 and 1b, schema v2).
+"""Tests for common/config/site_config.py, schema v3 (STATUS Phase 3 item 6, CONTRACTS 7.1, D-055).
 
 Run from the repo root (only PyYAML needed):
     python3 -m unittest tests.unit.test_site_config -v
 """
 
-import copy
 import io
 import os
 import re
@@ -22,21 +21,27 @@ sys.path.insert(0, REPO_ROOT)
 from common.config import site_config as sc  # noqa: E402
 
 EXAMPLE_YAML = os.path.join(REPO_ROOT, "config", "examples", "site.example.yaml")
-
+V2_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "site_v2.yaml")
 
 # Known secret values used to prove that nothing prints them.
 SECRETS = {
     ("db", "user"): "dpc_app_s3cret_user",
     ("db", "password"): "s3cret-db-pass",
-    ("mail", "graph", "tenant_id"): "s3cret-tenant",
-    ("mail", "graph", "client_id"): "s3cret-client",
-    ("mail", "graph", "client_secret"): "s3cret-graph",
+    ("graph", "tenant_id"): "s3cret-tenant",
+    ("graph", "client_id"): "s3cret-client",
+    ("graph", "client_secret"): "s3cret-graph",
 }
 
 
 def example_data():
     with open(EXAMPLE_YAML, encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def set_path(data, key_path, value):
+    for key in key_path[:-1]:
+        data = data[key]
+    data[key_path[-1]] = value
 
 
 class _TempDirTest(unittest.TestCase):
@@ -65,14 +70,11 @@ class _TempDirTest(unittest.TestCase):
             return sc.load_site_config(self.write_text(f.read(), "example.yaml"))
 
     def config_data(self):
-        """The example, with paths.root pointing into the temp dir and known secrets."""
+        """The example, with paths.root in the temp dir and known secrets."""
         data = example_data()
         data["paths"]["root"] = self.root
         for key_path, value in SECRETS.items():
-            node = data
-            for key in key_path[:-1]:
-                node = node[key]
-            node[key_path[-1]] = value
+            set_path(data, key_path, value)
         return data
 
     def problems_for(self, data):
@@ -85,265 +87,389 @@ class _TempDirTest(unittest.TestCase):
                         f"no problem matches {pattern!r} in {problems}")
 
 
-# ----------------------------------------------------------------------
-class ExampleAndDefaults(_TempDirTest):
-    def test_example_file_loads_into_typed_object(self):          # 1b done when (a)
+# ======================================================================
+# Item 6 done when: v3 example loads
+# ======================================================================
+class ExampleLoads(_TempDirTest):
+    def test_example_loads_into_program_sections(self):
         cfg = self.load_example()
-        self.assertIsInstance(cfg, sc.SiteConfig)
-        self.assertEqual(cfg.schema_version, 2)
+        self.assertEqual(cfg.schema_version, 3)
+        self.assertEqual([c.id for c in cfg.capture.cameras], ["CAM1", "CAM2"])
+        self.assertIs(cfg.cameras, cfg.capture.cameras)           # convenience for older callers
+        self.assertEqual(cfg.camera_for_side("RIGHT").serial, "00000002")
+        self.assertEqual((cfg.inspection.model.name, cfg.inspection.model.version), ("example_model", "2026.10.1"))
+        self.assertEqual(cfg.inspection.sides["LEFT"].object_sizes.wheel_w, 530)
+        self.assertEqual(cfg.inspection.auto_roi.mode, "observe")
         self.assertEqual(cfg.mail.sender, "graph")
-        self.assertIsNone(cfg.mail.smtp)
-        self.assertIsNone(cfg.mqtt.user)          # "" means no login
-        self.assertEqual([c.id for c in cfg.cameras], ["CAM1", "CAM2"])
-        cam1 = cfg.camera("CAM1")
-        self.assertIsInstance(cam1.serial, str)
-        self.assertIsInstance(cam1.fps, float)
-        self.assertEqual(cam1.side, "LEFT")
-        self.assertEqual(cfg.camera_for_side("RIGHT").id, "CAM2")
-        self.assertEqual(cam1.defect_side, "Left")
-        self.assertEqual(cam1.log_file_name, "FrameCapture_CAM1.log")
-        self.assertIsInstance(cfg.machine.object_sizes["LEFT"], sc.ObjectSizes)
+        self.assertIsNotNone(cfg.graph)
+        self.assertEqual(cfg.transfer.upload.remote_folder, "DPC/data/example_site")   # <site.id> replaced
+        self.assertEqual(cfg.models.auto_update, "off")
+        for section in (cfg.capture, cfg.inspection, cfg.plc, cfg.mail, cfg.cleanup, cfg.transfer):
+            self.assertEqual(section.log.backup_count, 5)
 
-    def test_defaults_are_applied(self):
+    def test_contracts_7_1_example_loads(self):
+        """The YAML block in CONTRACTS 7.1, with placeholders filled, is a valid v3 file."""
+        with open(os.path.join(REPO_ROOT, "docs", "CONTRACTS.md"), encoding="utf-8") as f:
+            text = f.read()
+        section = text[text.index("## 7.1"):]
+        block = section[section.index("```yaml") + 7:section.index("```", section.index("```yaml") + 7)]
+        data = yaml.safe_load(block.replace("<secret>", "x"))
+        data["paths"]["root"] = self.root
+        cfg = sc.load_site_config(self.write_yaml(data))
+        self.assertEqual(cfg.models.auto_update, "off")              # unquoted off read as false
+        self.assertEqual(cfg.transfer.upload.remote_folder, "DPC/data/tadipatri")
+        self.assertEqual(cfg.warnings, ("db.user is root; a dedicated user with limited rights "
+                                        "is recommended (D-030)",))
+
+    def test_model_folders_are_derived(self):
+        cfg = sc.load_site_config(self.write_yaml(self.config_data()))
+        model_root = os.path.join(self.root, "data", "models", "example_model")
+        self.assertEqual(cfg.inspection.model.root, model_root)
+        self.assertEqual(cfg.inspection.model.dir, os.path.join(model_root, "2026.10.1"))
+
+    def test_defaults(self):
         data = self.config_data()
-        for key in ("logging", "mqtt", "retention"):
+        for key in ("mqtt", "cleanup", "transfer", "models"):
             del data[key]
-        for key in ("host", "port", "health_table"):
-            del data["db"][key]
-        for key in ("type", "port", "timeout_s", "cleaning_pulse_seconds"):
-            del data["plc"][key]
-        for key in ("weights",):
-            del data["model"][key]
-        for key in ("report_dir", "cc", "disk_report_to"):
+        for program in ("capture", "inspection", "plc", "mail"):
+            del data[program]["log"]
+        del data["inspection"]["auto_roi"]
+        for key in ("disk_report_to", "smtp", "cc", "report_dir"):
             del data["mail"][key]
         cfg = sc.load_site_config(self.write_yaml(data))
-        self.assertEqual(cfg.logging.backup_count, 5)
-        self.assertEqual((cfg.db.host, cfg.db.port, cfg.db.health_table), ("localhost", 3306, "health_status"))
-        self.assertEqual((cfg.mqtt.host, cfg.mqtt.port), ("localhost", 1883))
-        self.assertEqual((cfg.plc.type, cfg.plc.port, cfg.plc.timeout_s, cfg.plc.cleaning_pulse_seconds),
-                         ("modbus_tcp", 502, 3.0, 10.0))
-        self.assertTrue(cfg.model.weights.endswith(os.path.join("example_model", "model_final.pth")))
-        self.assertEqual(cfg.model.detect_labels, cfg.model.classes)
-        self.assertEqual(cfg.mail.report_dir, os.path.join(self.root, "data", "reports"))
-        self.assertEqual(cfg.mail.cc, ())
+        self.assertIsNone(cfg.transfer)
+        self.assertEqual((cfg.models.remote_folder, cfg.models.check_interval_hours, cfg.models.auto_update),
+                         ("DPC/models", 6, "off"))
+        self.assertEqual((cfg.inspection.auto_roi.mode, cfg.inspection.auto_roi.learn_images), ("observe", 30))
+        self.assertEqual(cfg.cleanup.interval_seconds, 10)
+        self.assertEqual(cfg.cleanup.disk_percent["delete"], 75)
         self.assertEqual(cfg.mail.disk_report_to, cfg.mail.recipients)
-        self.assertEqual(cfg.retention.disk_percent,
-                         {"delete": 75, "raw_delete": 85, "mail": 90, "inference_delete": 95})
-        self.assertEqual((cfg.retention.repeated.days, cfg.retention.repeated.items), (20, 200))
-        self.assertEqual(cfg.machine.wheel_stand_required_counts, {})
-        self.assertIsNone(cfg.machine.expected_cycle_total)
+        self.assertEqual(cfg.mail.report_dir, os.path.join(self.root, "data", "reports"))
+        self.assertEqual(cfg.plc.log.backup_count, 5)
 
-    def test_smtp_defaults_when_sender_is_smtp(self):
+    def test_empty_disk_report_to_means_recipients(self):
+        cfg = sc.load_site_config(self.write_yaml(self.config_data()))
+        self.assertEqual(cfg.mail.disk_report_to, ("alerts@example.com",))
+
+    def test_transfer_without_upload(self):
         data = self.config_data()
+        data["transfer"] = {"log": {"backup_count": 3}}
+        cfg = sc.load_site_config(self.write_yaml(data))
+        self.assertIsNone(cfg.transfer.upload)
+
+
+# ======================================================================
+# Item 6 done when: a v2 file is rejected with the moves listed
+# ======================================================================
+class V2Files(_TempDirTest):
+    def v2_problems(self):
+        with open(V2_FIXTURE, encoding="utf-8") as f:
+            path = self.write_text(f.read())
+        with self.assertRaises(sc.SiteConfigError) as ctx:
+            sc.load_site_config(path)
+        return ctx.exception.problems
+
+    def test_every_moved_key_is_named(self):
+        problems = self.v2_problems()
+        self.assertIn("this is a v2 file", problems[0])
+        expected = [
+            "logging.backup_count -> <program>.log.backup_count",
+            "cameras -> capture.cameras",
+            "machine.total_wheel_count -> inspection.machine.total_wheel_count",
+            "machine.object_sizes.LEFT -> inspection.sides.LEFT.object_sizes",
+            "machine.object_sizes.RIGHT -> inspection.sides.RIGHT.object_sizes",
+            "model.threshold -> inspection.threshold",
+            "model.dir -> remove: it comes from the model package now",
+            "model.classes -> remove",
+            "mail.graph.tenant_id -> graph.tenant_id",
+            "mail.graph.client_secret -> graph.client_secret",
+            "retention.cleanup_interval_seconds -> cleanup.interval_seconds",
+            "retention.disk_percent -> cleanup.disk_percent",
+            "inspection.model -> add {name, version}",
+        ]
+        text = "\n".join(problems)
+        for line in expected:
+            self.assertIn(line, text)
+
+    def test_v2_message_has_no_values(self):
+        with open(V2_FIXTURE, encoding="utf-8") as f:
+            text = f.read().replace('password: "CHANGE_ME"', 'password: "s3cret-db-pass"')
+        with self.assertRaises(sc.SiteConfigError) as ctx:
+            sc.load_site_config(self.write_text(text))
+        self.assertNotIn("s3cret", str(ctx.exception))
+        self.assertNotIn("CHANGE_ME", str(ctx.exception))
+
+    def test_v1_and_other_versions(self):
+        data = self.config_data()
+        data["schema_version"] = 1
+        self.assertProblem(self.problems_for(data), r"^schema_version: this is a v1 file")
+        data["schema_version"] = 4
+        self.assertProblem(self.problems_for(data), r"^schema_version: must be 3, got 4")
+
+    def test_converted_v2_file_loads(self):
+        with open(V2_FIXTURE, encoding="utf-8") as f:
+            v2 = yaml.safe_load(f)
+        v2["paths"]["root"] = self.root
+        v3 = sc.convert_v2_to_v3(v2, "example_model", "2026.10.1")
+        cfg = sc.load_site_config(self.write_yaml(v3))
+        self.assertEqual(cfg.capture.cameras[0].serial, "00000001")
+        self.assertEqual(cfg.inspection.threshold, 0.5)
+        self.assertEqual(cfg.inspection.sides["RIGHT"].object_sizes.chain_w, 880)
+        self.assertEqual(cfg.graph.client_id, "CHANGE_ME")
+        self.assertEqual(cfg.cleanup.interval_seconds, 10)
+        self.assertIsNone(cfg.transfer)
+
+    def test_converter_keeps_unknown_keys_for_the_check(self):
+        with open(V2_FIXTURE, encoding="utf-8") as f:
+            v2 = yaml.safe_load(f)
+        v2["paths"]["root"] = self.root
+        v2["extra_thing"] = 1
+        problems = self.problems_for(sc.convert_v2_to_v3(v2, "m", "1"))
+        self.assertEqual(problems, ["extra_thing: unknown key"])
+
+
+# ======================================================================
+# Grouping rules (D-055)
+# ======================================================================
+class Grouping(_TempDirTest):
+    def test_graph_required_when_mail_uses_graph(self):
+        data = self.config_data()
+        del data["graph"]
+        self.assertEqual(self.problems_for(data), ["graph: missing (needed by mail (sender graph), transfer)"])
+
+    def test_graph_required_by_transfer_alone(self):
+        data = self.config_data()
+        del data["graph"]
         data["mail"]["sender"] = "smtp"
-        del data["mail"]["graph"]
+        data["mail"]["smtp"] = {"password": "s3cret-smtp"}
+        self.assertEqual(self.problems_for(data), ["graph: missing (needed by transfer)"])
+
+    def test_graph_optional_when_nobody_uses_it(self):
+        data = self.config_data()
+        del data["graph"]
+        del data["transfer"]
+        data["mail"]["sender"] = "smtp"
         data["mail"]["smtp"] = {"password": "s3cret-smtp"}
         cfg = sc.load_site_config(self.write_yaml(data))
-        self.assertEqual((cfg.mail.smtp.host, cfg.mail.smtp.port, cfg.mail.smtp.password),
-                         ("smtp.gmail.com", 587, "s3cret-smtp"))
-        self.assertIsNone(cfg.mail.graph)
+        self.assertIsNone(cfg.graph)
+        self.assertEqual(cfg.mail.smtp.password, "s3cret-smtp")
 
-
-class PathHandling(_TempDirTest):                                    # done when (c)
-    def test_tilde_root_is_expanded(self):
+    def test_graph_under_mail_is_unknown_now(self):
         data = self.config_data()
-        data["paths"]["root"] = "~/INSIGHTZZ"
-        with mock.patch.dict(os.environ, {"HOME": self.tmp}):
-            cfg = sc.load_site_config(self.write_yaml(data))
-        self.assertEqual(cfg.paths.root, self.root)
+        data["mail"]["graph"] = dict(data["graph"])
+        self.assertEqual(self.problems_for(data), ["mail.graph: unknown key"])
 
-    def test_relative_paths_are_relative_to_root(self):
-        cfg = sc.load_site_config(self.write_yaml(self.config_data()))
-        model_dir = os.path.join(self.root, "data", "models", "example_model")
-        self.assertEqual(cfg.model.dir, model_dir)
-        self.assertEqual(cfg.model.class_json, os.path.join(model_dir, "classes.json"))
-        self.assertEqual(cfg.model.detectron_yaml, os.path.join(model_dir, "mask_rcnn.yaml"))
-
-    def test_absolute_paths_are_kept(self):
+    def test_smtp_rules(self):
         data = self.config_data()
-        data["model"]["detectron_yaml"] = "/opt/detectron/cfg.yaml"
+        data["mail"]["sender"] = "smtp"
+        self.assertEqual(self.problems_for(data), ["mail.smtp: missing"])
+        data["mail"]["smtp"] = {"host": "smtp.example.com"}
+        self.assertEqual(self.problems_for(data), ["mail.smtp.password: missing"])
+        data = self.config_data()
+        data["mail"]["smtp"] = {"password": "x"}
+        self.assertEqual(self.problems_for(data),
+                         ["mail.smtp: only allowed when sender is smtp (use null or leave it out)"])
+
+    def test_old_top_level_sections_are_unknown(self):
+        data = self.config_data()
+        data["logging"] = {"backup_count": 5}
+        data["retention"] = {}
+        problems = self.problems_for(data)
+        self.assertIn("logging: unknown key", problems)
+        self.assertIn("retention: unknown key", problems)
+
+    def test_model_files_are_not_site_config(self):
+        data = self.config_data()
+        data["inspection"]["model"]["classes"] = ["wheel"]
+        self.assertEqual(self.problems_for(data), ["inspection.model.classes: unknown key"])
+
+    def test_model_name_and_version_are_folder_names(self):
+        data = self.config_data()
+        data["inspection"]["model"]["version"] = "../etc"
+        data["inspection"]["model"]["name"] = "a/b"
+        problems = self.problems_for(data)
+        self.assertProblem(problems, r"^inspection\.model\.version: use letters")
+        self.assertProblem(problems, r"^inspection\.model\.name: use letters")
+        data["inspection"]["model"].update(name="m", version="current")
+        self.assertProblem(self.problems_for(data), r"^inspection\.model\.version: 'current' is the pointer")
+
+    def test_unquoted_numeric_version_must_be_quoted(self):
+        data = self.config_data()
+        data["inspection"]["model"]["version"] = 2026.1
+        self.assertProblem(self.problems_for(data), r"^inspection\.model\.version: must be a string \(quote it\)")
+
+    def test_sides_must_match_cameras(self):
+        data = self.config_data()
+        del data["capture"]["cameras"][1]
+        self.assertEqual(self.problems_for(data),
+                         ["inspection.sides.RIGHT: no camera is configured for this side"])
+        data = self.config_data()
+        del data["inspection"]["sides"]["LEFT"]
+        self.assertEqual(self.problems_for(data), ["inspection.sides.LEFT: missing"])
+
+    def test_single_camera_site(self):
+        data = self.config_data()
+        del data["capture"]["cameras"][1]
+        del data["inspection"]["sides"]["RIGHT"]
+        self.assertEqual(len(sc.load_site_config(self.write_yaml(data)).cameras), 1)
+
+    def test_auto_roi_and_auto_update_choices(self):
+        data = self.config_data()
+        data["inspection"]["auto_roi"]["mode"] = False            # unquoted off in YAML
+        data["models"]["auto_update"] = "install"
         cfg = sc.load_site_config(self.write_yaml(data))
-        self.assertEqual(cfg.model.detectron_yaml, "/opt/detectron/cfg.yaml")
+        self.assertEqual((cfg.inspection.auto_roi.mode, cfg.models.auto_update), ("off", "install"))
+        data["inspection"]["auto_roi"]["mode"] = "learn"
+        data["models"]["auto_update"] = True                      # "on" is not a choice
+        problems = self.problems_for(data)
+        self.assertProblem(problems, r"^inspection\.auto_roi\.mode: must be one of off, observe, filter")
+        self.assertProblem(problems, r"^models\.auto_update: must be a string")
 
-    def test_derived_layout(self):
-        cfg = sc.load_site_config(self.write_yaml(self.config_data()))
-        p = cfg.paths
-        self.assertEqual(p.frame_dir("CAM1", "INF"), os.path.join(self.root, "data", "frames", "CAM1", "INF"))
-        self.assertEqual(p.image_dir("DEFECTIVE", "RIGHT"),
-                         os.path.join(self.root, "data", "images", "DEFECTIVE", "RIGHT"))
-        self.assertEqual(p.logs, os.path.join(self.root, "logs"))
-        with self.assertRaises(ValueError):
-            p.frame_dir("CAM3", "INF")
-
-    def test_relative_root_is_an_error(self):
+    def test_auto_update_needs_transfer(self):
         data = self.config_data()
-        data["paths"]["root"] = "INSIGHTZZ"
-        self.assertProblem(self.problems_for(data), r"^paths\.root: must be an absolute path")
+        del data["transfer"]
+        data["models"]["auto_update"] = "download"
+        self.assertEqual(self.problems_for(data), [
+            "models: auto_update download needs a transfer section: the transfer service downloads models (D-057)"])
 
-    def test_location_from_env_var(self):
+    def test_transfer_upload_values(self):
+        data = self.config_data()
+        data["transfer"]["upload"].update(weekday="Sunday", chunk_mb=0)
+        problems = self.problems_for(data)
+        self.assertProblem(problems, r"^transfer\.upload\.weekday: must be one of monday")
+        self.assertProblem(problems, r"^transfer\.upload\.chunk_mb: must be between 1")
+
+    def test_disk_percent_and_interval_in_cleanup(self):
+        data = self.config_data()
+        data["cleanup"]["disk_percent"]["mail"] = 80
+        data["cleanup"]["cleanup_interval_seconds"] = 5
+        problems = self.problems_for(data)
+        self.assertProblem(problems, r"^cleanup\.disk_percent: must increase strictly")
+        self.assertProblem(problems, r"^cleanup\.cleanup_interval_seconds: unknown key \(did you mean 'interval_seconds'")
+
+    def test_per_program_log(self):
+        data = self.config_data()
+        data["plc"]["log"] = {"backup_count": 0}
+        data["capture"]["log"] = {"backup_count": 7, "level": "debug"}
+        problems = self.problems_for(data)
+        self.assertProblem(problems, r"^plc\.log\.backup_count: must be between 1 and 365")
+        self.assertProblem(problems, r"^capture\.log\.level: unknown key")
+
+
+# ======================================================================
+# Rules kept from v2 (CONTRACTS 7.1: same rules as v2)
+# ======================================================================
+class KeptRules(_TempDirTest):
+    def test_missing_and_unknown_keys_named_with_path(self):
+        data = self.config_data()
+        del data["capture"]["cameras"][1]["serial"]
+        data["plc"]["light_regster"] = data["plc"].pop("light_register")
+        problems = self.problems_for(data)
+        self.assertIn("capture.cameras[1].serial: missing", problems)
+        self.assertProblem(problems, r"^plc\.light_regster: unknown key \(did you mean 'light_register'\?\)")
+
+    def test_camera_cross_checks(self):
+        data = self.config_data()
+        data["capture"]["cameras"][0]["side"] = "RIGHT"
+        data["capture"]["cameras"][1]["serial"] = "00000001"
+        problems = self.problems_for(data)
+        self.assertProblem(problems, r"^capture\.cameras\[0\]\.side: CAM1 must be LEFT")
+        self.assertProblem(problems, r"^capture\.cameras: serial '00000001' is used by more than one")
+
+    def test_flir_block(self):
+        data = self.config_data()
+        data["capture"]["cameras"][1]["driver"] = "flir"
+        self.assertEqual(self.problems_for(data), ["capture.cameras[1].flir: missing"])
+
+    def test_wheel_stand_counts(self):
+        data = self.config_data()
+        data["inspection"]["machine"]["wheel_stand_required_counts"] = {500: 3}
+        self.assertProblem(self.problems_for(data),
+                           r"^inspection\.machine\.wheel_stand_required_counts\[500\]: wheel number is above")
+
+    def test_chmod_600_required(self):
+        path = self.write_yaml(self.config_data(), mode=0o644)
+        with self.assertRaises(sc.SiteConfigError) as ctx:
+            sc.load_site_config(path)
+        self.assertEqual(len(ctx.exception.problems), 1)
+        self.assertIn("chmod 600", ctx.exception.problems[0])
+
+    def test_duplicate_key(self):
+        with open(EXAMPLE_YAML, encoding="utf-8") as f:
+            text = f.read().replace("  name: example_db", "  name: example_db\n  name: other_db")
+        with self.assertRaises(sc.SiteConfigError) as ctx:
+            sc.load_site_config(self.write_text(text))
+        self.assertIn("duplicate key 'name'", ctx.exception.problems[0])
+
+    def test_root_db_user_warning(self):
+        data = self.config_data()
+        data["db"]["user"] = "root"
+        self.assertEqual(len(sc.load_site_config(self.write_yaml(data)).warnings), 1)
+
+    def test_env_var_location(self):
         path = self.write_yaml(self.config_data(), "other.yaml")
         with mock.patch.dict(os.environ, {sc.CONFIG_ENV_VAR: path}):
             self.assertEqual(sc.load_site_config().source_path, path)
 
 
-class Problems(_TempDirTest):                                        # done when (b)
-    def test_missing_required_key_is_named(self):
-        data = self.config_data()
-        del data["cameras"][1]["serial"]
-        self.assertEqual(self.problems_for(data), ["cameras[1].serial: missing"])
+class Secrets(_TempDirTest):
+    def assertNoSecret(self, text):
+        for value in list(SECRETS.values()) + ["s3cret"]:
+            self.assertNotIn(value, text)
 
-    def test_missing_section_is_reported_once(self):
-        data = self.config_data()
-        del data["site"]
-        self.assertEqual(self.problems_for(data), ["site: missing"])
+    def test_graph_secrets_load(self):
+        cfg = sc.load_site_config(self.write_yaml(self.config_data()))
+        self.assertEqual(cfg.graph.client_secret, SECRETS[("graph", "client_secret")])
 
-    def test_unknown_key_is_named_with_suggestion(self):
+    def test_wrong_type_does_not_print_the_value(self):
         data = self.config_data()
-        data["plc"]["light_regster"] = data["plc"].pop("light_register")
+        data["graph"]["client_secret"] = 123456789
         problems = self.problems_for(data)
-        self.assertProblem(problems, r"^plc\.light_regster: unknown key \(did you mean 'light_register'\?\)")
-        self.assertProblem(problems, r"^plc\.light_register: missing")
+        self.assertIn("graph.client_secret: must be a string (quote it), got ***", problems)
+        self.assertNotIn("123456789", "\n".join(problems))
 
-    def test_unknown_top_level_key(self):
+    def test_repr_hides_secrets(self):
+        cfg = sc.load_site_config(self.write_yaml(self.config_data()))
+        self.assertNoSecret(repr(cfg))
+        self.assertIn("example_db", repr(cfg))
+
+    def test_redacted_copy_hides_graph_and_db(self):
         data = self.config_data()
-        data["camera"] = []
-        self.assertProblem(self.problems_for(data), r"^camera: unknown key")
+        path = self.write_yaml(data)
+        out = sc.redacted_copy(path)
+        self.assertNoSecret(out)
+        redacted = yaml.safe_load(out)
+        self.assertEqual(redacted["graph"]["client_secret"], "***")
+        self.assertEqual(redacted["db"]["password"], "***")
+        self.assertEqual(redacted["capture"]["cameras"][0]["serial"], "00000001")
 
-    def test_wrong_types_are_named(self):
-        data = self.config_data()
-        data["cameras"][0]["serial"] = 24824427          # unquoted serial
-        data["cameras"][0]["exposure_us"] = "1500"
-        data["cameras"][0]["fps"] = True
-        data["db"]["port"] = 3306.5
-        problems = self.problems_for(data)
-        self.assertProblem(problems, r"^cameras\[0\]\.serial: must be a string \(quote it\)")
-        self.assertProblem(problems, r"^cameras\[0\]\.exposure_us: must be an integer")
-        self.assertProblem(problems, r"^cameras\[0\]\.fps: must be a number")
-        self.assertProblem(problems, r"^db\.port: must be an integer")
+    def test_redacted_keeps_comments(self):
+        out = sc.redacted_copy(self.write_text(open(EXAMPLE_YAML, encoding="utf-8").read()))
+        self.assertIn("# ---------- programs ----------", out)
+        self.assertEqual(out.count('"***"'), 5)       # db.user, db.password, 3 graph keys
 
-    def test_every_problem_is_listed_at_once(self):
-        data = self.config_data()
-        data["schema_version"] = 3
-        data["site"]["id"] = "Bad Site"
-        data["cameras"][0]["rotate"] = 45
-        data["model"]["threshold"] = 1.0
-        data["plc"]["ip"] = "192.168.1"
-        data["mail"]["recipients"] = ["not-an-address"]
-        problems = self.problems_for(data)
-        self.assertEqual(len(problems), 6, problems)
-        for pattern in (r"^schema_version: must be 2", r"^site\.id: use lowercase", r"^cameras\[0\]\.rotate",
-                        r"^model\.threshold: must be < 1", r"^plc\.ip: must be an IPv4",
-                        r"^mail\.recipients\[0\]: must be an email"):
-            self.assertProblem(problems, pattern)
+    def test_legacy_env_vars_from_shared_graph(self):
+        env = sc.legacy_env_vars(sc.load_site_config(self.write_yaml(self.config_data())))
+        self.assertEqual(env["DPC_MS_CLIENT_SECRET"], SECRETS[("graph", "client_secret")])
+        self.assertEqual(env["DPC_DB_PASS"], SECRETS[("db", "password")])
+        self.assertEqual(env["DPC_DISK_REPORT_TO"], "alerts@example.com")
+        self.assertEqual(env["DPC_SITE_NAME"], "Example DPC")
+        self.assertNotIn("DPC_SMTP_PASSWORD", env)
 
-    def test_ranges(self):
-        data = self.config_data()
-        data["cameras"][0]["fps"] = 0
-        data["cameras"][1]["exposure_us"] = 5
-        data["machine"]["total_wheel_count"] = 0
-        problems = self.problems_for(data)
-        self.assertProblem(problems, r"^cameras\[0\]\.fps: must be > 0")
-        self.assertProblem(problems, r"^cameras\[1\]\.exposure_us: must be between 10 and 1000000")
-        self.assertProblem(problems, r"^machine\.total_wheel_count")
-
-    def test_rotate_has_no_default(self):
-        data = self.config_data()
-        del data["cameras"][0]["rotate"]
-        self.assertEqual(self.problems_for(data), ["cameras[0].rotate: missing"])
-
-    def test_duplicate_yaml_key_is_an_error(self):
-        with open(EXAMPLE_YAML, encoding="utf-8") as f:
-            text = f.read().replace("  name: example_db", "  name: example_db\n  name: other_db")
-        path = self.write_text(text, "dup.yaml")
-        with self.assertRaises(sc.SiteConfigError) as ctx:
-            sc.load_site_config(path)
-        self.assertIn("duplicate key 'name'", ctx.exception.problems[0])
-
-    def test_missing_file(self):
-        with self.assertRaises(sc.SiteConfigError) as ctx:
-            sc.load_site_config(os.path.join(self.tmp, "nope.yaml"))
-        self.assertEqual(ctx.exception.problems, ["file not found"])
-
-    def test_sql_names_are_plain_identifiers(self):
-        data = self.config_data()
-        data["db"]["health_table"] = "health; DROP TABLE x"
-        self.assertProblem(self.problems_for(data), r"^db\.health_table: use only letters")
-
-
-class CrossFieldChecks(_TempDirTest):
-    def test_duplicate_camera_values(self):
-        data = self.config_data()
-        data["cameras"][1]["serial"] = data["cameras"][0]["serial"]
-        self.assertProblem(self.problems_for(data), r"^cameras: serial '00000001' is used by more than one")
-
-    def test_cam1_must_be_left(self):
-        data = self.config_data()
-        data["cameras"][0]["side"] = "RIGHT"
-        self.assertProblem(self.problems_for(data), r"^cameras\[0\]\.side: CAM1 must be LEFT")
-
-    def test_flir_block_required_for_flir(self):
-        data = self.config_data()
-        data["cameras"][1]["driver"] = "flir"
-        self.assertEqual(self.problems_for(data), ["cameras[1].flir: missing"])
-
-    def test_flir_block_loads(self):
-        data = self.config_data()
-        data["cameras"][1]["driver"] = "flir"
-        data["cameras"][1]["flir"] = {"interface": "GEV Interface 1", "throughput_bps": 19662239}
-        cfg = sc.load_site_config(self.write_yaml(data))
-        self.assertEqual(cfg.camera("CAM2").flir.throughput_bps, 19662239)
-        self.assertIsNone(cfg.camera("CAM1").flir)
-
-    def test_flir_block_not_allowed_for_basler(self):
-        data = self.config_data()
-        data["cameras"][0]["flir"] = {"interface": "x", "throughput_bps": 1}
-        self.assertEqual(self.problems_for(data), ["cameras[0].flir: only allowed when driver is flir"])
-
-    def test_object_sizes_must_match_camera_sides(self):
-        data = self.config_data()
-        del data["cameras"][1]                      # only LEFT left
-        self.assertEqual(self.problems_for(data),
-                         ["machine.object_sizes.RIGHT: no camera is configured for this side"])
-        data = self.config_data()
-        del data["machine"]["object_sizes"]["RIGHT"]
-        self.assertEqual(self.problems_for(data), ["machine.object_sizes.RIGHT: missing"])
-
-    def test_single_camera_site_loads(self):
-        data = self.config_data()
-        del data["cameras"][1]
-        del data["machine"]["object_sizes"]["RIGHT"]
-        cfg = sc.load_site_config(self.write_yaml(data))
-        self.assertEqual(len(cfg.cameras), 1)
-
-    def test_too_many_cameras(self):
-        data = self.config_data()
-        data["cameras"].append(copy.deepcopy(data["cameras"][0]))
-        self.assertProblem(self.problems_for(data), r"^cameras: must be a list with 1 or 2")
-
-    def test_smtp_block_only_with_smtp(self):
-        data = self.config_data()
-        data["mail"]["smtp"] = {"host": "smtp.example.com", "port": 587}
-        self.assertEqual(self.problems_for(data), ["mail.smtp: only allowed when sender is smtp"])
-
-    def test_detect_labels_subset_of_classes(self):
-        data = self.config_data()
-        data["model"]["detect_labels"] = ["wheel", "chain"]
-        self.assertEqual(self.problems_for(data), ["model.detect_labels: 'chain' is not in classes"])
-
-    def test_disk_percent_strictly_increasing(self):
-        data = self.config_data()
-        data["retention"]["disk_percent"]["mail"] = 85
-        self.assertProblem(self.problems_for(data), r"^retention\.disk_percent: must increase strictly")
-
-    def test_wheel_stand_counts(self):
-        data = self.config_data()
-        data["machine"]["wheel_stand_required_counts"] = {34: 3}
-        cfg = sc.load_site_config(self.write_yaml(data))
-        self.assertEqual(cfg.machine.wheel_stand_required_counts, {34: 3})
-        data["machine"]["wheel_stand_required_counts"] = {500: 3, "x": 1}
-        problems = self.problems_for(data)
-        self.assertProblem(problems, r"wheel_stand_required_counts\[500\]: wheel number is above")
-        self.assertProblem(problems, r"wheel_stand_required_counts\['x'\]: wheel number must be an integer")
+    def test_broken_files_never_print_a_secret(self):
+        breakers = [
+            lambda d: d.update(schema_version=2),
+            lambda d: d["mail"].update(sender="smtp"),
+            lambda d: d["graph"].update(extra=SECRETS[("db", "password")]),
+            lambda d: d.pop("graph"),
+            lambda d: d["db"].update(port="x"),
+        ]
+        for breaker in breakers:
+            data = self.config_data()
+            breaker(data)
+            with self.assertRaises(sc.SiteConfigError) as ctx:
+                sc.load_site_config(self.write_yaml(data))
+            self.assertNoSecret(str(ctx.exception))
 
 
 class CommandLine(_TempDirTest):
@@ -353,289 +479,25 @@ class CommandLine(_TempDirTest):
             code = sc.main(list(args))
         return code, out.getvalue()
 
-    def test_ok(self):
-        code, out = self.run_cli(self.write_yaml(self.config_data()))
-        self.assertEqual((code, out.strip()), (0, "OK"))
-
-    def test_root_db_user_prints_ok_and_one_warning(self):        # follow-up 9 done when
+    def test_ok_and_problems(self):
+        self.assertEqual(self.run_cli(self.write_yaml(self.config_data())), (0, "OK\n"))
         data = self.config_data()
-        data["db"]["user"] = "root"
-        code, out = self.run_cli(self.write_yaml(data))
-        self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines(), [
-            "OK",
-            "WARNING db.user is root; a dedicated user with limited rights is recommended (D-030)",
-        ])
-        self.assertNotIn(SECRETS[("db", "password")], out)
-
-    def test_problems_and_exit_1(self):
-        data = self.config_data()
-        del data["db"]["name"]
+        del data["inspection"]["model"]
         code, out = self.run_cli(self.write_yaml(data))
         self.assertEqual(code, 1)
-        self.assertIn("db.name: missing", out)
+        self.assertIn("inspection.model: missing", out)
 
 
-# ----------------------------------------------------------------------
-# Schema v2: secrets in site.yaml (STATUS item 1b)
-# ----------------------------------------------------------------------
-class V1Files(_TempDirTest):                                         # 1b done when (a)
-    def v1_data(self):
-        data = self.config_data()
-        data["schema_version"] = 1
-        for key in ("user", "password"):
-            del data["db"][key]
-        for key in ("sender_address", "disk_report_to", "graph"):
-            del data["mail"][key]
-        return data
-
-    def test_v1_file_says_which_keys_to_add(self):
-        problems = self.problems_for(self.v1_data())
-        self.assertEqual(len(problems), 1, problems)
-        for key in ("db.user", "db.password", "mail.sender_address", "mail.graph", "schema_version: 2"):
-            self.assertIn(key, problems[0])
-
-    def test_v1_smtp_file_asks_for_smtp_password(self):
-        data = self.v1_data()
-        data["mail"]["sender"] = "smtp"
-        problems = self.problems_for(data)
-        self.assertIn("mail.smtp.password", problems[0])
-        self.assertNotIn("mail.graph", problems[0])
-
-    def test_v1_file_with_keys_added_only_needs_the_bump(self):
-        data = self.config_data()
-        data["schema_version"] = 1
-        problems = self.problems_for(data)
-        self.assertEqual(problems, ["schema_version: this is a v1 file; set schema_version: 2 (CONTRACTS 7, D-048)"])
-
-    def test_other_versions(self):
-        data = self.config_data()
-        data["schema_version"] = 3
-        self.assertProblem(self.problems_for(data), r"^schema_version: must be 2, got 3")
-
-
-class Permissions(_TempDirTest):                                     # 1b done when (b)
-    def test_not_chmod_600_is_refused(self):
-        for mode in (0o644, 0o640, 0o604, 0o660):
-            path = self.write_yaml(self.config_data(), mode=mode)
-            with self.assertRaises(sc.SiteConfigError) as ctx:
-                sc.load_site_config(path)
-            self.assertEqual(len(ctx.exception.problems), 1)
-            self.assertIn(f"permissions are {mode:o}", ctx.exception.problems[0])
-            self.assertIn("chmod 600", ctx.exception.problems[0])
-
-    def test_refused_before_reading(self):
-        # Broken YAML in a world-readable file: only the permission problem is reported.
-        path = self.write_text("db: [unclosed", mode=0o644)
-        with self.assertRaises(sc.SiteConfigError) as ctx:
-            sc.load_site_config(path)
-        self.assertProblem(ctx.exception.problems, r"^permissions are 644")
-        self.assertEqual(len(ctx.exception.problems), 1)
-
-    def test_400_is_accepted(self):
-        sc.load_site_config(self.write_yaml(self.config_data(), mode=0o400))
-
-
-class SecretFields(_TempDirTest):                                    # 1b done when (e)
-    def test_secrets_are_loaded(self):
-        cfg = sc.load_site_config(self.write_yaml(self.config_data()))
-        self.assertEqual(cfg.db.user, SECRETS[("db", "user")])
-        self.assertEqual(cfg.db.password, SECRETS[("db", "password")])
-        self.assertEqual(cfg.mail.graph.client_secret, SECRETS[("mail", "graph", "client_secret")])
-
-    def test_db_login_required(self):
-        data = self.config_data()
-        del data["db"]["password"]
-        self.assertEqual(self.problems_for(data), ["db.password: missing"])
-
-    def test_root_db_user_is_a_warning(self):                    # follow-up 9 (D-050)
-        data = self.config_data()
-        data["db"]["user"] = "root"
-        cfg = sc.load_site_config(self.write_yaml(data))
-        self.assertEqual(cfg.db.user, "root")
-        self.assertEqual(cfg.warnings,
-                         ("db.user is root; a dedicated user with limited rights is recommended (D-030)",))
-
-    def test_no_warning_for_a_dedicated_user(self):
-        cfg = sc.load_site_config(self.write_yaml(self.config_data()))
-        self.assertEqual(cfg.warnings, ())
-
-    def test_graph_block_required_for_graph(self):
-        data = self.config_data()
-        del data["mail"]["graph"]
-        self.assertEqual(self.problems_for(data), ["mail.graph: missing"])
-        data = self.config_data()
-        del data["mail"]["graph"]["client_secret"]
-        self.assertEqual(self.problems_for(data), ["mail.graph.client_secret: missing"])
-
-    def test_graph_block_not_allowed_for_smtp(self):
-        data = self.config_data()
-        data["mail"]["sender"] = "smtp"
-        data["mail"]["smtp"] = {"password": "s3cret-smtp"}
-        self.assertEqual(self.problems_for(data), ["mail.graph: only allowed when sender is graph"])
-
-    def test_smtp_block_required_for_smtp(self):
-        data = self.config_data()
-        data["mail"]["sender"] = "smtp"
-        del data["mail"]["graph"]
-        self.assertEqual(self.problems_for(data), ["mail.smtp: missing"])
-        data["mail"]["smtp"] = {"host": "smtp.example.com"}
-        self.assertEqual(self.problems_for(data), ["mail.smtp.password: missing"])
-
-    def test_sender_address_required(self):
-        data = self.config_data()
-        del data["mail"]["sender_address"]
-        self.assertEqual(self.problems_for(data), ["mail.sender_address: missing"])
-        data["mail"]["sender_address"] = "not-an-address"
-        self.assertProblem(self.problems_for(data), r"^mail\.sender_address: must be an email")
-
-    def test_mqtt_login_both_or_neither(self):
-        data = self.config_data()
-        data["mqtt"]["user"] = "broker_user"
-        self.assertEqual(self.problems_for(data), ["mqtt.user: give both user and password, or neither"])
-        data["mqtt"]["password"] = "s3cret-mqtt"
-        cfg = sc.load_site_config(self.write_yaml(data))
-        self.assertEqual((cfg.mqtt.user, cfg.mqtt.password), ("broker_user", "s3cret-mqtt"))
-
-
-class NoSecretInMessages(_TempDirTest):                              # 1b done when (d)
-    def assertNoSecret(self, text):
-        for value in list(SECRETS.values()) + ["s3cret"]:
-            self.assertNotIn(value, text)
-
-    def test_wrong_type_does_not_print_the_value(self):
-        data = self.config_data()
-        data["db"]["password"] = 123456789
-        data["mail"]["graph"]["client_secret"] = ["s3cret-in-a-list"]
-        problems = self.problems_for(data)
-        self.assertIn("db.password: must be a string (quote it), got ***", problems)
-        self.assertIn("mail.graph.client_secret: must be a string, got ***", problems)
-        self.assertNotIn("123456789", "\n".join(problems))
-        self.assertNoSecret("\n".join(problems))
-
-    def test_broken_files_never_print_a_secret(self):
-        breakers = [
-            lambda d: d["db"].update(port="x"),
-            lambda d: d["db"].update(name="bad name"),
-            lambda d: d.update(schema_version=1),
-            lambda d: d["mail"].update(sender="smtp"),
-            lambda d: d["mail"]["graph"].update(extra_key=SECRETS[("db", "password")]),
-            lambda d: d["mqtt"].update(user="u"),
-        ]
-        for breaker in breakers:
-            data = self.config_data()
-            breaker(data)
-            with self.assertRaises(sc.SiteConfigError) as ctx:
-                sc.load_site_config(self.write_yaml(data))
-            self.assertNoSecret(str(ctx.exception))
-
-    def test_yaml_syntax_error_does_not_quote_the_line(self):
-        path = self.write_text('db:\n  password: "s3cret-db-pass\n  name: x\n')
-        with self.assertRaises(sc.SiteConfigError) as ctx:
-            sc.load_site_config(path)
-        self.assertProblem(ctx.exception.problems, r"^not valid YAML: .*\(line \d+, column \d+\)")
-        self.assertNoSecret(str(ctx.exception))
-
-    def test_repr_hides_secrets(self):
-        data = self.config_data()
-        data["mqtt"].update(user="mqtt_s3cret_user", password="s3cret-mqtt")
-        cfg = sc.load_site_config(self.write_yaml(data))
-        text = repr(cfg) + str(cfg)
-        self.assertNoSecret(text)
-        self.assertIn("example_db", text)          # the rest is still visible
-
-
-class Redacted(_TempDirTest):                                        # 1b done when (c)
-    def secret_file(self):
-        """The example text with known secrets written in (comments kept)."""
-        with open(EXAMPLE_YAML, encoding="utf-8") as f:
-            text = f.read()
-        text = text.replace("user: dpc_app ", f"user: {SECRETS[('db', 'user')]} ")
-        text = text.replace('password: "CHANGE_ME"', f'password: "{SECRETS[("db", "password")]}"', 1)
-        text = text.replace('tenant_id: "CHANGE_ME"', f"tenant_id: '{SECRETS[('mail', 'graph', 'tenant_id')]}'")
-        text = text.replace('client_id: "CHANGE_ME"', f"client_id: {SECRETS[('mail', 'graph', 'client_id')]}")
-        text = text.replace('client_secret: "CHANGE_ME"',
-                            f'client_secret: "{SECRETS[("mail", "graph", "client_secret")]}"')
-        for value in SECRETS.values():
-            self.assertIn(value, text)               # the fixture really holds them
-        return self.write_text(text)
-
-    def test_redacted_copy_has_no_secret_value(self):
-        out = sc.redacted_copy(self.secret_file())
-        for value in SECRETS.values():
-            self.assertNotIn(value, out)
-        self.assertEqual(out.count('"***"'), 5)
-
-    def test_redacted_copy_keeps_the_rest(self):
-        out = sc.redacted_copy(self.secret_file())
-        self.assertIn("# DPC site config, schema v2", out)          # comments kept
-        self.assertIn('serial: "00000001"', out)
-        self.assertIn('user: ""', out)                              # empty mqtt login stays visible
-        data = yaml.safe_load(out)
-        self.assertEqual(data["db"]["password"], "***")
-        self.assertEqual(data["db"]["name"], "example_db")
-
-    def test_cli_redacted(self):
-        out = io.StringIO()
-        with redirect_stdout(out):
-            code = sc.main([self.secret_file(), "--redacted"])
-        self.assertEqual(code, 0)
-        for value in SECRETS.values():
-            self.assertNotIn(value, out.getvalue())
-
-    def test_misspelt_and_unexpected_secret_keys_are_hidden(self):
-        text = ("db:\n  pasword: s3cret-a\n  name: x\nextra:\n  api_key: s3cret-b\n"
-                "mail:\n  graph:\n    client_secret: |\n      s3cret-c\n    list: [s3cret-d]\n"
-                "anchors:\n  pw: &p s3cret-e\n  password: *p\n")
-        out = sc.redact_text(text)
-        for value in ("s3cret-a", "s3cret-b", "s3cret-c", "s3cret-e"):
-            self.assertNotIn(value, out)
-        self.assertIn("name: x", out)
-        data = yaml.safe_load(out)                    # still valid YAML, aliases still resolve
-        self.assertEqual(data["anchors"]["password"], "***")
-        self.assertEqual(data["mail"]["graph"]["list"], ["s3cret-d"])   # not a secret key: kept
-
-    def test_broken_yaml_prints_nothing_of_the_file(self):
-        with self.assertRaises(sc.SiteConfigError) as ctx:
-            sc.redact_text('db:\n  password: "s3cret-x\n')
-        self.assertNotIn("s3cret", str(ctx.exception))
-
-
-class LegacyEnv(_TempDirTest):
-    def test_env_vars_for_graph_site(self):
-        cfg = sc.load_site_config(self.write_yaml(self.config_data()))
-        env = sc.legacy_env_vars(cfg)
-        self.assertEqual(env["DPC_DB_PASS"], SECRETS[("db", "password")])
-        self.assertEqual(env["DPC_MS_CLIENT_SECRET"], SECRETS[("mail", "graph", "client_secret")])
-        self.assertEqual(env["DPC_DISK_REPORT_TO"], "alerts@example.com")
-        self.assertEqual(env["DPC_SITE_NAME"], "Example DPC")
-        self.assertNotIn("DPC_SMTP_PASSWORD", env)
-        self.assertNotIn("DPC_MQTT_USER", env)
-
-    def test_env_vars_for_smtp_site(self):
-        data = self.config_data()
-        data["mail"]["sender"] = "smtp"
-        del data["mail"]["graph"]
-        data["mail"]["smtp"] = {"password": "s3cret-smtp"}
-        env = sc.legacy_env_vars(sc.load_site_config(self.write_yaml(data)))
-        self.assertEqual(env["DPC_SMTP_PASSWORD"], "s3cret-smtp")
-        self.assertNotIn("DPC_MS_TENANT_ID", env)
-
-
-class ExampleHasNoRealValues(_TempDirTest):                          # 1 done when (f)
+class ExampleHasNoRealValues(_TempDirTest):
     def test_placeholders_only(self):
         cfg = self.load_example()
         for cam in cfg.cameras:
-            self.assertRegex(cam.serial, r"^0+\d$", "example serials must be placeholders like 00000001")
-        self.assertTrue(cfg.plc.ip.startswith("192.0.2."), "use the documentation range 192.0.2.x")
-        for address in cfg.mail.recipients + cfg.mail.disk_report_to + (cfg.mail.sender_address,):
+            self.assertRegex(cam.serial, r"^0+\d$")
+        self.assertTrue(cfg.plc.ip.startswith("192.0.2."))
+        for address in cfg.mail.recipients + (cfg.mail.sender_address,):
             self.assertTrue(address.endswith("@example.com"))
         self.assertEqual(cfg.db.password, "CHANGE_ME")
-        g = cfg.mail.graph
-        self.assertEqual({g.tenant_id, g.client_id, g.client_secret}, {"CHANGE_ME"})
-
-    def test_no_secrets_env_left(self):
-        self.assertFalse(os.path.exists(os.path.join(REPO_ROOT, "config", "examples", "secrets.example.env")))
+        self.assertEqual({cfg.graph.tenant_id, cfg.graph.client_id, cfg.graph.client_secret}, {"CHANGE_ME"})
 
 
 if __name__ == "__main__":

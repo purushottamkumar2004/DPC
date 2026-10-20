@@ -37,6 +37,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from common.config.model_package import ModelPackageError, read_current, verify_package  # noqa: E402
 from common.config.site_config import (  # noqa: E402
     FRAME_SUBDIRS, IMAGE_KINDS, SiteConfig, SiteConfigError, default_config_path, load_site_config,
 )
@@ -145,7 +146,7 @@ def disk_used_percent(path: str) -> float:
 def check_disk(cfg: SiteConfig) -> Result:
     """Below the cleanup threshold: PASS. Cleanup range: WARN (cleanup should be deleting).
     At or above the mail threshold: FAIL (cleanup is not keeping up)."""
-    limits = cfg.retention.disk_percent
+    limits = cfg.cleanup.disk_percent
     if not os.path.isdir(cfg.paths.data):
         return Result(FAIL, "disk", "data folder missing, cannot measure (see layout)")
     used = disk_used_percent(cfg.paths.data)
@@ -244,6 +245,35 @@ def check_mqtt(cfg: SiteConfig) -> Result:
     return Result(PASS, "mqtt", f"broker {where} reachable (TCP; login not tested)")
 
 
+def check_model(cfg: SiteConfig) -> Result:
+    """The model package inspection would run (CONTRACTS 12): `current` if set, else the version
+    in site.yaml. Not installed = WARN (captures can run without it); a bad package = FAIL."""
+    model = cfg.inspection.model
+    try:
+        current = read_current(model.root)
+    except ModelPackageError as exc:
+        return Result(FAIL, "model", f"{model.name}/current: {exc.problems[0]}")
+    version = current or model.version
+    label = f"{model.name}/{version}"
+    if not os.path.isdir(os.path.join(model.root, version)):
+        return Result(WARN, "model", f"{label} not installed in data/models; inspection cannot start yet")
+    try:
+        package = verify_package(os.path.join(model.root, version), name=model.name)
+    except ModelPackageError as exc:
+        return Result(FAIL, "model", f"{label}: " + "; ".join(exc.problems))
+    notes = []
+    if current is None:
+        notes.append("no current pointer yet")
+    elif current != model.version:
+        notes.append(f"current is {current}, site.yaml names {model.version}")
+    if not package.ready:
+        notes.append("no ready marker")
+    detail = f"{label} verified ({len(package.classes)} classes, all checksums match)"
+    if current is not None and current != model.version:
+        return Result(WARN, "model", f"{detail}; " + "; ".join(notes))
+    return Result(PASS, "model", detail + (f"; {'; '.join(notes)}" if notes else ""))
+
+
 # ======================================================================
 # Run
 # ======================================================================
@@ -253,11 +283,11 @@ def run_checks(path: str, enumerate_serials: Optional[Callable[[], List[str]]] =
     enumerate_serials = enumerate_serials or enumerate_basler_serials
     cfg, first = check_site_yaml(path)
     results = [first]
-    names = ["git", "layout", "disk", "cameras", "database", "mqtt"]
+    names = ["git", "layout", "disk", "cameras", "database", "mqtt", "model"]
     if cfg is None:
         return results + [Result(SKIP, name, "site.yaml is not valid") for name in names]
     checks = [check_outside_git, check_layout, check_disk,
-              lambda c: check_cameras(c, enumerate_serials), check_db, check_mqtt]
+              lambda c: check_cameras(c, enumerate_serials), check_db, check_mqtt, check_model]
     for name, check in zip(names, checks):
         try:
             results.append(check(cfg))

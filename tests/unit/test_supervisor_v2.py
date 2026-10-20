@@ -558,8 +558,8 @@ class EnvBridge(SupervisorTest):
         data["paths"]["root"] = self.path("INSIGHTZZ")
         data["db"]["user"], data["db"]["password"] = SECRET_VALUES["db_user"], SECRET_VALUES["db_password"]
         data["mqtt"]["user"], data["mqtt"]["password"] = SECRET_VALUES["mqtt_user"], SECRET_VALUES["mqtt_password"]
-        data["mail"]["graph"] = {"tenant_id": SECRET_VALUES["tenant"], "client_id": SECRET_VALUES["client_id"],
-                                 "client_secret": SECRET_VALUES["client_secret"]}
+        data["graph"] = {"tenant_id": SECRET_VALUES["tenant"], "client_id": SECRET_VALUES["client_id"],
+                         "client_secret": SECRET_VALUES["client_secret"]}      # v3: shared graph (D-055)
         data.update(overrides)
         path = self.path("site.yaml")
         with open(path, "w") as f:

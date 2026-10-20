@@ -1,11 +1,18 @@
-"""Load and validate the site config `site.yaml` (schema v2, CONTRACTS sections 7 and 9,
-D-047, D-048, D-049). Since v2 the file also holds the site's secrets.
+"""Load and validate the site config `site.yaml` (schema v3, grouped by program:
+CONTRACTS sections 7.1 and 9, D-048, D-050, D-055). The file holds the site's secrets.
+
+v3 layout: shared sections first (site, paths, db, mqtt, graph), then one section per
+program (capture, inspection, plc, mail, cleanup, transfer), then models. Model files,
+classes and the label map are not in site.yaml: they come from the model package
+(common/config/model_package.py, CONTRACTS 12). A v2 file is refused with one line per
+moved key; scripts/convert_site_yaml_v3.py converts one.
 
 Public API
     load_site_config(path=None) -> SiteConfig      (.warnings = non-fatal notes, e.g. db.user root)
     SiteConfigError            (.problems = list of "key.path: what is wrong")
     redacted_copy(path=None) -> str      the file text with every secret replaced by ***
     legacy_env_vars(config) -> dict      DPC_* env vars for legacy workers (CONTRACTS 9 env bridge)
+    v2_moves(data), convert_v2_to_v3(data, model_name, model_version)   v2 -> v3 (D-055)
 
 Command line
     python -m common.config.site_config [path]               prints OK or every problem; exit 0 or 1
@@ -36,7 +43,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 CONFIG_ENV_VAR = "DPC_SITE_CONFIG"
 DEFAULT_CONFIG_PATH = "~/INSIGHTZZ/config/site.yaml"
 
@@ -47,11 +54,18 @@ FRAME_SUBDIRS = ("live", "_tmp", "INF", "RAW_IMAGES", "UI")
 IMAGE_KINDS = ("DEFECTIVE", "REPEATED", "RAW", "PLATE")
 OBJECT_SIZE_KEYS = ("wheel_w", "wheel_h", "bucket_clip_w", "chain_w", "half_bucket_clip_w")
 DISK_PERCENT_ORDER = ("delete", "raw_delete", "mail", "inference_delete")   # must increase in this order
+AUTO_ROI_MODES = ("off", "observe", "filter")          # D-054
+AUTO_UPDATE_MODES = ("off", "download", "install")     # D-056
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+CURRENT_POINTER = "current"                            # <root>/data/models/<name>/current (CONTRACTS 12)
+SITE_ID_TOKEN = "<site.id>"                            # replaced in transfer.upload.remote_folder
 
 _SITE_ID_RE = re.compile(r"^[a-z0-9_-]+$")
 # DB and table names end up inside SQL text, so only plain identifiers are allowed.
 _SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Model name and version are folder names: no slashes, no leading dot.
+_MODEL_PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 class SiteConfigError(Exception):
@@ -122,7 +136,8 @@ class Paths:
 
 
 @dataclass(frozen=True)
-class LoggingConfig:
+class LogSettings:
+    """Per-program log settings; files always go to <root>/logs/ (D-055)."""
     backup_count: int
 
 
@@ -142,6 +157,14 @@ class MqttConfig:
     port: int
     user: Optional[str] = field(repr=False)        # None when the broker has no login
     password: Optional[str] = field(repr=False)
+
+
+@dataclass(frozen=True)
+class GraphSettings:
+    """Microsoft Graph login, shared by mail and transfer (D-055)."""
+    tenant_id: str = field(repr=False)
+    client_id: str = field(repr=False)
+    client_secret: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -172,6 +195,12 @@ class Camera:
 
 
 @dataclass(frozen=True)
+class CaptureConfig:
+    log: LogSettings
+    cameras: Tuple[Camera, ...]
+
+
+@dataclass(frozen=True)
 class ObjectSizes:
     wheel_w: int
     wheel_h: int
@@ -181,22 +210,41 @@ class ObjectSizes:
 
 
 @dataclass(frozen=True)
+class SideSettings:
+    object_sizes: ObjectSizes
+
+
+@dataclass(frozen=True)
 class MachineConfig:
     total_wheel_count: int
     expected_cycle_total: Optional[int]
     wheel_stand_required_counts: Dict[int, int]
-    object_sizes: Dict[str, ObjectSizes]      # side -> sizes
 
 
 @dataclass(frozen=True)
-class ModelConfig:
-    dir: str             # absolute
-    weights: str         # absolute file path inside dir
-    class_json: str      # absolute file path inside dir
-    detectron_yaml: str  # absolute
+class ModelRef:
+    """Which model package inspection uses (D-056). Files, classes and the label map are in
+    the package itself, read with common.config.model_package."""
+    name: str
+    version: str
+    root: str            # <root>/data/models/<name>: holds the versions and the `current` pointer
+    dir: str             # <root>/data/models/<name>/<version>
+
+
+@dataclass(frozen=True)
+class AutoRoi:
+    mode: str            # off | observe | filter (D-054)
+    learn_images: int
+
+
+@dataclass(frozen=True)
+class InspectionConfig:
+    log: LogSettings
+    model: ModelRef
     threshold: float
-    classes: Tuple[str, ...]
-    detect_labels: Tuple[str, ...]
+    machine: MachineConfig
+    sides: Dict[str, SideSettings]      # LEFT / RIGHT, one per configured camera side
+    auto_roi: AutoRoi
 
 
 @dataclass(frozen=True)
@@ -210,6 +258,7 @@ class PlcConfig:
     conveyor_status_register: int
     cleaning_pulse_seconds: float
     legacy_db_numbers: Optional[Dict[str, int]]   # {"write": n, "read": n}, legacy XML only
+    log: LogSettings
 
 
 @dataclass(frozen=True)
@@ -220,23 +269,16 @@ class SmtpSettings:
 
 
 @dataclass(frozen=True)
-class GraphSettings:
-    tenant_id: str = field(repr=False)
-    client_id: str = field(repr=False)
-    client_secret: str = field(repr=False)
-
-
-@dataclass(frozen=True)
 class MailConfig:
-    sender: str          # graph | smtp
+    sender: str          # graph | smtp (graph uses the shared top-level `graph` login)
     project_name: str
     report_dir: str      # absolute
     recipients: Tuple[str, ...]
     cc: Tuple[str, ...]
     sender_address: str
     disk_report_to: Tuple[str, ...]
-    graph: Optional[GraphSettings]   # set when sender = graph
     smtp: Optional[SmtpSettings]     # set when sender = smtp
+    log: LogSettings
 
 
 @dataclass(frozen=True)
@@ -246,13 +288,34 @@ class KeepLimit:
 
 
 @dataclass(frozen=True)
-class RetentionConfig:
+class CleanupConfig:
     raw_image_hours: int
-    cleanup_interval_seconds: int
+    interval_seconds: int
     repeated: KeepLimit
     plate_days: int
     defective: KeepLimit
     disk_percent: Dict[str, int]
+    log: LogSettings
+
+
+@dataclass(frozen=True)
+class TransferUpload:
+    weekday: str         # monday .. sunday
+    chunk_mb: int
+    remote_folder: str   # OneDrive folder, "<site.id>" already replaced
+
+
+@dataclass(frozen=True)
+class TransferConfig:
+    upload: Optional[TransferUpload]   # None = no weekly upload (model download only)
+    log: LogSettings
+
+
+@dataclass(frozen=True)
+class ModelsConfig:
+    remote_folder: str
+    check_interval_hours: int
+    auto_update: str     # off | download | install (D-056)
 
 
 @dataclass(frozen=True)
@@ -260,17 +323,22 @@ class SiteConfig:
     schema_version: int
     site: SiteInfo
     paths: Paths
-    logging: LoggingConfig
     db: DbConfig
     mqtt: MqttConfig
-    cameras: Tuple[Camera, ...]
-    machine: MachineConfig
-    model: ModelConfig
+    graph: Optional[GraphSettings]
+    capture: CaptureConfig
+    inspection: InspectionConfig
     plc: PlcConfig
     mail: MailConfig
-    retention: RetentionConfig
+    cleanup: CleanupConfig
+    transfer: Optional[TransferConfig]   # None = no transfer service on this site
+    models: ModelsConfig
     source_path: str
     warnings: Tuple[str, ...] = ()   # the file is valid, but these deserve a look (printed by the CLI)
+
+    @property
+    def cameras(self) -> Tuple[Camera, ...]:
+        return self.capture.cameras
 
     def camera(self, camera_id: str) -> Camera:
         for cam in self.cameras:
@@ -353,6 +421,16 @@ class _Section:
             self.problem(name, f"{pattern_hint}, got {value!r}")
             return None
         return value
+
+    def choice(self, name, choices, required=False, default=None):
+        """A string from `choices`. YAML 1.1 reads an unquoted off/on as false/true, so a
+        boolean is taken as "off"/"on" when that word is one of the choices."""
+        self.used.add(name)
+        value = self.data.get(name)
+        if isinstance(value, bool) and ("on" if value else "off") in choices:
+            return "on" if value else "off"
+        self.used.discard(name)
+        return self.string(name, required=required, default=default, choices=choices)
 
     def integer(self, name, required=True, default=None, low=None, high=None, choices=None):
         value = self._raw(name, required)
@@ -526,11 +604,12 @@ def _read_paths(top: _Section) -> Paths:
     return Paths(root=root)
 
 
-def _read_logging(top: _Section) -> LoggingConfig:
-    s = top.section("logging", required=False)
-    cfg = LoggingConfig(backup_count=s.integer("backup_count", required=False, default=5, low=1, high=365))
+def _read_log(parent: _Section) -> LogSettings:
+    """`<program>.log`, optional. Files always go to <root>/logs/."""
+    s = parent.section("log", required=False)
+    log = LogSettings(backup_count=s.integer("backup_count", required=False, default=5, low=1, high=365))
     s.finish()
-    return cfg
+    return log
 
 
 def _read_db(top: _Section) -> DbConfig:
@@ -564,12 +643,29 @@ def _read_mqtt(top: _Section) -> MqttConfig:
     return cfg
 
 
+def _read_graph(top: _Section, needed_by: List[str]) -> Optional[GraphSettings]:
+    """Shared Microsoft Graph login (D-055). Required when a program on this site uses Graph."""
+    if not top.present("graph"):
+        top.used.add("graph")
+        if needed_by:
+            top.problem("graph", f"missing (needed by {', '.join(needed_by)})")
+        return None
+    g = top.section("graph")
+    graph = GraphSettings(tenant_id=g.string("tenant_id", secret=True),
+                          client_id=g.string("client_id", secret=True),
+                          client_secret=g.string("client_secret", secret=True))
+    g.finish()
+    return graph
+
+
+# ---- capture ----
+
 def _read_camera(item: Any, key: str, problems: List[str]) -> Camera:
     s = _Section(item, key, problems)
     driver = s.string("driver", choices=CAMERA_DRIVERS)
     flir = None
     if s.present("flir") or driver == "flir":
-        # Required with driver flir, not allowed otherwise (cross-field check below).
+        # Required with driver flir, not allowed otherwise.
         f = s.section("flir", required=(driver == "flir"))
         flir = FlirSettings(interface=f.string("interface"),
                             throughput_bps=f.integer("throughput_bps", low=1))
@@ -592,39 +688,51 @@ def _read_camera(item: Any, key: str, problems: List[str]) -> Camera:
     return cam
 
 
-def _read_cameras(top: _Section) -> Tuple[Camera, ...]:
-    items = top._raw("cameras", required=True)
+def _read_cameras(s: _Section) -> Tuple[Camera, ...]:
+    items = s._raw("cameras", required=True)
     if items is _MISSING:
         return ()
     if not isinstance(items, list) or not 1 <= len(items) <= 2:
-        top.problem("cameras", "must be a list with 1 or 2 cameras")
+        s.problem("cameras", "must be a list with 1 or 2 cameras")
         return ()
-    cameras = tuple(_read_camera(item, f"cameras[{i}]", top.problems) for i, item in enumerate(items))
+    cameras = tuple(_read_camera(item, f"{s.path('cameras')}[{i}]", s.problems) for i, item in enumerate(items))
     for attr in ("id", "side", "serial"):
         values = [getattr(c, attr) for c in cameras if getattr(c, attr) is not None]
         for value in sorted({v for v in values if values.count(v) > 1}):
-            top.problem("cameras", f"{attr} {value!r} is used by more than one camera")
+            s.problem("cameras", f"{attr} {value!r} is used by more than one camera")
     return cameras
 
 
-def _read_object_sizes(s: _Section, sides: List[str]) -> Dict[str, ObjectSizes]:
-    sizes_section = s.section("object_sizes")
-    result = {}
-    for side in sides:
-        side_section = sizes_section.section(side)
-        values = {k: side_section.integer(k, low=1, high=100000) for k in OBJECT_SIZE_KEYS}
-        side_section.finish()
-        result[side] = ObjectSizes(**values)
-    # Only the sides that have a camera are allowed (CONTRACTS 7 cross-field check).
-    # Skipped when no camera is valid: the camera problems are already reported.
-    if not sides:
-        sizes_section.used.update(sizes_section.data)
-    for key in (sizes_section.data if sides else ()):
+def _read_capture(top: _Section) -> CaptureConfig:
+    s = top.section("capture")
+    cfg = CaptureConfig(log=_read_log(s), cameras=_read_cameras(s))
+    s.finish()
+    return cfg
+
+
+# ---- inspection ----
+
+def _read_side(s: _Section, side: str) -> SideSettings:
+    side_section = s.section(side)
+    sizes = side_section.section("object_sizes")
+    values = {k: sizes.integer(k, low=1, high=100000) for k in OBJECT_SIZE_KEYS}
+    sizes.finish()
+    side_section.finish()
+    return SideSettings(object_sizes=ObjectSizes(**values))
+
+
+def _read_sides(parent: _Section, sides: List[str]) -> Dict[str, SideSettings]:
+    """`inspection.sides`: exactly one entry per configured camera side."""
+    s = parent.section("sides")
+    result = {side: _read_side(s, side) for side in sides}
+    if not sides:      # no valid camera: those problems are already reported
+        s.used.update(s.data)
+    for key in (s.data if sides else ()):
         if key not in sides:
-            sizes_section.problem(str(key), "no camera is configured for this side" if key in CAMERA_SIDES.values()
-                                  else "unknown key (use LEFT or RIGHT)")
-            sizes_section.used.add(key)
-    sizes_section.finish()
+            s.problem(str(key), "no camera is configured for this side" if key in CAMERA_SIDES.values()
+                      else "unknown key (use LEFT or RIGHT)")
+            s.used.add(key)
+    s.finish()
     return result
 
 
@@ -649,48 +757,55 @@ def _read_wheel_stand_counts(s: _Section, total_wheels: Optional[int]) -> Dict[i
     return result
 
 
-def _read_machine(top: _Section, sides: List[str]) -> MachineConfig:
-    s = top.section("machine")
+def _read_machine(parent: _Section) -> MachineConfig:
+    s = parent.section("machine")
     total = s.integer("total_wheel_count", low=1, high=100000)
     cfg = MachineConfig(
         total_wheel_count=total,
         expected_cycle_total=s.integer("expected_cycle_total", required=False, low=1, high=100000),
         wheel_stand_required_counts=_read_wheel_stand_counts(s, total),
-        object_sizes=_read_object_sizes(s, sides),
     )
     s.finish()
     return cfg
 
 
-def _read_model(top: _Section, paths: Paths) -> ModelConfig:
-    s = top.section("model")
-    model_dir = s.string("dir")
-    weights = s.string("weights", required=False, default="model_final.pth")
-    class_json = s.string("class_json")
-    detectron_yaml = s.string("detectron_yaml")
-    classes = s.string_list("classes")
-    if classes is not None and not classes:
-        s.problem("classes", "must not be empty")
-    if classes and len(set(classes)) != len(classes):
-        s.problem("classes", "contains a class more than once")
-    detect_labels = s.string_list("detect_labels", required=False, default=classes)
-    if classes and detect_labels:
-        for label in detect_labels:
-            if label not in classes:
-                s.problem("detect_labels", f"{label!r} is not in classes")
-    cfg = ModelConfig(
-        dir=_resolve(paths, model_dir),
-        # weights and class_json are files inside the model folder
-        weights=_join(_resolve(paths, model_dir), weights),
-        class_json=_join(_resolve(paths, model_dir), class_json),
-        detectron_yaml=_resolve(paths, detectron_yaml),
+def _read_model_ref(parent: _Section, paths: Paths) -> ModelRef:
+    s = parent.section("model")
+    hint = "use letters, digits, '.', '_' or '-' (it is a folder name)"
+    name = s.string("name", pattern=_MODEL_PART_RE, pattern_hint=hint)
+    version = s.string("version", pattern=_MODEL_PART_RE, pattern_hint=hint)
+    if version == CURRENT_POINTER:
+        s.problem("version", f"'{CURRENT_POINTER}' is the pointer name, give a real version")
+        version = None
+    s.finish()
+    models_root = os.path.join(paths.data, "models", name) if name and paths.root else None
+    return ModelRef(name=name, version=version, root=models_root,
+                    dir=os.path.join(models_root, version) if models_root and version else None)
+
+
+def _read_auto_roi(parent: _Section) -> AutoRoi:
+    s = parent.section("auto_roi", required=False)
+    roi = AutoRoi(mode=s.choice("mode", AUTO_ROI_MODES, default="observe"),     # D-054 starts in observe
+                  learn_images=s.integer("learn_images", required=False, default=30, low=1, high=100000))
+    s.finish()
+    return roi
+
+
+def _read_inspection(top: _Section, paths: Paths, sides: List[str]) -> InspectionConfig:
+    s = top.section("inspection")
+    cfg = InspectionConfig(
+        log=_read_log(s),
+        model=_read_model_ref(s, paths),
         threshold=s.number("threshold", low=0, high=1, low_exclusive=True, high_exclusive=True),
-        classes=classes,
-        detect_labels=detect_labels,
+        machine=_read_machine(s),
+        sides=_read_sides(s, sides),
+        auto_roi=_read_auto_roi(s),
     )
     s.finish()
     return cfg
 
+
+# ---- plc ----
 
 def _read_plc(top: _Section) -> PlcConfig:
     s = top.section("plc")
@@ -719,9 +834,28 @@ def _read_plc(top: _Section) -> PlcConfig:
         cleaning_pulse_seconds=s.number("cleaning_pulse_seconds", required=False, default=10.0,
                                         low=0, low_exclusive=True, high=600),
         legacy_db_numbers=legacy,
+        log=_read_log(s),
     )
     s.finish()
     return cfg
+
+
+# ---- mail ----
+
+def _read_smtp(s: _Section, sender: Optional[str]) -> Optional[SmtpSettings]:
+    """`mail.smtp`: required with sender smtp; absent or null otherwise."""
+    if sender != "smtp":
+        s.used.add("smtp")
+        if sender is not None and s.present("smtp"):
+            s.problem("smtp", "only allowed when sender is smtp (use null or leave it out)")
+        return None
+    sm = s.section("smtp")
+    # host and port defaults are the values hardcoded in today's SMTP sender
+    smtp = SmtpSettings(host=sm.string("host", required=False, default="smtp.gmail.com"),
+                        port=sm.integer("port", required=False, default=587, low=1, high=65535),
+                        password=sm.string("password", secret=True))
+    sm.finish()
+    return smtp
 
 
 def _read_mail(top: _Section, paths: Paths) -> MailConfig:
@@ -731,6 +865,9 @@ def _read_mail(top: _Section, paths: Paths) -> MailConfig:
     recipients = s.string_list("recipients", item_pattern=_EMAIL_RE, item_hint=email_hint)
     if recipients is not None and not recipients:
         s.problem("recipients", "needs at least one address")
+    # [] or absent: the daily disk report goes to the normal recipients
+    disk_report_to = s.string_list("disk_report_to", required=False, default=(),
+                                   item_pattern=_EMAIL_RE, item_hint=email_hint)
     cfg = MailConfig(
         sender=sender,
         project_name=s.string("project_name"),
@@ -738,47 +875,15 @@ def _read_mail(top: _Section, paths: Paths) -> MailConfig:
         recipients=recipients,
         cc=s.string_list("cc", required=False, default=(), item_pattern=_EMAIL_RE, item_hint=email_hint),
         sender_address=s.string("sender_address", pattern=_EMAIL_RE, pattern_hint=email_hint),
-        disk_report_to=s.string_list("disk_report_to", required=False, default=recipients,
-                                     item_pattern=_EMAIL_RE, item_hint=email_hint),
-        graph=_read_graph(s, sender),
+        disk_report_to=disk_report_to or recipients,
         smtp=_read_smtp(s, sender),
+        log=_read_log(s),
     )
     s.finish()
     return cfg
 
 
-def _sender_block(s: _Section, name: str, sender: Optional[str]) -> Optional[_Section]:
-    """The `graph` / `smtp` block: required when `sender` names it, not allowed otherwise."""
-    if sender == name:
-        return s.section(name)
-    s.used.add(name)
-    if sender is not None and s.present(name):
-        s.problem(name, f"only allowed when sender is {name}")
-    return None
-
-
-def _read_graph(s: _Section, sender: Optional[str]) -> Optional[GraphSettings]:
-    g = _sender_block(s, "graph", sender)
-    if g is None:
-        return None
-    graph = GraphSettings(tenant_id=g.string("tenant_id", secret=True),
-                          client_id=g.string("client_id", secret=True),
-                          client_secret=g.string("client_secret", secret=True))
-    g.finish()
-    return graph
-
-
-def _read_smtp(s: _Section, sender: Optional[str]) -> Optional[SmtpSettings]:
-    sm = _sender_block(s, "smtp", sender)
-    if sm is None:
-        return None
-    # host and port defaults are the values hardcoded in today's SMTP sender
-    smtp = SmtpSettings(host=sm.string("host", required=False, default="smtp.gmail.com"),
-                        port=sm.integer("port", required=False, default=587, low=1, high=65535),
-                        password=sm.string("password", secret=True))
-    sm.finish()
-    return smtp
-
+# ---- cleanup ----
 
 def _read_keep_limit(s: _Section, name: str, days: int, items: int) -> KeepLimit:
     k = s.section(name, required=False)
@@ -788,9 +893,9 @@ def _read_keep_limit(s: _Section, name: str, days: int, items: int) -> KeepLimit
     return limit
 
 
-def _read_retention(top: _Section) -> RetentionConfig:
+def _read_cleanup(top: _Section) -> CleanupConfig:
     # Defaults are today's deleter_config values.
-    s = top.section("retention", required=False)
+    s = top.section("cleanup", required=False)
     d = s.section("disk_percent", required=False)
     defaults = {"delete": 75, "raw_delete": 85, "mail": 90, "inference_delete": 95}
     disk = {key: d.integer(key, required=False, default=defaults[key], low=1, high=99)
@@ -800,14 +905,50 @@ def _read_retention(top: _Section) -> RetentionConfig:
     if None not in values and values != sorted(set(values)):
         d.problem("", "must increase strictly in the order "
                       + " < ".join(f"{k} ({disk[k]})" for k in DISK_PERCENT_ORDER))
-    cfg = RetentionConfig(
+    cfg = CleanupConfig(
         raw_image_hours=s.integer("raw_image_hours", required=False, default=24, low=1, high=8760),
-        cleanup_interval_seconds=s.integer("cleanup_interval_seconds", required=False, default=10,
-                                           low=1, high=86400),
+        interval_seconds=s.integer("interval_seconds", required=False, default=10, low=1, high=86400),
         repeated=_read_keep_limit(s, "repeated", 20, 200),
         plate_days=s.integer("plate_days", required=False, default=10, low=1, high=3650),
         defective=_read_keep_limit(s, "defective", 10, 200),
         disk_percent=disk,
+        log=_read_log(s),
+    )
+    s.finish()
+    return cfg
+
+
+# ---- transfer and models (D-057, D-056) ----
+
+def _read_transfer(top: _Section, site_id: Optional[str]) -> Optional[TransferConfig]:
+    """Optional: absent means this site runs no transfer service."""
+    if not top.present("transfer"):
+        top.used.add("transfer")
+        return None
+    s = top.section("transfer")
+    upload = None
+    if s.present("upload"):
+        u = s.section("upload")
+        folder = u.string("remote_folder", required=False, default=f"DPC/data/{SITE_ID_TOKEN}")
+        upload = TransferUpload(
+            weekday=u.string("weekday", required=False, default="sunday", choices=WEEKDAYS),
+            chunk_mb=u.integer("chunk_mb", required=False, default=500, low=1, high=100000),
+            remote_folder=folder.replace(SITE_ID_TOKEN, site_id) if folder and site_id else folder,
+        )
+        u.finish()
+    else:
+        s.used.add("upload")
+    cfg = TransferConfig(upload=upload, log=_read_log(s))
+    s.finish()
+    return cfg
+
+
+def _read_models(top: _Section) -> ModelsConfig:
+    s = top.section("models", required=False)
+    cfg = ModelsConfig(
+        remote_folder=s.string("remote_folder", required=False, default="DPC/models"),
+        check_interval_hours=s.integer("check_interval_hours", required=False, default=6, low=1, high=8760),
+        auto_update=s.choice("auto_update", AUTO_UPDATE_MODES, default="off"),
     )
     s.finish()
     return cfg
@@ -819,22 +960,20 @@ def _resolve(paths: Paths, value: Optional[str]) -> Optional[str]:
     return paths.resolve(value)
 
 
-def _join(folder: Optional[str], name: Optional[str]) -> Optional[str]:
-    if folder is None or name is None:
-        return None
-    return os.path.normpath(os.path.join(folder, os.path.expanduser(name)))
-
-
 # ======================================================================
 # Public: site.yaml
 # ======================================================================
 
 def load_site_config(path: Optional[str] = None) -> SiteConfig:
-    """Read, default and validate site.yaml. Raises SiteConfigError listing every problem."""
+    """Read, default and validate site.yaml (schema v3). Raises SiteConfigError listing every problem."""
     path = os.path.abspath(os.path.expanduser(path)) if path else default_config_path()
     data = _read_yaml(path)
-    if isinstance(data, dict) and data.get("schema_version") == 1:
-        raise SiteConfigError(path, [_v1_upgrade_message(data)])
+    old_version = data.get("schema_version") if isinstance(data, dict) else None
+    if old_version == 2:
+        raise SiteConfigError(path, v2_move_problems(data))
+    if old_version == 1:
+        raise SiteConfigError(path, ["schema_version: this is a v1 file; start from "
+                                     "config/examples/site.example.yaml (v3, CONTRACTS 7.1)"])
 
     problems: List[str] = []
     top = _Section(data, "", problems)
@@ -844,23 +983,37 @@ def load_site_config(path: Optional[str] = None) -> SiteConfig:
 
     site = _read_site(top)
     paths = _read_paths(top)
-    logging_cfg = _read_logging(top)
     db = _read_db(top)
     mqtt = _read_mqtt(top)
-    cameras = _read_cameras(top)
-    sides = [c.side for c in cameras if c.side]
-    machine = _read_machine(top, sides)
-    model = _read_model(top, paths)
+    capture = _read_capture(top)
+    sides = [c.side for c in capture.cameras if c.side]
+    inspection = _read_inspection(top, paths, sides)
     plc = _read_plc(top)
     mail = _read_mail(top, paths)
-    retention = _read_retention(top)
+    cleanup = _read_cleanup(top)
+    transfer = _read_transfer(top, site.id)
+    models = _read_models(top)
+    graph = _read_graph(top, _graph_users(mail, transfer))
+    if models.auto_update not in (None, "off") and transfer is None:
+        top.problem("models", f"auto_update {models.auto_update} needs a transfer section: "
+                              f"the transfer service downloads models (D-057)")
     top.finish()
 
     if problems:
         raise SiteConfigError(path, problems)
-    return SiteConfig(schema_version=version, site=site, paths=paths, logging=logging_cfg, db=db,
-                      mqtt=mqtt, cameras=cameras, machine=machine, model=model, plc=plc, mail=mail,
-                      retention=retention, source_path=path, warnings=tuple(_warnings(db)))
+    return SiteConfig(schema_version=version, site=site, paths=paths, db=db, mqtt=mqtt, graph=graph,
+                      capture=capture, inspection=inspection, plc=plc, mail=mail, cleanup=cleanup,
+                      transfer=transfer, models=models, source_path=path, warnings=tuple(_warnings(db)))
+
+
+def _graph_users(mail: MailConfig, transfer: Optional[TransferConfig]) -> List[str]:
+    """Which programs need the shared `graph` login on this site."""
+    users = []
+    if mail.sender == "graph":
+        users.append("mail (sender graph)")
+    if transfer is not None:
+        users.append("transfer")
+    return users
 
 
 def _warnings(db: DbConfig) -> List[str]:
@@ -872,24 +1025,102 @@ def _warnings(db: DbConfig) -> List[str]:
     return warnings
 
 
-def _v1_upgrade_message(data: Dict[str, Any]) -> str:
-    """A v1 file lacks the secrets (they were in secrets.env). Say exactly what to add."""
-    def block(*keys):
-        node = data
-        for key in keys:
-            node = node.get(key) if isinstance(node, dict) else None
-        return node if isinstance(node, dict) else {}
+# ======================================================================
+# v2 -> v3 (D-055): which keys moved. Used for the error message and by
+# scripts/convert_site_yaml_v3.py. Key names only, never values.
+# ======================================================================
 
-    db, mail = block("db"), block("mail")
-    to_add = [key for key, present in (("db.user", db.get("user")), ("db.password", db.get("password")),
-                                       ("mail.sender_address", mail.get("sender_address"))) if not present]
-    if mail.get("sender") == "smtp":
-        if not block("mail", "smtp").get("password"):
-            to_add.append("mail.smtp.password")
-    elif not block("mail", "graph"):
-        to_add.append("mail.graph (tenant_id, client_id, client_secret)")
-    what = f"add {', '.join(to_add)} (the values from the old secrets.env), then " if to_add else ""
-    return f"schema_version: this is a v1 file; {what}set schema_version: 2 (CONTRACTS 7, D-048)"
+PROGRAM_LOGS = ("capture", "inspection", "plc", "mail", "cleanup")
+MODEL_PACKAGE_KEYS = ("dir", "weights", "class_json", "detectron_yaml", "classes", "detect_labels")
+_TO_MODEL_PACKAGE = None     # marks "goes into the model package, not into site.yaml"
+
+
+def _get(data: Any, *keys) -> Any:
+    for key in keys:
+        if not isinstance(data, dict) or key not in data:
+            return _MISSING
+        data = data[key]
+    return data
+
+
+def v2_moves(data: Dict[str, Any]) -> List[Tuple[str, Optional[str]]]:
+    """(old key, new key) for every v2 key present that moves in v3. New key None = it now
+    comes from the model package (CONTRACTS 12) and is removed from site.yaml."""
+    moves: List[Tuple[str, Optional[str]]] = []
+    if _get(data, "logging", "backup_count") is not _MISSING:
+        moves.append(("logging.backup_count", "<program>.log.backup_count (" + ", ".join(PROGRAM_LOGS) + ")"))
+    if _get(data, "cameras") is not _MISSING:
+        moves.append(("cameras", "capture.cameras"))
+    for key in ("total_wheel_count", "expected_cycle_total", "wheel_stand_required_counts"):
+        if _get(data, "machine", key) is not _MISSING:
+            moves.append((f"machine.{key}", f"inspection.machine.{key}"))
+    sizes = _get(data, "machine", "object_sizes")
+    for side in (sizes if isinstance(sizes, dict) else {}):
+        moves.append((f"machine.object_sizes.{side}", f"inspection.sides.{side}.object_sizes"))
+    if _get(data, "model", "threshold") is not _MISSING:
+        moves.append(("model.threshold", "inspection.threshold"))
+    for key in MODEL_PACKAGE_KEYS:
+        if _get(data, "model", key) is not _MISSING:
+            moves.append((f"model.{key}", _TO_MODEL_PACKAGE))
+    for key in ("tenant_id", "client_id", "client_secret"):
+        if _get(data, "mail", "graph", key) is not _MISSING:
+            moves.append((f"mail.graph.{key}", f"graph.{key}"))
+    retention = _get(data, "retention")
+    for key in (retention if isinstance(retention, dict) else {}):
+        new = "cleanup.interval_seconds" if key == "cleanup_interval_seconds" else f"cleanup.{key}"
+        moves.append((f"retention.{key}", new))
+    return moves
+
+
+def v2_move_problems(data: Dict[str, Any]) -> List[str]:
+    lines = ["schema_version: this is a v2 file; move these keys, then set schema_version: 3 "
+             "(CONTRACTS 7.1, D-055; scripts/convert_site_yaml_v3.py does it for you)"]
+    for old, new in v2_moves(data):
+        if new is _TO_MODEL_PACKAGE:
+            lines.append(f"{old} -> remove: it comes from the model package now (CONTRACTS 12)")
+        else:
+            lines.append(f"{old} -> {new}")
+    lines.append("inspection.model -> add {name, version} of the model package (D-056)")
+    return lines
+
+
+def convert_v2_to_v3(data: Dict[str, Any], model_name: str, model_version: str) -> Dict[str, Any]:
+    """A v3 mapping built from a v2 mapping, following v2_moves(). Values are copied, never
+    printed. Keys that did not move are copied as they are; the result still has to pass
+    load_site_config (run the check after converting)."""
+    import copy
+    old = copy.deepcopy(data)
+    log = {"backup_count": old.pop("logging", {}).get("backup_count", 5)}
+    machine = old.pop("machine", {}) or {}
+    model = old.pop("model", {}) or {}
+    mail = old.pop("mail", {}) or {}
+    graph = mail.pop("graph", None)
+    retention = old.pop("retention", {}) or {}
+    if "cleanup_interval_seconds" in retention:
+        retention["interval_seconds"] = retention.pop("cleanup_interval_seconds")
+    sizes = machine.pop("object_sizes", {}) or {}
+
+    new: Dict[str, Any] = {"schema_version": SCHEMA_VERSION}
+    for key in ("site", "paths", "db", "mqtt"):
+        if key in old:
+            new[key] = old.pop(key)
+    if graph is not None:
+        new["graph"] = graph
+    new["capture"] = {"log": dict(log), "cameras": old.pop("cameras", [])}
+    inspection = {"log": dict(log), "model": {"name": model_name, "version": model_version}}
+    if "threshold" in model:
+        inspection["threshold"] = model["threshold"]
+    inspection["machine"] = machine
+    inspection["sides"] = {side: {"object_sizes": value} for side, value in sizes.items()}
+    inspection["auto_roi"] = {"mode": "observe", "learn_images": 30}
+    new["inspection"] = inspection
+    if "plc" in old:
+        new["plc"] = dict(old.pop("plc"), log=dict(log))
+    new["mail"] = dict(mail, log=dict(log))
+    new["cleanup"] = dict(retention, log=dict(log))
+    old.pop("schema_version", None)
+    new.update(old)              # anything left (unknown keys) is kept so the check reports it
+    return new
 
 
 # ======================================================================
@@ -900,7 +1131,7 @@ def _v1_upgrade_message(data: Dict[str, Any]) -> str:
 SECRET_KEY_PATHS = {
     ("db", "user"), ("db", "password"),
     ("mqtt", "user"), ("mqtt", "password"),
-    ("mail", "graph", "tenant_id"), ("mail", "graph", "client_id"), ("mail", "graph", "client_secret"),
+    ("graph", "tenant_id"), ("graph", "client_id"), ("graph", "client_secret"),
     ("mail", "smtp", "password"),
 }
 # Belt and braces: also hide anything whose key name looks secret, wherever it is
@@ -970,9 +1201,10 @@ def legacy_env_vars(config: SiteConfig) -> Dict[str, str]:
         "DPC_DISK_REPORT_TO": ",".join(mail.disk_report_to),
         "DPC_SITE_NAME": config.site.name,
     }
-    if mail.graph is not None:
-        env.update({"DPC_MS_TENANT_ID": mail.graph.tenant_id, "DPC_MS_CLIENT_ID": mail.graph.client_id,
-                    "DPC_MS_CLIENT_SECRET": mail.graph.client_secret})
+    if config.graph is not None:
+        graph = config.graph
+        env.update({"DPC_MS_TENANT_ID": graph.tenant_id, "DPC_MS_CLIENT_ID": graph.client_id,
+                    "DPC_MS_CLIENT_SECRET": graph.client_secret})
     if mail.smtp is not None:
         env["DPC_SMTP_PASSWORD"] = mail.smtp.password
     if config.mqtt.user is not None:
@@ -986,7 +1218,7 @@ def legacy_env_vars(config: SiteConfig) -> Dict[str, str]:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m common.config.site_config",
-                                     description="Check a DPC site.yaml (schema v2).")
+                                     description="Check a DPC site.yaml (schema v3).")
     parser.add_argument("path", nargs="?", help=f"site.yaml (default: ${CONFIG_ENV_VAR} or {DEFAULT_CONFIG_PATH})")
     parser.add_argument("--redacted", action="store_true",
                         help="print the file with every secret replaced by *** (safe to share); no check")
