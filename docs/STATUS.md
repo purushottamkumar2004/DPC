@@ -81,7 +81,7 @@ Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release t
 | Contract impact | Worker ids `frame_capture_cam1` and `frame_capture_cam2` (D-033). Decide where the site `workers.yaml` lives (see gaps). No DB change. |
 | Done when | (a) The Supervisor starts both captures. (b) `kill -9` on one capture leads to a restart within 10 s and a `worker_restarted` event on MQTT. (c) A pulled cable produces UNHEALTHY and then recovery, without exhausting `max_retries`. (d) A 24 h unattended run with both cameras has no FAILED state and the `INF` folders are drained (manually, until the algorithms run). |
 
-### 5. `dpc-check` preflight: code DONE (PR #9, `05ba5ef`; 134 tests pass on main); Tadipatri run with both captures running pending
+### 5. `dpc-check` preflight: DONE 2026-10-20 (PR #9). Tadipatri run with both captures live: all PASS except WARN `db.user` root (D-050), exit 2, 0.5 s; captures undisturbed. Deliberate-failure checks covered by unit tests, not repeated on site
 | | |
 |---|---|
 | Owner chat | CONFIG |
