@@ -29,6 +29,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-12.
 - Tadipatri 2026-10-20: real `site.yaml` v2 created (`site`, `db`, `cameras` filled; `machine`, `model`, `plc`, `mail` still example values marked TODO) and validated with the loader, incl. the chmod 600 refusal. Cable-pull test passed on CAM1: frames resume and health goes NOK then OK with no restart. Health table renamed to `health_status` (lowercase).
 
 ## In progress
+- **Tadipatri is not in production yet** (developer, 2026-10-20): only the two captures run, under the Supervisor; inspection, mail, PLC and cleanup are not running. The base programs are being brought into the new layout one at a time, in the STATUS order. No detection gap.
 - Repo hygiene: the repo is **public** (checked 2026-10-12). Make it Private (GitHub, Settings, General, Danger Zone, Change visibility). A history scan found only `CHANGE_ME` placeholders, no real passwords; tag `v0.1` still to confirm.
 - Set CAM2 exposure to 2000 us in `BASLER_CONFIG2.xml` (position 5; done on the machine by you). Rotation switches off with item 2.
 
