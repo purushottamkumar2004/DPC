@@ -269,7 +269,7 @@ capture:
 
 inspection:
   log: {backup_count: 5}
-  model: {name: dpc_maskrcnn, version: "2026.10.1"}    # pinned version, or `auto` = follow `current` (D-059); files, classes, label map come from the model package (D-056)
+  model: {name: dpc_maskrcnn}                          # which model only; the version is managed by the Supervisor (D-060)
   threshold: 0.5
   machine: {total_wheel_count: 190, expected_cycle_total: 188, wheel_stand_required_counts: {34: 3}}
   sides:
@@ -280,18 +280,19 @@ inspection:
 plc:      {type: modbus_tcp, ip: 192.168.2.5, port: 502, light_register: 4109, cleaning_register: 4106, conveyor_status_register: 4098, cleaning_pulse_seconds: 10, log: {backup_count: 5}}
 mail:     {sender: graph, sender_address: "dpc@example.com", project_name: "Tadipatri_dpc", recipients: ["a@example.com"], cc: [], disk_report_to: [], smtp: null, log: {backup_count: 5}}
 cleanup:  {raw_image_hours: 24, interval_seconds: 10, repeated: {days: 20, items: 200}, plate_days: 10, defective: {days: 10, items: 200}, disk_percent: {delete: 75, raw_delete: 85, mail: 90, inference_delete: 95}, log: {backup_count: 5}}
-transfer: {upload: {weekday: sunday, chunk_mb: 500, remote_folder: "DPC/data/<site.id>"}, log: {backup_count: 5}}
-models:   {remote_folder: "DPC/models", check_interval_hours: 6, auto_update: off}   # off | download | install (D-056)
+transfer: {upload: {weekday: sunday, chunk_mb: 500, remote_folder: "DPC/data/<site.id>"}, models_folder: "DPC/models", log: {backup_count: 5}}
 ```
 Values above are examples. `mail.smtp` is a block (host, port, password) only when `sender: smtp`. Which keys each program reads is fixed when that program is migrated; new keys are append-only (section 8).
-**Built details (PR #10):** optional keys kept from v2: `plc.timeout_s`, `plc.legacy_db_numbers`, `mail.report_dir` (defaults as v2). `model.detect_labels` is dropped (append a key if inspection needs it). `graph` is required when `mail.sender: graph` or a `transfer` section exists. `transfer` is optional (absent = no transfer service); `transfer.upload` optional (absent = download only); defaults `weekday: sunday`, `chunk_mb: 500` (upload batch size, not the Graph request size), `remote_folder: "DPC/data/<site.id>"`. `models.auto_update: download|install` requires a `transfer` section. `mail.disk_report_to` empty or absent = `recipients`. `auto_roi` defaults: `mode: observe`, `learn_images: 30`. A v2 file is refused with one line per moved key; `scripts/convert_site_yaml_v3.py` converts it.
+**Built details (PR #10):** optional keys kept from v2: `plc.timeout_s`, `plc.legacy_db_numbers`, `mail.report_dir` (defaults as v2). `model.detect_labels` is dropped (append a key if inspection needs it). `graph` is required when `mail.sender: graph` or a `transfer` section exists. `transfer` is optional (absent = no transfer service); `transfer.upload` optional (absent = download only); defaults `weekday: sunday`, `chunk_mb: 500` (upload batch size, not the Graph request size), `remote_folder: "DPC/data/<site.id>"`. (D-060: `inspection.model.version` and the `models` section are removed from v3; update policy lives in the Supervisor config.) `mail.disk_report_to` empty or absent = `recipients`. `auto_roi` defaults: `mode: observe`, `learn_images: 30`. A v2 file is refused with one line per moved key; `scripts/convert_site_yaml_v3.py` converts it.
 
 ## 11. Learned values [ACCEPTED, not built] (D-054)
 `<root>/data/state/<program>/<topic>.json`, one writer each, atomic write, JSON with `schema_version`, `learned_from` {camera serial, rotate, model name, model version, images, time} and the values. Ignored and relearned when `learned_from` no longer matches; `site.yaml` fixed values win; delete to reset; unreadable = relearn, never crash.
 
 ## 12. Model packages and switch [reader BUILT PR #10; switch and download not built] (D-056, D-057)
 `<root>/data/models/<name>/<version>/` = weights, Detectron yaml, `classes.json` (class list + label mapping), `manifest.json` {name, version, trained_at, files: {file: sha256}}; `<root>/data/models/<name>/current` points to the running version. OneDrive source `DPC/models/<name>/<version>/`, `manifest.json` uploaded last. Transfer service: download, verify, mark ready (`ready` file in the version folder); never switches. Supervisor: switch = test on saved images, move `current`, restart inspection once, keep previous for rollback; publishes `model_switched` / `model_switch_failed` events.
-**Formats (built, PR #10):** `classes.json` = `{"classes": [...], "label_map": {...}}`. `manifest.json` lists `classes.json`, exactly one `.pth` (weights) and one `.yaml`/`.yml` (Detectron config), each with its sha256; extra keys allowed; a `classes` key in the manifest, if present, must equal `classes.json`. `current` is a relative symlink to the version folder (a plain file holding the version name is also read); `set_current()` switches it atomically. API in `common/config/model_package.py`: `load_model_package(cfg)`, `verify_package()`, `set_current()`. Which version runs (D-059): pinned `version` = that version, `current` ignored; `version: auto` = `current`.
+**Formats (built, PR #10):** `classes.json` = `{"classes": [...], "label_map": {...}}`. `manifest.json` lists `classes.json`, exactly one `.pth` (weights) and one `.yaml`/`.yml` (Detectron config), each with its sha256; extra keys allowed; a `classes` key in the manifest, if present, must equal `classes.json`. `current` is a relative symlink to the version folder (a plain file holding the version name is also read); `set_current()` switches it atomically. API in `common/config/model_package.py`: `load_model_package(cfg)`, `verify_package()`, `set_current()`. Which version runs (D-060): `current`, written only by the Supervisor; a `pinned` marker in `data/models/<name>/` stops automatic switching.
+**Supervisor model management (D-060, not built):** `workers.yaml` section `models: {auto_update: off|download|install, check_interval_hours: 6}`; commands `model status | switch <version> | rollback | pin <version> | unpin`; state files `data/models/<name>/current` and `pinned`, Supervisor is the only writer; events `model_switched`, `model_switch_failed`, `model_rolled_back`, `model_pinned`, `model_unpinned`.
+
 
 ## 8. Compatibility rules
 Topics, status fields, event names, XML tag order and DB columns are append-only; renaming/removing needs a DECISIONS entry plus a migration note. New optional config keys must not break existing files.
