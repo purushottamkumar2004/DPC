@@ -100,6 +100,7 @@ Done when: the old secrets are revoked; `SITES.md` shows the Tadipatri release t
 | 9 | new W-transfer | Transfer service (D-057): weekly chunked upload, model download + verify + mark ready | Upload resumes after a cut connection; a version without `manifest.json` is ignored; a bad checksum is rejected and reported |
 | 10 | W-inspection | Auto-ROI in observe mode (D-054, case A9 groundwork) | Learned file written per side; log lines show what filtering would remove; nothing removed |
 | 6b | CONFIG | Tool to package an existing model: `scripts/make_model_package.py` builds `data/models/<name>/<version>/` (copies weights, Detectron yaml, writes `classes.json` from the current class list and label map, writes `manifest.json` with sha256, sets `current`) | Tadipatri's present model packaged; `dpc-check` line `model` = PASS |
+| 6d | CONFIG | D-059: `inspection.model.version` pinned or `auto`; `auto_update: install` requires `auto`; `running_version` and `dpc-check` line `model` follow D-059 (replaces "current wins") | Tests: pinned ignores `current`; `auto` follows it; `install` + pinned is a loader error; pinned-but-missing = FAIL |
 | 6c | You (Tadipatri) | Convert `site.yaml` to v3: `python3 scripts/convert_site_yaml_v3.py ~/INSIGHTZZ/config/site.yaml`, then `python3 scripts/dpc_check.py` | `site.yaml` PASS (root WARN only); `model` WARN until 6b |
 
 ### Follow-ups from handoffs (small, any order)

@@ -269,7 +269,7 @@ capture:
 
 inspection:
   log: {backup_count: 5}
-  model: {name: dpc_maskrcnn, version: "2026.10.1"}    # files, classes, label map come from the model package (D-056)
+  model: {name: dpc_maskrcnn, version: "2026.10.1"}    # pinned version, or `auto` = follow `current` (D-059); files, classes, label map come from the model package (D-056)
   threshold: 0.5
   machine: {total_wheel_count: 190, expected_cycle_total: 188, wheel_stand_required_counts: {34: 3}}
   sides:
@@ -291,7 +291,7 @@ Values above are examples. `mail.smtp` is a block (host, port, password) only wh
 
 ## 12. Model packages and switch [reader BUILT PR #10; switch and download not built] (D-056, D-057)
 `<root>/data/models/<name>/<version>/` = weights, Detectron yaml, `classes.json` (class list + label mapping), `manifest.json` {name, version, trained_at, files: {file: sha256}}; `<root>/data/models/<name>/current` points to the running version. OneDrive source `DPC/models/<name>/<version>/`, `manifest.json` uploaded last. Transfer service: download, verify, mark ready (`ready` file in the version folder); never switches. Supervisor: switch = test on saved images, move `current`, restart inspection once, keep previous for rollback; publishes `model_switched` / `model_switch_failed` events.
-**Formats (built, PR #10):** `classes.json` = `{"classes": [...], "label_map": {...}}`. `manifest.json` lists `classes.json`, exactly one `.pth` (weights) and one `.yaml`/`.yml` (Detectron config), each with its sha256; extra keys allowed; a `classes` key in the manifest, if present, must equal `classes.json`. `current` is a relative symlink to the version folder (a plain file holding the version name is also read); `set_current()` switches it atomically. API in `common/config/model_package.py`: `load_model_package(cfg)`, `verify_package()`, `set_current()`. Which version runs: see D-058.
+**Formats (built, PR #10):** `classes.json` = `{"classes": [...], "label_map": {...}}`. `manifest.json` lists `classes.json`, exactly one `.pth` (weights) and one `.yaml`/`.yml` (Detectron config), each with its sha256; extra keys allowed; a `classes` key in the manifest, if present, must equal `classes.json`. `current` is a relative symlink to the version folder (a plain file holding the version name is also read); `set_current()` switches it atomically. API in `common/config/model_package.py`: `load_model_package(cfg)`, `verify_package()`, `set_current()`. Which version runs (D-059): pinned `version` = that version, `current` ignored; `version: auto` = `current`.
 
 ## 8. Compatibility rules
 Topics, status fields, event names, XML tag order and DB columns are append-only; renaming/removing needs a DECISIONS entry plus a migration note. New optional config keys must not break existing files.
