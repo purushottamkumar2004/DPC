@@ -13,6 +13,7 @@ Topics (prefix defaults to "dpc"):
   dpc/worker/<id>/health    worker -> supervisor  (heartbeat)
   dpc/worker/<id>/command   anyone  -> supervisor (start/stop/restart)
   dpc/supervisor/status     online/offline        (retained, last-will)
+  dpc/supervisor/event      supervisor -> world   (config_reloaded, config_reload_failed)
 """
 
 import json
@@ -33,7 +34,9 @@ def now_iso() -> str:
 
 
 class MqttClient:
-    def __init__(self, settings, client_id="dpc-supervisor"):
+    def __init__(self, settings, client_id="dpc-supervisor", login=(None, None)):
+        """login = (user, password) from site.yaml mqtt.user / mqtt.password (F11), or
+        (None, None) for a broker without a login. Never logged."""
         self.prefix = settings.topic_prefix
         self.host = settings.host
         self.port = settings.port
@@ -52,8 +55,9 @@ class MqttClient:
             self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
         else:
             self._client = mqtt.Client(client_id=client_id)
-        if settings.username:
-            self._client.username_pw_set(settings.username, settings.password)
+        user, password = login
+        if user:
+            self._client.username_pw_set(user, password)
         self._client.will_set(self.topic("supervisor", "status"),
                               json.dumps({"status": "offline"}), retain=True)
         self._client.on_connect = self._on_connect

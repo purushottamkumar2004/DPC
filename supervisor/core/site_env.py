@@ -1,5 +1,11 @@
 """
-SiteEnv - the legacy env bridge (CONTRACTS 9, D-048, D-049).
+SiteEnv - every place the Supervisor reads site.yaml goes through here, so the rules
+below hold for all of them:
+  * variables()   the legacy env bridge (CONTRACTS 9, D-048, D-049)
+  * mqtt_login()  the Supervisor's own broker login, mqtt.user / mqtt.password (F11)
+  * render()      the rendered worker configs, <root>/config/rendered/<id>.json (6f, D-062)
+
+The legacy env bridge:
 
 Some programs (today only workers/cleanup/delete_script.py) still read their DB and mail
 secrets from DPC_* environment variables. A worker with `env_from_site: true` gets them
@@ -22,7 +28,8 @@ env_from_site worker needs nothing outside supervisor/.
 import logging
 import os
 import sys
-from typing import Dict, Optional
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
 log = logging.getLogger("supervisor.site_env")
 
@@ -33,16 +40,78 @@ class SiteEnvError(Exception):
     """site.yaml could not be turned into environment variables. The text is safe to log."""
 
 
+@dataclass
+class RenderResult:
+    """What render() did. `changes` maps worker_id -> written | unchanged | removed.
+    `error` is None on success; on an error nothing was written and the text is safe to log."""
+    error: Optional[str] = None
+    changes: Dict[str, str] = field(default_factory=dict)
+    rendered_dir: Optional[str] = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
+
+    def ids(self, status: str) -> List[str]:
+        return sorted(w for w, s in self.changes.items() if s == status)
+
+
 class SiteEnv:
     def __init__(self, site_config_path: Optional[str] = None):
         self.site_config_path = site_config_path     # None = $DPC_SITE_CONFIG, then the default
 
+    def load(self):
+        """The validated SiteConfig. Raises SiteEnvError (safe text)."""
+        load_site_config, _, site_config_error = self._import_loader()
+        return self._safely(lambda: load_site_config(self.site_config_path), site_config_error)
+
     def variables(self) -> Dict[str, str]:
         """The DPC_* variables for one worker start. Raises SiteEnvError."""
-        load_site_config, legacy_env_vars, site_config_error = self._import_loader()
+        _, legacy_env_vars, _ = self._import_loader()
+        config = self.load()
+        return legacy_env_vars(config)
+
+    def mqtt_login(self) -> Tuple[Optional[str], Optional[str]]:
+        """(user, password) for the broker, (None, None) when site.yaml gives no login. Raises SiteEnvError."""
+        mqtt = self.load().mqtt
+        return (mqtt.user or None, mqtt.password or None) if mqtt.user else (None, None)
+
+    def render(self) -> RenderResult:
+        """Run the renderer (common.config.render). Never raises: a site.yaml problem is
+        returned as `error` and the renderer has then written nothing."""
         try:
-            config = load_site_config(self.site_config_path)
-            return legacy_env_vars(config)
+            _, _, site_config_error = self._import_loader()
+            from common.config.render import render
+            changes = self._safely(lambda: render(self.site_config_path), site_config_error)
+        except SiteEnvError as exc:
+            return RenderResult(error=str(exc), rendered_dir=self.default_rendered_dir())
+        except ImportError as exc:
+            return RenderResult(error=f"renderer not importable ({type(exc).__name__})",
+                                rendered_dir=self.default_rendered_dir())
+        folder = os.path.dirname(changes[0].path) if changes else self.default_rendered_dir()
+        return RenderResult(changes={c.worker_id: c.status for c in changes}, rendered_dir=folder)
+
+    def site_yaml_path(self) -> Optional[str]:
+        if self.site_config_path:
+            return os.path.abspath(os.path.expanduser(self.site_config_path))
+        try:
+            self._import_loader()
+            from common.config.site_config import default_config_path
+            return default_config_path()
+        except (SiteEnvError, ImportError):
+            return None
+
+    def default_rendered_dir(self) -> Optional[str]:
+        """<folder of site.yaml>/rendered: where the last good render is when site.yaml
+        cannot be read now (CONTRACTS 4.1: site.yaml and rendered/ are both in <root>/config)."""
+        path = self.site_yaml_path()
+        return os.path.join(os.path.dirname(path), "rendered") if path else None
+
+    @staticmethod
+    def _safely(action, site_config_error):
+        """Run a loader call; turn every error into a SiteEnvError whose text holds no value."""
+        try:
+            return action()
         except site_config_error as exc:
             raise SiteEnvError(str(exc)) from None           # the loader's message holds no values
         except OSError as exc:

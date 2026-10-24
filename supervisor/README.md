@@ -157,3 +157,20 @@ Tests: `python3 -m unittest tests.unit.test_supervisor_v2 -v` from the repo root
    enables it. Run it as the site user, from the Python environment that has pypylon (`--python` to choose).
    `dpc-supervisor.service` is a template (`@USER@`, `@ROOT@`, `@PYTHON@`, `@PYTHON_DIR@`); do not copy it by hand.
 4. Logs: `journalctl -u dpc-supervisor -f`, `~/INSIGHTZZ/logs/supervisor.log`, `~/INSIGHTZZ/logs/workers/<id>.log`.
+
+## P5: rendered configs, reload, follows, run timeout, MQTT login
+
+* **Rendered configs (6f, D-062).** At start the Supervisor runs the renderer (`site.yaml` ->
+  `<root>/config/rendered/<id>.json`) and gives every worker that has a file `DPC_WORKER_CONFIG`.
+  `supervisor.py reload` (or `systemctl reload dpc-supervisor`) renders again and restarts only the
+  workers whose file was written. `restart_cost: high` workers wait for `monitoring.reload_quiet_window`
+  ("HH:MM-HH:MM") or `reload --confirm`; until then their status shows `config_pending`. A `site.yaml`
+  error changes nothing: the old files stay and the error is printed, logged and published
+  (`dpc/supervisor/event`). The command talks to the running Supervisor through SIGHUP and
+  `<run>/reload_request.json` / `reload_result.json`, so it works without MQTT.
+* **`follows: <worker id>` (D-068).** Start only when that worker is RUNNING; paused (STOPPED, `paused_by`)
+  when it goes from RUNNING to WAITING_RESTART / UNHEALTHY / FAILED / STOPPED; started once when it is
+  RUNNING again. Planned restarts and the retries of one outage pause nothing extra. Operator start/stop wins.
+* **`run_timeout_seconds` (F10)**, oneshot/periodic only: a longer run is stopped and counts as a failed run.
+* **MQTT login (F11):** from `site.yaml` `mqtt.user` / `mqtt.password`; `workers.yaml` keeps
+  `enabled, host, port, topic_prefix` (a login there is a config error).

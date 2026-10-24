@@ -63,11 +63,20 @@ class FakeMqtt:
         self.events = []        # (worker_id, event, data)
         self.statuses = []      # (worker_id, status dict)
         self.raw = []           # every payload as the JSON text that would go on the wire
+        self.published = []     # (topic, payload) of plain publish() calls (supervisor events)
 
     def start(self): pass
     def stop(self): pass
     def subscribe(self, topic_filter, callback): pass
     def worker_topic(self, worker_id, kind): return f"dpc/worker/{worker_id}/{kind}"
+    def topic(self, *parts): return "/".join([self.prefix, *parts])
+
+    def publish(self, topic, payload, retain=False):
+        self.published.append((topic, payload))
+        self.raw.append(json.dumps(payload, default=str))
+
+    def supervisor_events(self):
+        return [p for t, p in self.published if t == "dpc/supervisor/event"]
 
     def publish_event(self, worker_id, event, **data):
         self.events.append((worker_id, event, data))
@@ -126,6 +135,8 @@ class SupervisorTest(unittest.TestCase):
         return manager
 
     def build(self, workers, monitoring=None, site_env=None):
+        # never the real ~/INSIGHTZZ/config/site.yaml: a test must not render into a live site
+        site_env = site_env or SiteEnv(self.path("site.yaml"))
         self.sup = supervisor_main.Supervisor(self.config(workers, monitoring), mqtt=self.mqtt, site_env=site_env)
         return self.sup
 
@@ -203,7 +214,7 @@ class ConfigKeys(SupervisorTest):
         self.assertIn("unknown worker 'nope'", self.load_problem([dummy("a", start_after=["nope"])]))
         self.assertIn("itself", self.load_problem([dummy("a", start_after=["a"])]))
         loop = self.load_problem([dummy("a", start_after=["b"]), dummy("b", start_after=["a"])])
-        self.assertIn("start_after loop: a -> b -> a", loop)
+        self.assertIn("loop: a -> b -> a", loop)
         self.assertIn("must be a worker id or a list", self.load_problem([dummy("a", start_after=[1])]))
 
     def test_start_order_respects_start_after_and_keeps_file_order_otherwise(self):

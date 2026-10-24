@@ -67,6 +67,9 @@ class WorkerConfig:
     restart_cost: str = "normal"       # normal | high (algorithms: a restart loses wheel/plate state)
     start_after: List[str] = field(default_factory=list)   # worker ids that must be ready first
     env_from_site: bool = False        # export the DPC_* variables from site.yaml (CONTRACTS 9)
+    # ---- P5 ----
+    follows: Optional[str] = None      # D-068: run only while this worker is healthy (inspection follows its capture)
+    run_timeout_seconds: Optional[float] = None   # F10, oneshot/periodic only: a run longer than this is stopped
 
 
 @dataclass
@@ -79,6 +82,9 @@ class MonitoringSettings:
     high_cost_timeout_seconds: float = 120.0
     # a worker with start_after waits at most this long for its dependencies, then starts anyway
     start_after_timeout_seconds: float = 120.0
+    # 6f: "HH:MM-HH:MM" (may cross midnight). Inside it, restart_cost: high workers whose rendered
+    # config changed are restarted; outside it they wait (or `reload --confirm`). None = no window.
+    reload_quiet_window: Optional[str] = None
 
 
 @dataclass
@@ -118,6 +124,22 @@ def _expand_home(value: str) -> str:
     return os.path.expanduser(value) if value == "~" or value.startswith("~/") else value
 
 
+def parse_quiet_window(text):
+    """"02:00-03:30" -> ((2, 0), (3, 30)), or None when it is not that shape."""
+    try:
+        start, end = str(text).split("-")
+        parts = []
+        for hhmm in (start, end):
+            hh, mm = hhmm.strip().split(":")
+            hh, mm = int(hh), int(mm)
+            if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                return None
+            parts.append((hh, mm))
+        return parts[0], parts[1]
+    except ValueError:
+        return None
+
+
 def _require_positive_number(value, where):
     # bool is an int in Python: "interval_s: true" must not pass as 1
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
@@ -151,6 +173,7 @@ class ConfigurationManager:
         _build(RestartPolicy, restart_defaults, "restart_policy")  # validate only
 
         self._check_monitoring(self.settings.monitoring)
+        self._check_mqtt(raw.get("mqtt") or {})
 
         self.workers = []
         all_ids = set()                 # enabled AND disabled: a start_after may name a disabled one
@@ -173,6 +196,18 @@ class ConfigurationManager:
         if m.high_cost_timeout_seconds < m.worker_timeout_seconds:
             raise ConfigError("monitoring.high_cost_timeout_seconds must not be shorter than "
                               "worker_timeout_seconds (a high-cost restart is the slower one)")
+        if m.reload_quiet_window is not None and parse_quiet_window(m.reload_quiet_window) is None:
+            raise ConfigError(f"monitoring.reload_quiet_window must look like \"02:00-03:30\", "
+                              f"got {m.reload_quiet_window!r}")
+
+    @staticmethod
+    def _check_mqtt(raw_mqtt: dict):
+        """F11: the Supervisor's MQTT login is mqtt.user / mqtt.password in site.yaml (a secret
+        belongs there, D-048). workers.yaml keeps enabled, host, port and topic_prefix only."""
+        for key in ("username", "password"):
+            if raw_mqtt.get(key) not in (None, ""):
+                raise ConfigError(f"mqtt.{key} is no longer read from workers.yaml: put the broker login in "
+                                  f"site.yaml (mqtt.user, mqtt.password) and remove it here")
 
     def _resolve_start_order(self, all_ids: set) -> List[WorkerConfig]:
         """File order, except that a worker comes after everything in its start_after.
@@ -186,6 +221,7 @@ class ConfigurationManager:
                 if dep not in all_ids:
                     raise ConfigError(f"worker '{w.id}': start_after names unknown worker '{dep}'")
             w.start_after = [d for d in w.start_after if d in enabled]
+            self._check_follows(w, enabled, all_ids)
 
         order: List[WorkerConfig] = []
         done = set()
@@ -196,9 +232,9 @@ class ConfigurationManager:
                 return
             if worker.id in visiting:
                 loop = visiting[visiting.index(worker.id):] + [worker.id]
-                raise ConfigError("start_after loop: " + " -> ".join(loop))
+                raise ConfigError("start_after/follows loop: " + " -> ".join(loop))
             visiting.append(worker.id)
-            for dep in worker.start_after:
+            for dep in worker.start_after + ([worker.follows] if worker.follows else []):
                 visit(enabled[dep])
             visiting.pop()
             done.add(worker.id)
@@ -207,6 +243,22 @@ class ConfigurationManager:
         for w in self.workers:
             visit(w)
         return order
+
+    @staticmethod
+    def _check_follows(w: WorkerConfig, enabled: dict, all_ids: set):
+        """follows names one enabled service worker, and the follower is a service too
+        (following a oneshot, or pausing a periodic job, has no meaning)."""
+        if w.follows is None:
+            return
+        where = f"worker '{w.id}': follows"
+        if w.follows == w.id:
+            raise ConfigError(f"{where} cannot name the worker itself")
+        if w.follows not in all_ids:
+            raise ConfigError(f"{where} names unknown worker '{w.follows}'")
+        if w.follows not in enabled:
+            raise ConfigError(f"{where} names '{w.follows}', which is disabled: this worker could never start")
+        if w.mode != "service" or enabled[w.follows].mode != "service":
+            raise ConfigError(f"{where} only works between two service workers")
 
     # ------------------------------------------------------------------
     def _read_file(self) -> dict:
@@ -287,6 +339,12 @@ class ConfigurationManager:
         if not isinstance(deps, list) or not all(isinstance(d, str) and d for d in deps):
             raise ConfigError(f"{where}: start_after must be a worker id or a list of worker ids")
         worker.start_after = list(dict.fromkeys(deps))   # drop duplicates, keep order
+        if worker.follows is not None and (not isinstance(worker.follows, str) or not worker.follows):
+            raise ConfigError(f"{where}: follows must be one worker id")
+        if worker.run_timeout_seconds is not None:
+            if worker.mode == "service":
+                raise ConfigError(f"{where}: run_timeout_seconds only applies to mode oneshot or periodic")
+            _require_positive_number(worker.run_timeout_seconds, f"{where}: run_timeout_seconds")
 
         worker.working_directory = self._abs(worker.working_directory) or self.base_dir
         worker.env = {str(k): _expand_home(str(v)) for k, v in (worker.env or {}).items()}

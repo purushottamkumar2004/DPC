@@ -60,8 +60,16 @@ class Monitor:
             self.recovery.handle_exit(worker)
             return
 
-        # 2. health check
+        # 2. oneshot/periodic run too long? (F10)
         now = time.time()
+        limit = worker.config.run_timeout_seconds
+        if limit and worker.started_at and now - worker.started_at > limit:
+            log.warning("[%s] run still going after %.0fs (run_timeout_seconds %.0f): stopping it",
+                        worker.id, now - worker.started_at, limit)
+            self.recovery.handle_run_timeout(worker)
+            return
+
+        # 3. health check
         result = worker.health_check.check(worker)
 
         if result.healthy:
@@ -75,7 +83,7 @@ class Monitor:
             self.recovery.note_healthy(worker)
             return
 
-        # 3. unhealthy - be tolerant
+        # 4. unhealthy - be tolerant
         worker.healthy_since = None
         grace = worker.config.health.startup_grace_seconds
         if now - worker.started_at < grace:

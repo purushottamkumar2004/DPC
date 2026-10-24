@@ -14,6 +14,7 @@ mqtt:
   host: localhost            # local broker (D-034: the site keeps inspecting if it is down)
   port: 1883
   topic_prefix: dpc
+  # the broker login is mqtt.user / mqtt.password in site.yaml (F11), never here
 
 monitoring:
   check_interval_seconds: 2      # a dead capture is seen within 2 s (STATUS 4b: restart within 10 s)
@@ -22,6 +23,8 @@ monitoring:
   startup_stagger_seconds: 1     # the two cameras are not opened in the same second
   start_after_timeout_seconds: 120
   status_publish_interval_seconds: 30
+  # reload_quiet_window: "02:00-03:00"   # restart_cost: high workers pick up a new config here;
+  #                                      # without it: supervisor.py reload --confirm
 
 restart_policy:                  # defaults; the captures set their own below
   max_retries: 3
@@ -80,3 +83,17 @@ workers:
       path: ~/INSIGHTZZ/data/frames/CAM2/live/IMG_1.jpg
       max_age_seconds: 60
       startup_grace_seconds: 30
+
+  # ---- inspection (P7: enable when the algorithms read their rendered JSON) ----
+  # Each side follows its camera (D-068): paused while that capture is down, started once
+  # when it is healthy again. DPC_WORKER_CONFIG is set by the Supervisor (rendered/<id>.json).
+  # - id: inspection_left
+  #   type: inspection
+  #   enabled: false
+  #   follows: frame_capture_cam1
+  #   restart_cost: high
+  #   command: python3 LeftAlgorithm.py
+  #   working_directory: ~/INSIGHTZZ/code/workers/inspection
+  #   stop_timeout_seconds: 20
+  #   health: {type: queue_lag, path: ~/INSIGHTZZ/data/frames/CAM1/INF, max_oldest_age_seconds: 120,
+  #            startup_grace_seconds: 180}
