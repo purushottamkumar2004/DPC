@@ -1,19 +1,23 @@
 """
 FrameCapture_Basler.py: single-camera Basler capture for the DPC platform.
 
-One process per camera (D-033). Config is a positional XML file chosen by the env
-variable BASLER_CONFIG (CONTRACTS section 3, "BASLER_CONFIG1.xml"). Every frame is
-handed off atomically to INF, UI and live (D-031).
+One process per camera (D-033). Settings come from the rendered worker config
+<root>/config/rendered/frame_capture_<camn>.json (CONTRACTS 13, D-062), whose path the
+Supervisor passes in the env variable DPC_WORKER_CONFIG. The file is written by the
+renderer from site.yaml; this program never reads site.yaml or an XML itself.
+A settings change reaches the camera by a Supervisor reload, which restarts this worker.
 
-Robustness (STATUS item 2):
+Every frame is handed off atomically to INF, UI and live (D-031).
+
+Robustness:
   - the camera is reopened after device-lost, or after a long stretch without a good frame,
     without restarting the process;
   - only a grab retrieved in the current loop iteration is ever published;
-  - health table, log file name and rotation come from config (D-038, D-041);
   - each camera setting is set by feature name, with one log line per setting;
   - SIGTERM/SIGINT finish the current frame and stop cleanly (so _tmp is left empty).
 """
 import errno
+import json
 import logging
 import os
 import re
@@ -22,12 +26,12 @@ import signal
 import sys
 import time
 import traceback
-import xml.etree.ElementTree as ET
 from datetime import datetime
 from logging import handlers
 
 import cv2
 import pymysql
+from pymysql.constants import CLIENT
 from pypylon import genicam, pylon
 
 # ---------------------------------------------------------------------------
@@ -36,19 +40,11 @@ from pypylon import genicam, pylon
 RETRIEVE_TIMEOUT_MIN_MS = 5000   # wait at most this long for one frame (or 3 frame periods if longer)
 NO_FRAME_REOPEN_S = 15           # no good frame for this long -> treat the camera as lost and reopen it
 REOPEN_RETRY_S = 2               # pause between reopen attempts (keeps recovery well under 30 s)
-HEALTH_INTERVAL_S = 600          # repeat the same health state at most this often (same as the old code)
 LOG_REPEAT_S = 60                # a repeating problem is logged at most once per this period
 DB_CONNECT_TIMEOUT_S = 3         # a DB outage must not stall capture for long
 
-# ---------------------------------------------------------------------------
-# Defaults for the optional, append-only XML elements (D-041).
-# They reproduce the behaviour before D-041, so existing config files keep working.
-# NOTE: the default health table name is site-specific; it stays only for backward
-# compatibility. Every site should set HEALTH_TABLE explicitly (D-038).
-# ---------------------------------------------------------------------------
-DEFAULT_HEALTH_TABLE = "tadipatri_health_status_table"
-DEFAULT_LOG_FILE_NAME = "FrameCapture_Basler.log"
-DEFAULT_ROTATE_DEG = 90
+CONFIG_ENV = "DPC_WORKER_CONFIG"
+DEFAULT_HEALTH_INTERVAL_S = 600  # used when the JSON has no health_interval_s (same rhythm as the old code)
 
 CV2_ROTATION = {
     90: cv2.ROTATE_90_CLOCKWISE,
@@ -57,141 +53,119 @@ CV2_ROTATION = {
 }
 VALID_ROTATIONS = (0,) + tuple(CV2_ROTATION)
 
-configHashMap = {}
+cfg = {}                         # flat settings, filled once by load_worker_config()
 logger = logging.getLogger("FrameCapture_Basler")
 _copy_fallback_warned = False
 _stop_requested = False
 
 
-class CONFIG_KEY_NAME:
-    CODE_PATH = "CODE_PATH"
-    LOG_FILE_PATH = "LOG_FILE_PATH"
-    LOG_BACKUP_COUNT = "LOG_BACKUP_COUNT"
-    CAM_SERIAL_NO = "CAM_SERIAL_NO"
-    CAM_NAME = "CAM_NAME"
-    EXPOSURE = "EXPOSURE"
-    FRAME_RATE = "FRAME_RATE"
-    SAVE_LIVE_IMG_PATH = "SAVE_LIVE_IMG_PATH"
-    UI_PATH = "UI_PATH"
-    INF_PATH = "INF_PATH"
-    RAW_IMG_PATH = "RAW_IMG_PATH"
-    DB_USER = "DB_USER"
-    DB_PASS = "DB_PASS"
-    DB_HOST = "DB_HOST"
-    DB_NAME = "DB_NAME"
-    TMP_IMG_PATH = "TMP_IMG_PATH"      # position 15, optional (D-031)
-    HEALTH_TABLE = "HEALTH_TABLE"      # position 16, optional (D-041)
-    LOG_FILE_NAME = "LOG_FILE_NAME"    # position 17, optional (D-041)
-    ROTATE_DEG = "ROTATE_DEG"          # position 18, optional (D-041)
-
-
 # ===========================================================================
-# Configuration
+# Configuration: the rendered JSON (CONTRACTS 13)
 # ===========================================================================
-def _text(node):
-    """XML element text, stripped (None becomes empty string)."""
-    return (node.text or "").strip()
+def _require(section, key, where):
+    """section[key], or a ValueError naming the missing key (e.g. 'camera.serial')."""
+    if not isinstance(section, dict) or key not in section:
+        raise ValueError(f"missing key '{where}.{key}'" if where else f"missing key '{key}'")
+    return section[key]
 
 
-def _optional(config_root, position, default):
-    """Text of an optional, append-only element. Missing or empty means default.
-    The file is read by position, so an empty element can be used as a placeholder
-    when only a later element needs a value."""
-    if len(config_root) > position:
-        value = _text(config_root[position])
-        if value:
-            return value
-    return default
+def _validated_rotation(value):
+    if isinstance(value, bool) or not isinstance(value, int) or value not in VALID_ROTATIONS:
+        raise ValueError(f"camera.rotate must be one of {VALID_ROTATIONS}, got {value!r}")
+    return value
 
 
 def _validated_table_name(name):
     # A table name cannot be a SQL parameter, so it is checked strictly before use.
-    if not re.fullmatch(r"[A-Za-z0-9_]+", name):
-        raise ValueError(f"HEALTH_TABLE '{name}' may only contain letters, digits and '_'")
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_]+", name):
+        raise ValueError(f"db.health_table {name!r} may only contain letters, digits and '_'")
     return name
 
 
-def _validated_rotation(text):
-    try:
-        angle = int(text)
-    except ValueError:
-        raise ValueError(f"ROTATE_DEG must be one of {VALID_ROTATIONS}, got '{text}'")
-    if angle not in VALID_ROTATIONS:
-        raise ValueError(f"ROTATE_DEG must be one of {VALID_ROTATIONS}, got {angle}")
-    return angle
+def _validated_health_interval(value):
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"health_interval_s must be a whole number of seconds above 0, got {value!r}")
+    return value
 
 
 def _validated_log_file_name(name):
-    if os.path.basename(name) != name:
-        raise ValueError(f"LOG_FILE_NAME '{name}' must be a file name, not a path")
+    if not isinstance(name, str) or not name or os.path.basename(name) != name:
+        raise ValueError(f"log.file_name {name!r} must be a file name, not a path")
     return name
 
 
-def config_file_path():
-    """BASLER_CONFIG env var, else BASLER_CONFIG1.xml in the working directory."""
-    return os.environ.get("BASLER_CONFIG", os.path.join(os.getcwd(), "BASLER_CONFIG1.xml"))
+def load_worker_config(path):
+    """Read the rendered JSON and return the flat settings this program uses.
+    Raises ValueError (or OSError / json errors) on any problem: a capture with a broken
+    config must stop with a clear message, not run half-configured."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("the file does not hold a JSON object")
 
+    paths = _require(data, "paths", "")
+    log_cfg = _require(data, "log", "")
+    camera = _require(data, "camera", "")
+    db = _require(data, "db", "")
 
-def loadConfiguration():
-    """Read the positional XML into configHashMap. Raises on any problem: a capture
-    process with a broken config must stop with a clear message, not run half-configured."""
-    config_root = ET.parse(config_file_path()).getroot()
+    driver = _require(camera, "driver", "camera")
+    if driver != "basler":
+        raise ValueError(f"camera.driver is '{driver}': this program handles Basler cameras only")
+    fps = float(_require(camera, "fps", "camera"))
+    if fps <= 0:
+        raise ValueError(f"camera.fps must be greater than 0, got {fps}")
+    serial = str(_require(camera, "serial", "camera")).strip()
+    if not serial:
+        raise ValueError("camera.serial is empty")
 
-    configHashMap[CONFIG_KEY_NAME.CODE_PATH] = _text(config_root[0])
-    configHashMap[CONFIG_KEY_NAME.LOG_FILE_PATH] = _text(config_root[1])
-    configHashMap[CONFIG_KEY_NAME.LOG_BACKUP_COUNT] = int(_text(config_root[2]))
-    configHashMap[CONFIG_KEY_NAME.CAM_SERIAL_NO] = _text(config_root[3])
-    configHashMap[CONFIG_KEY_NAME.CAM_NAME] = _text(config_root[4])
-    configHashMap[CONFIG_KEY_NAME.EXPOSURE] = int(_text(config_root[5]))
-    configHashMap[CONFIG_KEY_NAME.FRAME_RATE] = float(_text(config_root[6]))
-    configHashMap[CONFIG_KEY_NAME.SAVE_LIVE_IMG_PATH] = _text(config_root[7])
-    configHashMap[CONFIG_KEY_NAME.UI_PATH] = _text(config_root[8])
-    configHashMap[CONFIG_KEY_NAME.INF_PATH] = _text(config_root[9])
-    configHashMap[CONFIG_KEY_NAME.RAW_IMG_PATH] = _text(config_root[10])
-    configHashMap[CONFIG_KEY_NAME.DB_USER] = _text(config_root[11])
-    configHashMap[CONFIG_KEY_NAME.DB_PASS] = _text(config_root[12])
-    configHashMap[CONFIG_KEY_NAME.DB_HOST] = _text(config_root[13])
-    configHashMap[CONFIG_KEY_NAME.DB_NAME] = _text(config_root[14])
-
-    # 15: staging folder. Default: a "_tmp" folder next to the live folder (.../CAMn/live -> .../CAMn/_tmp).
-    live_dir = configHashMap[CONFIG_KEY_NAME.SAVE_LIVE_IMG_PATH].rstrip("/")
-    configHashMap[CONFIG_KEY_NAME.TMP_IMG_PATH] = _optional(
-        config_root, 15, os.path.join(os.path.dirname(live_dir), "_tmp"))
-
-    # 16 to 18: D-041.
-    configHashMap[CONFIG_KEY_NAME.HEALTH_TABLE] = _validated_table_name(
-        _optional(config_root, 16, DEFAULT_HEALTH_TABLE))
-    configHashMap[CONFIG_KEY_NAME.LOG_FILE_NAME] = _validated_log_file_name(
-        _optional(config_root, 17, DEFAULT_LOG_FILE_NAME))
-    configHashMap[CONFIG_KEY_NAME.ROTATE_DEG] = _validated_rotation(
-        _optional(config_root, 18, str(DEFAULT_ROTATE_DEG)))
-
-    if not configHashMap[CONFIG_KEY_NAME.CAM_SERIAL_NO]:
-        raise ValueError("CAM_SERIAL_NO (position 3) is empty")
-    if configHashMap[CONFIG_KEY_NAME.FRAME_RATE] <= 0:
-        raise ValueError("FRAME_RATE (position 6) must be greater than 0")
+    return {
+        "config_path": path,
+        "worker_id": _require(data, "worker_id", ""),
+        # folders (paths.raw_images is not used by capture; inspection moves frames there)
+        "logs_dir": _require(paths, "logs", "paths"),
+        "live_dir": _require(paths, "live", "paths"),
+        "tmp_dir": _require(paths, "tmp", "paths"),
+        "inf_dir": _require(paths, "inf", "paths"),
+        "ui_dir": _require(paths, "ui", "paths"),
+        # log
+        "log_backup_count": int(_require(log_cfg, "backup_count", "log")),
+        "log_file_name": _validated_log_file_name(_require(log_cfg, "file_name", "log")),
+        # camera
+        "camera_id": _require(camera, "id", "camera"),
+        "side": _require(camera, "side", "camera"),
+        "serial": serial,
+        "fps": fps,
+        "exposure_us": float(_require(camera, "exposure_us", "camera")),
+        "rotate_deg": _validated_rotation(_require(camera, "rotate", "camera")),
+        # database (health only)
+        "db_host": _require(db, "host", "db"),
+        "db_port": int(db.get("port", 3306)),
+        "db_name": _require(db, "name", "db"),
+        "db_user": _require(db, "user", "db"),
+        "db_password": _require(db, "password", "db"),
+        "health_table": _validated_table_name(_require(db, "health_table", "db")),
+        # optional; not rendered yet (see README)
+        "health_interval_s": _validated_health_interval(
+            data.get("health_interval_s", DEFAULT_HEALTH_INTERVAL_S)),
+    }
 
 
 def initializeLogger():
-    """One log file per camera: LOG_FILE_PATH + LOG_FILE_NAME, rotated at midnight."""
-    log_file = os.path.join(configHashMap[CONFIG_KEY_NAME.LOG_FILE_PATH],
-                            configHashMap[CONFIG_KEY_NAME.LOG_FILE_NAME])
+    """One log file per camera: paths.logs + log.file_name, rotated at midnight."""
+    log_file = os.path.join(cfg["logs_dir"], cfg["log_file_name"])
     logger.setLevel(logging.DEBUG)
     file_handler = handlers.TimedRotatingFileHandler(
-        log_file, when="midnight", backupCount=configHashMap[CONFIG_KEY_NAME.LOG_BACKUP_COUNT])
+        log_file, when="midnight", backupCount=cfg["log_backup_count"])
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     logger.addHandler(file_handler)
 
     # Startup summary: what this process will actually do. Never log the DB password.
     logger.info(
-        f"Started pid={os.getpid()} config={config_file_path()} "
-        f"camera='{configHashMap[CONFIG_KEY_NAME.CAM_NAME]}' "
-        f"serial={configHashMap[CONFIG_KEY_NAME.CAM_SERIAL_NO]} "
-        f"fps={configHashMap[CONFIG_KEY_NAME.FRAME_RATE]} "
-        f"exposure_us={configHashMap[CONFIG_KEY_NAME.EXPOSURE]} "
-        f"rotate_deg={configHashMap[CONFIG_KEY_NAME.ROTATE_DEG]} "
-        f"health_table={configHashMap[CONFIG_KEY_NAME.HEALTH_TABLE]} log={log_file}")
+        f"Started pid={os.getpid()} worker={cfg['worker_id']} config={cfg['config_path']} "
+        f"camera={cfg['camera_id']}/{cfg['side']} serial={cfg['serial']} fps={cfg['fps']} "
+        f"exposure_us={cfg['exposure_us']} rotate_deg={cfg['rotate_deg']} "
+        f"health_table={cfg['health_table']} health_interval_s={cfg['health_interval_s']} log={log_file}")
 
 
 # ===========================================================================
@@ -263,10 +237,10 @@ def _link_or_copy(src, dst):
 def prepare_directories():
     """Create the folders, clear stale staging files, warn if not on one filesystem."""
     dirs = {
-        "tmp":  configHashMap.get(CONFIG_KEY_NAME.TMP_IMG_PATH),
-        "live": configHashMap.get(CONFIG_KEY_NAME.SAVE_LIVE_IMG_PATH),
-        "inf":  configHashMap.get(CONFIG_KEY_NAME.INF_PATH),
-        "ui":   configHashMap.get(CONFIG_KEY_NAME.UI_PATH),
+        "tmp":  cfg["tmp_dir"],
+        "live": cfg["live_dir"],
+        "inf":  cfg["inf_dir"],
+        "ui":   cfg["ui_dir"],
     }
     for d in dirs.values():
         os.makedirs(d, exist_ok=True)
@@ -287,10 +261,10 @@ def prepare_directories():
 
 def publish_frame(img, stamp):
     """Write one frame once, then publish it to INF (queue), UI (mailbox) and live."""
-    tmp_dir  = configHashMap.get(CONFIG_KEY_NAME.TMP_IMG_PATH)
-    live_dir = configHashMap.get(CONFIG_KEY_NAME.SAVE_LIVE_IMG_PATH)
-    inf_dir  = configHashMap.get(CONFIG_KEY_NAME.INF_PATH)
-    ui_dir   = configHashMap.get(CONFIG_KEY_NAME.UI_PATH)
+    tmp_dir  = cfg["tmp_dir"]
+    live_dir = cfg["live_dir"]
+    inf_dir  = cfg["inf_dir"]
+    ui_dir   = cfg["ui_dir"]
 
     name = f"{stamp}.jpg"
     tmp_path = os.path.join(tmp_dir, name)
@@ -338,16 +312,17 @@ def rotate_frame(img, angle):
 def update_health_status(health, is_data_sync):
     """UPDATE the row of this camera (ITEM = serial). Never raises: a DB problem
     must not stop capture. Only updates; it does not create the row."""
-    table = configHashMap[CONFIG_KEY_NAME.HEALTH_TABLE]   # validated at config load
-    item = configHashMap[CONFIG_KEY_NAME.CAM_SERIAL_NO]
+    table = cfg["health_table"]          # validated at config load
+    item = cfg["serial"]
     connection = None
     try:
         connection = pymysql.connect(
-            host=configHashMap[CONFIG_KEY_NAME.DB_HOST],
-            user=configHashMap[CONFIG_KEY_NAME.DB_USER],
-            passwd=configHashMap[CONFIG_KEY_NAME.DB_PASS],
-            db=configHashMap[CONFIG_KEY_NAME.DB_NAME],
-            connect_timeout=DB_CONNECT_TIMEOUT_S)
+            host=cfg["db_host"], port=cfg["db_port"],
+            user=cfg["db_user"], passwd=cfg["db_password"], db=cfg["db_name"],
+            connect_timeout=DB_CONNECT_TIMEOUT_S,
+            # F7: report rows MATCHED, not rows changed. Without this flag an UPDATE that
+            # writes the same values returns 0 and looks like "no row for this camera".
+            client_flag=CLIENT.FOUND_ROWS)
         with connection.cursor() as cursor:
             rows = cursor.execute(
                 f"UPDATE `{table}` SET HEALTH = %s, IS_DATA_SYNC = %s, CREATE_DATETIME = NOW() "
@@ -371,16 +346,17 @@ def update_health_status(health, is_data_sync):
 
 class HealthReporter:
     """Writes OK/NOK at once when the state changes, and repeats the same state
-    at most every HEALTH_INTERVAL_S (the old code's 600 s rhythm)."""
+    at most every health_interval_s seconds (JSON key, default 600)."""
 
     def __init__(self):
+        self.interval_s = cfg["health_interval_s"]
         self._last_state = None
         self._last_write = None
 
     def report(self, state):
         now = time.monotonic()
         unchanged = state == self._last_state
-        recent = self._last_write is not None and now - self._last_write < HEALTH_INTERVAL_S
+        recent = self._last_write is not None and now - self._last_write < self.interval_s
         if unchanged and recent:
             return
         self._last_state = state
@@ -445,8 +421,8 @@ def apply_camera_settings(camera):
     """Same settings as before, now set before grabbing starts (AcquisitionMode cannot
     change while grabbing). The old *Abs names are tried first because they are what
     the tested cameras accepted; the newer names cover other models."""
-    fps = configHashMap[CONFIG_KEY_NAME.FRAME_RATE]
-    exposure = float(configHashMap[CONFIG_KEY_NAME.EXPOSURE])
+    fps = cfg["fps"]
+    exposure = cfg["exposure_us"]
     set_feature(camera, ["TriggerMode"], "Off", required=False)
     set_feature(camera, ["AcquisitionMode"], "Continuous", required=False)
     set_feature(camera, ["AcquisitionFrameRateEnable"], True, required=True)
@@ -458,12 +434,12 @@ def apply_camera_settings(camera):
 def make_converter():
     converter = pylon.ImageFormatConverter()
     converter.OutputPixelFormat = pylon.PixelType_BGR8packed
-    converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+    converter.OutputBitAlignment.Value = pylon.OutputBitAlignment_MsbAligned   # newer pypylon syntax
     return converter
 
 
 def retrieve_timeout_ms():
-    frame_period_ms = 1000.0 / configHashMap[CONFIG_KEY_NAME.FRAME_RATE]
+    frame_period_ms = 1000.0 / cfg["fps"]
     return max(RETRIEVE_TIMEOUT_MIN_MS, int(3 * frame_period_ms))
 
 
@@ -474,8 +450,8 @@ class BaslerCam:
     LOST = "lost"
 
     def __init__(self):
-        self.serial = configHashMap[CONFIG_KEY_NAME.CAM_SERIAL_NO]
-        self.rotate_deg = configHashMap[CONFIG_KEY_NAME.ROTATE_DEG]
+        self.serial = cfg["serial"]
+        self.rotate_deg = cfg["rotate_deg"]
         self.health = HealthReporter()
         self.frame_count = 0
 
@@ -575,12 +551,19 @@ class BaslerCam:
 
 
 def main():
+    path = os.environ.get(CONFIG_ENV, "").strip()
+    if not path:
+        print(f"FrameCapture_Basler: cannot start: env {CONFIG_ENV} is not set. The Supervisor sets it; "
+              f"to run by hand: {CONFIG_ENV}=<root>/config/rendered/frame_capture_cam1.json "
+              f"python3 FrameCapture_Basler.py", file=sys.stderr)
+        sys.exit(2)
     try:
-        loadConfiguration()
+        cfg.update(load_worker_config(path))
         initializeLogger()
     except Exception as e:
-        # Exit non-zero so the Supervisor sees a failure; the message names the problem.
-        print(f"FrameCapture_Basler: cannot start: {e}", file=sys.stderr)
+        # Exit non-zero so the Supervisor sees a failure; the message names the problem
+        # (never a value: the file holds the DB password).
+        print(f"FrameCapture_Basler: cannot start: {path}: {e}", file=sys.stderr)
         sys.exit(2)
 
     install_signal_handlers()
