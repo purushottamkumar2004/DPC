@@ -128,6 +128,23 @@ Update `docs/SITES.md` (serials, sides, release tag, quirks), commit it through 
 4. Install for boot, from the Python that has pypylon: `cd ~/INSIGHTZZ/code/supervisor && ./install_service.sh --dry-run`, then without `--dry-run`; `sudo systemctl start dpc-supervisor`; `systemctl status dpc-supervisor`.
 5. Until the algorithms run, nothing empties `INF`: drain it or configure cleanup (STATUS follow-up 16).
 
+## 2c. Package an existing model (first install, D-056, D-061)
+Model files are never in git (too large; distributed through OneDrive later, D-057). On a site that already has a trained model:
+1. Make its Detectron config self-contained (model-zoo configs point to a `_BASE_` file that is not copied), in the Python that has Detectron2:
+   ```
+   python3 - <<'EOF'
+   from detectron2.config import get_cfg
+   cfg = get_cfg()
+   cfg.merge_from_file("<detectron2>/configs/COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x.yaml")
+   cfg.MODEL.ROI_HEADS.NUM_CLASSES = <number of classes>
+   open("/tmp/<model>.yaml", "w").write(cfg.dump())
+   EOF
+   ```
+2. Package it (classes in the model's output order = the old `ALL_CLASS_NAMES`):
+   `python3 scripts/make_model_package.py --name <name> --version <yyyy.mm.dd> --weights <.pth> --detectron-yaml /tmp/<model>.yaml --classes <c1,c2,...> --legacy-label-map`
+3. `python3 scripts/dpc_check.py`: line `model` = PASS.
+Tadipatri (2026-10-22): `dpc_maskrcnn/2026.10.12` from `~/INSIGHTZZ/old/MODELS/FIRST_MODE/Mahir_Oct_12_Int_Model/model_0041159.pth`, R101 FPN 3x config, 19 classes (SITES.md).
+
 ## 3. Acceptance checklist (sign-off)
 - [ ] Layout script printed `OK`; code is at the intended release tag (`git describe --tags`)
 - [ ] Both serials detected; CAM1/CAM2 and sides confirmed by looking at the images
