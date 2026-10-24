@@ -425,6 +425,48 @@ class KeptRules(_TempDirTest):
             self.assertEqual(sc.load_site_config().source_path, path)
 
 
+class D064Keys(_TempDirTest):                                         # P4 / 6g
+    def test_defaults(self):
+        cfg = sc.load_site_config(self.write_yaml(self.config_data()))
+        self.assertIsNone(cfg.cameras[0].ip)
+        self.assertEqual(cfg.plc.light_on_value, 1)
+
+    def test_camera_ip_and_inverted_light(self):
+        data = self.config_data()
+        data["capture"]["cameras"][0]["ip"] = "192.168.1.102"
+        data["plc"]["light_on_value"] = 0
+        cfg = sc.load_site_config(self.write_yaml(data))
+        self.assertEqual(cfg.camera("CAM1").ip, "192.168.1.102")
+        self.assertEqual(cfg.plc.light_on_value, 0)
+
+    def test_bad_values(self):
+        data = self.config_data()
+        data["capture"]["cameras"][0]["ip"] = "192.168.1"
+        data["plc"]["light_on_value"] = 2
+        problems = self.problems_for(data)
+        self.assertIn("capture.cameras[0].ip: must be an IPv4 address, got '192.168.1'", problems)
+        self.assertProblem(problems, r"^plc\.light_on_value: must be one of 0, 1, got 2")
+        data["plc"]["light_on_value"] = True
+        self.assertProblem(self.problems_for(data), r"^plc\.light_on_value: must be an integer")
+
+    def test_duplicate_camera_ip(self):
+        data = self.config_data()
+        for cam in data["capture"]["cameras"]:
+            cam["ip"] = "192.168.1.102"
+        self.assertProblem(self.problems_for(data), r"^capture\.cameras: ip '192\.168\.1\.102' is used by more than one")
+
+    def test_tadipatri_reference_with_6g_keys(self):
+        with open(os.path.join(REPO_ROOT, "docs", "sites", "tadipatri.site.reference.yaml"), encoding="utf-8") as f:
+            text = f.read()
+        text = (text.replace("# ip: 192.168.1.102", "ip: 192.168.1.102").replace("# ip: 192.168.1.103", "ip: 192.168.1.103")
+                    .replace("# light_on_value: 0", "light_on_value: 0").replace('"<secret>"', '"x"'))
+        data = yaml.safe_load(text)
+        data["paths"]["root"] = self.root
+        cfg = sc.load_site_config(self.write_yaml(data))
+        self.assertEqual([c.ip for c in cfg.cameras], ["192.168.1.102", "192.168.1.103"])
+        self.assertEqual(cfg.plc.light_on_value, 0)
+
+
 class Secrets(_TempDirTest):
     def assertNoSecret(self, text):
         for value in list(SECRETS.values()) + ["s3cret"]:

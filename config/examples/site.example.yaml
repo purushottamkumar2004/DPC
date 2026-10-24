@@ -50,6 +50,7 @@ capture:
       fps: 4.0
       exposure_us: 1500
       rotate: 0                   # 0 | 90 | 180 | 270; must match the model's orientation
+      # ip: 192.0.2.21            # optional GigE address: UI status, dpc-check ping (D-064)
     - id: CAM2
       side: RIGHT
       driver: basler
@@ -57,6 +58,7 @@ capture:
       fps: 4.0
       exposure_us: 2000
       rotate: 0
+      # ip: 192.0.2.22
     # A FLIR camera needs a flir block (and only a FLIR camera may have one):
     #   flir: {interface: "GEV Interface 1", throughput_bps: 19662239}
 
@@ -80,6 +82,7 @@ plc:
   port: 502
   timeout_s: 3
   light_register: 4109
+  light_on_value: 1               # value that switches the light ON; 0 where the register is inverted (D-064)
   cleaning_register: 4106
   conveyor_status_register: 4098
   cleaning_pulse_seconds: 10

@@ -265,6 +265,55 @@ class Warnings(Site):
         self.assertEqual(code, dc.EXIT_WARN)
 
 
+class CameraPing(Site):                                              # P4 / 6g: warning only
+    def with_ips(self):
+        self.data["capture"]["cameras"][0]["ip"] = "192.0.2.21"
+        self.data["capture"]["cameras"][1]["ip"] = "192.0.2.22"
+        self.write_config()
+
+    def run_with_ping(self, answers, serials=None):
+        with mock.patch.object(dc, "ping", lambda ip: answers.get(ip)):
+            return self.run_all(serials=serials)
+
+    def test_no_ip_no_ping(self):
+        with mock.patch.object(dc, "ping", side_effect=AssertionError("must not ping")):
+            results, code = self.run_all()
+        self.assertEqual(results["cameras"].status, dc.PASS)
+
+    def test_answering_cameras_pass(self):
+        self.with_ips()
+        results, code = self.run_with_ping({"192.0.2.21": True, "192.0.2.22": True})
+        self.assertEqual(results["cameras"].status, dc.PASS)
+        self.assertEqual(code, dc.EXIT_PASS)
+
+    def test_no_answer_is_a_warning(self):
+        self.with_ips()
+        results, code = self.run_with_ping({"192.0.2.21": True, "192.0.2.22": False})
+        self.assertEqual(results["cameras"].status, dc.WARN)
+        self.assertIn("CAM2 ip 192.0.2.22 does not answer ping", results["cameras"].detail)
+        self.assertEqual(code, dc.EXIT_WARN)
+
+    def test_ping_hint_on_a_missing_camera(self):
+        self.with_ips()
+        results, _ = self.run_with_ping({"192.0.2.21": True, "192.0.2.22": False}, serials=["00000001"])
+        self.assertEqual(results["cameras"].status, dc.FAIL)
+        self.assertIn("CAM2 serial 00000002 not found", results["cameras"].detail)
+        self.assertIn("CAM2 ip 192.0.2.22 does not answer ping", results["cameras"].detail)
+
+    def test_ping_not_available(self):
+        self.with_ips()
+        results, _ = self.run_with_ping({})
+        self.assertIn("ping not available", results["cameras"].detail)
+
+    def test_ping_uses_one_packet_and_a_limit(self):
+        done = subprocess.CompletedProcess(args=[], returncode=1)
+        with mock.patch.object(dc.subprocess, "run", return_value=done) as run:
+            self.assertFalse(dc.ping("192.0.2.21"))
+        self.assertEqual(run.call_args.args[0], ["ping", "-c", "1", "-W", "1", "192.0.2.21"])
+        with mock.patch.object(dc.subprocess, "run", side_effect=FileNotFoundError()):
+            self.assertIsNone(dc.ping("192.0.2.21"))
+
+
 class ModelCheck(Site):                                              # 6d (D-060)
     def model_root(self):
         return os.path.join(self.models_root, "example_model")
@@ -368,7 +417,8 @@ class SafeOnARunningSite(unittest.TestCase):
             self.assertEqual(dc.enumerate_basler_serials(), ["24824427", "24874775"])
 
     def test_worst_case_time_budget(self):                           # done when (c)
-        total = dc.CAMERA_ENUM_TIMEOUT_S + dc.DB_TIMEOUT_S * 2 + dc.MQTT_TIMEOUT_S + dc.GIT_TIMEOUT_S * 2
+        total = (dc.CAMERA_ENUM_TIMEOUT_S + dc.DB_TIMEOUT_S * 2 + dc.MQTT_TIMEOUT_S + dc.GIT_TIMEOUT_S * 2
+                 + dc.PING_TIMEOUT_S * 2)                            # two cameras with an ip
         self.assertLessEqual(total, 30)
 
 
