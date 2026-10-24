@@ -213,6 +213,9 @@ Developer decision 2026-10-24. Work is done on `LeftAlgorithm.py`; the right sid
 ## D-070 | 2026-10 | Accepted | Supervisor reload and follow rules (from the P5 handoff, PR #13)
 (1) A reload reaches the running Supervisor by SIGHUP plus request/result files in `<root>/run/`, not over MQTT: it works with the broker down, and only the site user can trigger it. (2) A "quiet moment" for high-cost workers is an optional daily `monitoring.reload_quiet_window`; without one, such a worker waits for `reload --confirm` or its next natural restart. A better signal (for example right after a plate, from the inspection heartbeat) can replace it in P7. (3) `follows` pauses only on the change RUNNING -> down; STARTING changes nothing; retries during one outage count as one outage; planned restarts pause nothing; a follower never times out at start. (4) A worker whose rendered file is removed keeps running with its old settings (a warning is logged); reload never starts a stopped worker. (Proposed as "D-069" in the handoff; renumbered because D-069 was already taken.)
 
+## D-071 | 2026-10 | Accepted | Basler capture health writing (from the P6 handoff, PR #15)
+The capture only UPDATEs its existing health row (never inserts), immediately on a state change (OK <-> NOK) and otherwise every `health_interval_s` (default 600 s). Rows are counted as matched (`CLIENT.FOUND_ROWS`), so repeating the same value no longer logs a false "matched no row" warning (F7). Supersedes the health part of D-041 together with the XML.
+
 ## Open questions
 - Q20 (answered 2026-10-22): Tadipatri PLC IP is 192.168.1.5; the 192.168.1.4 in the legacy PLC test script is wrong.
 - Q18: Who in the Microsoft 365 tenant grants admin consent for Graph file permissions (D-057), and is the target a OneDrive or a SharePoint document library? (Not blocking: the developer settles it while testing item 9.)

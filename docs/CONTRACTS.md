@@ -66,7 +66,7 @@ Statuses: STARTING, RUNNING, UNHEALTHY, WAITING_RESTART, STOPPED, FAILED. Events
 Right differs from Left only in side/paths/object sizes/PLC text (values are site data).
 ### FRAME_CAPTURE_CONFIG.xml
 `CODE_DETAILS` (CODE_PATH, LOG_FILE_PATH, LOG_BACKUP_COUNT, then per camera SAVE_LIVE_IMG_PATH, UI_PATH, INF_PATH, RAW_IMG_PATH), `DB_CONFIG`, `CAM_DETAILS` (CAMn_NAME FLIR|BASLER, CAMn_SERIAL_NO, CAMn_INTERFACE, CAM_n_EXPOSURE, CAM_n_FRAME_RATE, CAM_n_DEVICE_THROUGHPUT_VALUE). Indices are positional here too.
-### BASLER_CONFIG1.xml (single-camera Basler FrameCapture) [EXISTING, v3 additions]
+### BASLER_CONFIG1.xml (single-camera Basler FrameCapture) [RETIRED 2026-10-25 by P6, PR #15: the Basler capture reads its rendered JSON (section 13); kept here as history]
 Root `BASLER_CAM`, read by position, one camera per file. Located through env `BASLER_CONFIG`, otherwise `BASLER_CONFIG1.xml` in the working directory.
 ```
 0 CODE_PATH, 1 LOG_FILE_PATH (must end with "/": the code appends the file name), 2 LOG_BACKUP_COUNT, 3 CAM_SERIAL_NO,
@@ -312,7 +312,7 @@ Secrets live in `site.yaml` (section 7: `db.user`, `db.password`, `mqtt.user`, `
 **Exit:** 0 = all pass; 1 = any FAIL or SKIP; 2 = warnings only.
 **Grading:** `db.user` root = WARN (D-050); MQTT broker unreachable = WARN (D-034); disk used/(used+free) below `retention.disk_percent.delete` = PASS, between `delete` and `mail` = WARN, at or above `mail` = FAIL (same measure as cleanup). The layout check does not check `data/wheel_status` yet (Q13).
 
-## 13. Rendered worker config [renderer BUILT, PR #12; no worker reads it yet] (D-062)
+## 13. Rendered worker config [renderer BUILT, PR #12; the Basler captures read it since P6, PR #15] (D-062)
 `<root>/config/rendered/<worker_id>.json`, chmod 600, written atomically by the renderer from `site.yaml`; read by the worker from env `DPC_WORKER_CONFIG` (set by the Supervisor). Common shape:
 ```json
 {"_generated": {"from": "site.yaml", "sha256": "<hex>", "at": "2026-10-22T10:00:00", "renderer": 1},
@@ -322,7 +322,7 @@ Secrets live in `site.yaml` (section 7: `db.user`, `db.password`, `mqtt.user`, `
  "...worker keys...": {}}
 ```
 Per-worker keys **as built (PR #12)**:
-- `frame_capture_<camn>`: `worker_id`, `paths` {root, logs, live, tmp, inf, ui, raw_images}, `log` {backup_count, file_name}, `camera` {id, side, driver, serial, fps, exposure_us, rotate, ip[, flir]}, `db` {host, port, name, user, password, health_table}. Replaces `BASLER_CONFIGn.xml` (P6).
+- `frame_capture_<camn>`: `worker_id`, `paths` {root, logs, live, tmp, inf, ui, raw_images}, `log` {backup_count, file_name}, `camera` {id, side, driver, serial, fps, exposure_us, rotate, ip[, flir]}, `db` {host, port, name, user, password, health_table}, optional top-level `health_interval_s` (default 600; not rendered yet, P4d). Read by the Basler capture since P6 (PR #15); `BASLER_CONFIGn.xml` retired.
 - `inspection_<side>`: `worker_id`, `side`, `defect_side` (`Left`/`Right`), `camera_id`, `paths` {root, logs, inf, raw, defective, repeated, plate, temp, start_file}, `log` {backup_count}, `model` {name, models_dir} (version from `current`, D-060), `threshold`, `machine` {total_wheel_count[, expected_cycle_total][, wheel_stand_required_counts (string keys)]}, `object_sizes`, `auto_roi` {mode, learn_images}, `db` {...}, `plc` {ip[, legacy_db_numbers]}. Folders per D-067.
 - No PLC worker is rendered yet, so `plc.light_on_value` is in no file until the PLC service exists.
 **Renderer semantics (built):** "changed" means the settings changed (the `_generated` header is ignored for the comparison); `_generated.sha256` is the `site.yaml` the settings were last written from; only files carrying a `_generated.renderer` key are ever removed; `--check` is a dry run (exit 0). API: `common.config.render.render()`, called by the Supervisor at every start and on reload [BUILT, PR #13].
