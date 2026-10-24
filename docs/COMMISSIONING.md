@@ -143,7 +143,20 @@ Model files are never in git (too large; distributed through OneDrive later, D-0
 2. Package it (classes in the model's output order = the old `ALL_CLASS_NAMES`):
    `python3 scripts/make_model_package.py --name <name> --version <yyyy.mm.dd> --weights <.pth> --detectron-yaml /tmp/<model>.yaml --classes <c1,c2,...> --legacy-label-map`
 3. `python3 scripts/dpc_check.py`: line `model` = PASS.
-Tadipatri (2026-10-22): `dpc_maskrcnn/2026.10.12` from `~/INSIGHTZZ/old/MODELS/FIRST_MODE/Mahir_Oct_12_Int_Model/model_0041159.pth`, R101 FPN 3x config, 19 classes (SITES.md).
+**Tadipatri, exact commands used (2026-10-22), result `dpc_maskrcnn/2026.10.12`:**
+```
+python3 - <<'EOF'
+from detectron2.config import get_cfg
+cfg = get_cfg()
+cfg.merge_from_file("/home/dpc_tadipatri/detectron2-0.6/detectron2/configs/COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x.yaml")
+cfg.MODEL.ROI_HEADS.NUM_CLASSES = 19
+open("/tmp/dpc_maskrcnn_R101.yaml", "w").write(cfg.dump())
+EOF
+
+cd ~/INSIGHTZZ/code
+python3 scripts/make_model_package.py --name dpc_maskrcnn --version 2026.10.12 --weights /home/dpc_tadipatri/INSIGHTZZ/old/MODELS/FIRST_MODE/Mahir_Oct_12_Int_Model/model_0041159.pth --detectron-yaml /tmp/dpc_maskrcnn_R101.yaml --classes half_bottom_chain,bottom_chain_bolt_clip,wheel,bottom_chain_bolt,top_chain_bolt,wheel_stand,wheel_bolt,top_chain,nut_bolt,half_bucket_clip,top_chain_bolt_clip_missing,bottom_chain,half_top_chain,half_wheel,bucket_clip,top_chain_bolt_clip,high_dusty_bucket_clip,plate,wheel_magnet --legacy-label-map
+```
+Output: 19 classes, label map {} (the legacy dusty_* classes are not in this model), trained_at 2026-10-12, `current -> 2026.10.12`.
 
 ## 3. Acceptance checklist (sign-off)
 - [ ] Layout script printed `OK`; code is at the intended release tag (`git describe --tags`)
