@@ -22,6 +22,7 @@ QUIRKS: <..>; both cameras share one Ethernet port on the server: if that port i
 ## tadipatri (new machine)
 ```
 SITE: tadipatri   HOST: dpc-tadipatri (HP Z2 Tower G9)   ROOT: /home/dpc_tadipatri/INSIGHTZZ   RELEASE: (none yet)
+REFERENCE site.yaml (all real non-secret values, validated by the loader): docs/sites/tadipatri.site.reference.yaml
 DISK: one 938 GB NVMe mounted at /, services run as the login user dpc_tadipatri (D-030)
 CAMERAS: CAM1=LEFT Basler serial 24824427 exposure_us 1500 fps 4.0 rotate 0 (target; code still rotates 90 until D-041 is built); CAM2=RIGHT Basler serial 24874775 exposure_us 2000 fps 4.0 rotate 0 (same note). Mapping confirmed, both capture correctly (test 2026-10-12).
 DB: name tadipatri4   health table health_status (lowercase; renamed from tadipatri4_health_status_table on 2026-10-20; Basler XML element 16 HEALTH_TABLE and site.yaml db.health_table both = health_status). The old upper-case HEALTH_STATUS (DEVICE_NAME, STATUS) is a different legacy table: never point a program at it
