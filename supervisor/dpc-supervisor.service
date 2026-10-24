@@ -24,6 +24,9 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=@PYTHON@ supervisor.py run -c @ROOT@/config/workers.yaml
 Restart=always
 RestartSec=5
+# `systemctl reload dpc-supervisor` = `supervisor.py reload` without --confirm (6f): render
+# site.yaml again, restart only workers whose rendered config changed
+ExecReload=/bin/kill -HUP $MAINPID
 
 # Stop: SIGTERM goes to the Supervisor ONLY, which stops the workers in reverse start order
 # (each within its stop_timeout_seconds; the captures close their cameras). Whatever is

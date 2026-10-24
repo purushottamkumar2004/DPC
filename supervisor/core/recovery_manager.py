@@ -43,6 +43,16 @@ class RecoveryManager:
         else:
             self.handle_failure(worker, f"process exited (exit code {code})")
 
+    def handle_run_timeout(self, worker: Worker):
+        """F10: a oneshot/periodic run took longer than run_timeout_seconds. The process is
+        stopped (stop_signal, then kill) and the run counts as failed, as if it had exited
+        non-zero: a oneshot follows the retry policy, a periodic job waits for its next run."""
+        reason = f"run took longer than {worker.config.run_timeout_seconds:.0f}s (stopped)"
+        if worker.config.mode == "periodic":
+            self.periodic_run_failed(worker, reason)
+        else:
+            self.handle_failure(worker, reason)
+
     def handle_start_failure(self, worker: Worker):
         """The process could not even be created (missing script, bad working directory...)."""
         reason = worker.message or "could not start process"

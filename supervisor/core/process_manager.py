@@ -59,6 +59,9 @@ class Worker:
     consecutive_failures: int = 0          # periodic only: failed runs in a row
     first_started_at: Optional[float] = None   # first launch since supervisor start (start_after waits)
     heartbeat: Optional[object] = None     # last Heartbeat (health/heartbeat.py), for the status
+    # ---- P5 ----
+    paused_by: Optional[str] = None        # D-068: stopped because the worker it follows stopped
+    config_pending: bool = False           # 6f: rendered config changed, restart still to do (restart_cost high)
 
     @property
     def id(self) -> str:
@@ -75,6 +78,7 @@ class ProcessManager:
         os.makedirs(self.worker_log_dir, exist_ok=True)
         self.extra_env = extra_env or {}
         self.site_env = site_env or SiteEnv()
+        self.rendered_dir: Optional[str] = None     # <root>/config/rendered, set by the Supervisor (6f)
 
     # ------------------------------------------------------------------
     def start_worker(self, worker: Worker) -> bool:
@@ -100,6 +104,9 @@ class ProcessManager:
             env.update(site_vars)
             log.info("[%s] env_from_site: %d variable(s) exported: %s",
                      cfg.id, len(site_vars), ", ".join(sorted(site_vars)))     # names only
+        worker_config = self.worker_config_path(cfg.id)
+        if worker_config:
+            env["DPC_WORKER_CONFIG"] = worker_config      # D-062: the worker reads its rendered JSON
         env.update(cfg.env)                    # what workers.yaml says for this worker wins
 
         worker.log_path = os.path.join(self.worker_log_dir, f"{cfg.id}.log")
@@ -131,6 +138,7 @@ class ProcessManager:
         worker.process = proc
         worker.pid = proc.pid
         worker.started_at = time.time()
+        worker.config_pending = False          # a fresh process has read the current rendered file
         if worker.first_started_at is None:
             worker.first_started_at = worker.started_at
         worker.exit_code = None
@@ -143,6 +151,13 @@ class ProcessManager:
         return True
 
     # ------------------------------------------------------------------
+    def worker_config_path(self, worker_id: str) -> Optional[str]:
+        """<rendered>/<worker_id>.json if the renderer made one for this worker, else None."""
+        if not self.rendered_dir:
+            return None
+        path = os.path.join(self.rendered_dir, f"{worker_id}.json")
+        return path if os.path.isfile(path) else None
+
     def stop_worker(self, worker: Worker):
         """Ask the worker to stop (configured signal), then force-kill if it ignores us."""
         proc = worker.process
@@ -204,6 +219,10 @@ class ProcessManager:
             "next_run_at": _iso(worker.next_run_at),
             "consecutive_failures": worker.consecutive_failures,
             "heartbeat": dict(worker.heartbeat.info) if worker.heartbeat is not None else None,
+            # P5, append-only
+            "follows": worker.config.follows,
+            "paused_by": worker.paused_by,
+            "config_pending": worker.config_pending,
         }
 
     # ------------------------------------------------------------------
