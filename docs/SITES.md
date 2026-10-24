@@ -29,7 +29,7 @@ PLC: Modbus TCP, port 502, timeout 3 s; registers light 4109 (0 = ON, 1 = OFF, i
 CAMERA IPs: LEFT 192.168.1.102, RIGHT 192.168.1.103 (from the legacy UI config)
 MODEL: dpc_maskrcnn/2026.10.12 packaged (19 classes, from Mahir_Oct_12_Int_Model)   WHEELS/REV: 190   THRESHOLD: 0.5   OBJECT SIZES: both sides wheel 530x495, bucket clip 300, chain 880, half bucket clip 150
 CLEANUP: raw images kept 20 h, interval 10 s, repeated 20 days / 200 items, plate 10 days, defective 10 days / 200 items, disk % delete 75 / raw delete 85 / mail 90 / INF delete 95 (from the legacy deleter config)
-MAIL: Microsoft Graph, sender insightzz.reports@insightzz.com; recipient and CC lists live only in that site's site.yaml (personal addresses are never written to this repo). The mail XML found on the machine is a Maihar copy (DB MAHIAR_DB, project Maihar_dpc, Maihar report path): Tadipatri needs its own project name and lists in site.yaml.
+MAIL: Microsoft Graph, sender insightzz.reports@insightzz.com; recipient and CC lists live only in that site's site.yaml (personal addresses are never written to this repo). The mail XML found on the machine is a Maihar copy. Tadipatri: project name Tadipatri_dpc, recipient and CC lists = Maihar's for now (developer, 2026-10-22); the lists change over time and are edited in site.yaml (later through the UI), then applied with a reload (D-062).
 QUIRKS: Basler config was under .../CODE/FRAME_CAPTURE/CAM1/ in the old layout; DB login is root (rotate, use a dedicated user); no image rotation wanted (rotate 0): model and object sizes must be for unrotated 1920x1080 frames
 ```
 
@@ -40,3 +40,4 @@ CAMERAS: CAM1 FLIR serial 25134836 exposure_us 15000 fps 4.0; CAM2 FLIR serial 2
 DB: name MAHIAR_DB     PLC: Modbus TCP ip 192.168.2.5 (confirmed)     WHEELS/REV: 190
 QUIRKS: see CODE_AUDIT sections 2 and 4
 ```
+CLEANUP (legacy deleter config, old layout under /home/ddpc_maihar/INSIGHTZZ/CODE/...): raw images kept 24 h, interval 10 s, repeated 20 days / 200 items, plate 10 days, defective 10 days / 200 items, disk % delete 75 / raw delete 85 / mail 90 / INF delete 95
