@@ -28,7 +28,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-22 (full clean
 ## Pending, in order (do one at a time)
 | # | Owner | What | Done when |
 |---|---|---|---|
-| P1 | You (Tadipatri) | Check the service-run basics: `systemctl status dpc-supervisor` active; `grep -c FAILED ~/INSIGHTZZ/logs/supervisor.log` = 0; the `INF` cron entry exists (`crontab -l`) so the disk does not fill | All three confirmed |
+| P1 (DONE 2026-10-24: service active, FAILED = 0, both captures started by the Supervisor and delivering frames, `INF` cron installed) | You (Tadipatri) | Check the service-run basics: `systemctl status dpc-supervisor` active; `grep -c FAILED ~/INSIGHTZZ/logs/supervisor.log` = 0; the `INF` cron entry exists (`crontab -l`) so the disk does not fill | All three confirmed |
 | P2 | You (Tadipatri) | Fill the real `site.yaml` from `docs/sites/tadipatri.site.reference.yaml` (DB password, Graph values, mail lists), chmod 600, run the checker | Checker `OK` (root warning only) |
 | P3 | You + MASTER | Copy the model's small files (`manifest.json`, `classes.json`, `.yaml`) into the repo at `models/dpc_maskrcnn/2026.10.12/` (D-065) | Files on `main`; no `.pth` in git |
 | P4 | CONFIG | One task: **6e** renderer (`site.yaml` -> `config/rendered/<worker_id>.json`, CONTRACTS 13, D-062, D-063), **6g** keys `cameras[].ip` and `plc.light_on_value` (D-064), **6h** `make_model_package.py --from-repo` / `--export-to-repo` (D-065) | Tadipatri: 4 JSON files rendered; second run `unchanged`; tests pass |
