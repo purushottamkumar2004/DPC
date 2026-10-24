@@ -192,7 +192,7 @@ Developer and MASTER, 2026-10-22. **Once per site** in `site.yaml`: `inspection.
 Append-only additions to v3 (CONTRACTS 7.1): `cameras[].ip` (optional; GigE camera address, used by the UI status and `dpc-check`), and `plc.light_on_value` (0 or 1, default 1; Tadipatri's light register is inverted, 0 = ON). Without the second key, a program writing 1 to switch the light on would switch it off. Legacy UI paths (live images, reports, daily defects) are derived from the layout when the UI is migrated, never typed (D-063).
 
 ## Open questions
-- Q20: Tadipatri PLC IP: 192.168.1.4 (PLC test script) or 192.168.1.5 (algorithm and UI configs)?
+- Q20 (answered 2026-10-22): Tadipatri PLC IP is 192.168.1.5; the 192.168.1.4 in the legacy PLC test script is wrong.
 - Q18: Who in the Microsoft 365 tenant grants admin consent for Graph file permissions (D-057), and is the target a OneDrive or a SharePoint document library? (Not blocking: the developer settles it while testing item 9.)
 - Q19: What does the existing DataSync do today (the `is_data_sync` columns)? Absorb it into the transfer service (D-057) or keep it separate?
 - Q1 (answered, D-049): queue lag plus heartbeat.

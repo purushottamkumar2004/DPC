@@ -25,10 +25,10 @@ SITE: tadipatri   HOST: dpc-tadipatri (HP Z2 Tower G9)   ROOT: /home/dpc_tadipat
 DISK: one 938 GB NVMe mounted at /, services run as the login user dpc_tadipatri (D-030)
 CAMERAS: CAM1=LEFT Basler serial 24824427 exposure_us 1500 fps 4.0 rotate 0 (target; code still rotates 90 until D-041 is built); CAM2=RIGHT Basler serial 24874775 exposure_us 2000 fps 4.0 rotate 0 (same note). Mapping confirmed, both capture correctly (test 2026-10-12).
 DB: name tadipatri4   health table health_status (lowercase; renamed from tadipatri4_health_status_table on 2026-10-20; Basler XML element 16 HEALTH_TABLE and site.yaml db.health_table both = health_status). The old upper-case HEALTH_STATUS (DEVICE_NAME, STATUS) is a different legacy table: never point a program at it
-PLC: Modbus TCP, port 502, timeout 3 s; registers light 4109 (0 = ON, 1 = OFF, inverted), cleaning 4106 (1 = ON, 0 = OFF, pulse 10 s), conveyor status 4098 (read); old cleaning registers 4097 / 4197 in the legacy test script, not used by the new register. **PLC IP conflict:** 192.168.1.4 in the PLC test script, 192.168.1.5 in the algorithm and UI configs (to confirm). The algorithm XML's PLC_WRITE/READ_DB_NUMBER 12/13 look like S7 leftovers; the PLC is Modbus.
+PLC: Modbus TCP, port 502, timeout 3 s; registers light 4109 (0 = ON, 1 = OFF, inverted), cleaning 4106 (1 = ON, 0 = OFF, pulse 10 s), conveyor status 4098 (read); old cleaning registers 4097 / 4197 in the legacy test script, not used by the new register. PLC IP 192.168.1.5 (confirmed 2026-10-22; the legacy PLC test script's 192.168.1.4 is wrong). The algorithm XML's PLC_WRITE/READ_DB_NUMBER 12/13 look like S7 leftovers; the PLC is Modbus.
 CAMERA IPs: LEFT 192.168.1.102, RIGHT 192.168.1.103 (from the legacy UI config)
 MODEL: dpc_maskrcnn/2026.10.12 packaged (19 classes, from Mahir_Oct_12_Int_Model)   WHEELS/REV: 190   THRESHOLD: 0.5   OBJECT SIZES: both sides wheel 530x495, bucket clip 300, chain 880, half bucket clip 150
-MAIL: to fill
+MAIL: Microsoft Graph, sender insightzz.reports@insightzz.com; recipient and CC lists live only in that site's site.yaml (personal addresses are never written to this repo). The mail XML found on the machine is a Maihar copy (DB MAHIAR_DB, project Maihar_dpc, Maihar report path): Tadipatri needs its own project name and lists in site.yaml.
 QUIRKS: Basler config was under .../CODE/FRAME_CAPTURE/CAM1/ in the old layout; DB login is root (rotate, use a dedicated user); no image rotation wanted (rotate 0): model and object sizes must be for unrotated 1920x1080 frames
 ```
 
