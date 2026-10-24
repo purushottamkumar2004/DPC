@@ -319,6 +319,6 @@ Secrets live in `site.yaml` (section 7: `db.user`, `db.password`, `mqtt.user`, `
 ```
 Per-worker keys (filled in when each worker is migrated):
 - `frame_capture_<camn>` (Basler): camera (id, side, serial, fps, exposure_us, rotate), frame folders, health table, DB login. Replaces `BASLER_CONFIGn.xml`.
-- `inspection_left` / `inspection_right`: side, folders, model name (version from `current`, D-060), threshold, machine values, object sizes for that side, auto_roi, DB login, PLC address if used.
+- `inspection_left` / `inspection_right` (D-063): `side` (LEFT/RIGHT), `defect_side` (`Left`/`Right`, derived), `camera_id` (CAM1/CAM2 by side), folders derived from the layout (`inf`, `raw`, `defective`, `repeated`, `temp`, `plate`, `start_file`, `logs`), `model` {name, models_dir} (version from `current`, D-060), `threshold`, `machine` {total_wheel_count, expected_cycle_total?, wheel_stand_required_counts?}, `object_sizes` of that side, `auto_roi`, `db` login, `plc` {ip, legacy_db_numbers}, `log`.
 Renderer CLI: `python3 scripts/render_config.py [site.yaml] [--check]`: prints one line per file `written|unchanged|removed <worker_id>`; exit 0 ok, 1 `site.yaml` invalid (nothing written).
 
