@@ -204,6 +204,9 @@ History above is not edited; this entry records where each older proposal stands
 - `paths.start_file` = `data/state/inspection_<side>/start.txt`, one per side (the legacy code kept both sides' `start.txt` in `LOGS/`). W-inspection confirms in P7 whether the two sides really share it; if they do, this becomes one shared file.
 - `make_model_package --export-to-repo` copies the manifest unchanged, including `packaged_from` (local source paths, not secret); kept as is.
 
+## D-068 | 2026-10 | Accepted | Captures keep the retry limit; each inspection side follows its camera
+Developer decision 2026-10-24 (STATUS D1 = option b). (1) Captures keep `max_retries` (about 20-25 min without a camera, then FAILED; a person restarts it). (2) **Inspection follows its camera:** `inspection_left` belongs to the camera with side LEFT (`frame_capture_cam1`), `inspection_right` to RIGHT (`frame_capture_cam2`). When the camera's capture stops (unhealthy, restarting or FAILED), the Supervisor stops that side's inspection. When the capture is healthy again (frames flowing), the Supervisor starts that side's inspection once. Inspection is not restarted in a loop while the camera is down, and the other side is not touched. The SUPERVISOR chat designs the mechanism (for example a `follows: <worker_id>` key in `workers.yaml`, append-only in CONTRACTS 1) in P5.
+
 ## Open questions
 - Q20 (answered 2026-10-22): Tadipatri PLC IP is 192.168.1.5; the 192.168.1.4 in the legacy PLC test script is wrong.
 - Q18: Who in the Microsoft 365 tenant grants admin consent for Graph file permissions (D-057), and is the target a OneDrive or a SharePoint document library? (Not blocking: the developer settles it while testing item 9.)

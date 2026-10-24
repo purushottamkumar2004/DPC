@@ -34,7 +34,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-22 (full clean
 | P4 (DONE, PR #12, 197 tests pass; Tadipatri reference rendered: 4 written, then 4 unchanged) | CONFIG | One task: **6e** renderer (`site.yaml` -> `config/rendered/<worker_id>.json`, CONTRACTS 13, D-062, D-063), **6g** keys `cameras[].ip` and `plc.light_on_value` (D-064), **6h** `make_model_package.py --from-repo` / `--export-to-repo` (D-065) | Tadipatri: 4 JSON files rendered; second run `unchanged`; tests pass |
 | P4b | CONFIG (small) | D-067: add `data/images/TEMP/LEFT` and `RIGHT` to the layout (CONTRACTS 4.1), `scripts/setup_dpc_layout.sh` and the `dpc-check` layout check | `setup_dpc_layout.sh` creates them; `dpc-check` layout counts them |
 | P4c (DONE 2026-10-24: renderer on the real site.yaml, 4 written then 4 unchanged; `--export-to-repo` worked; machine back on `main`, clean) | You (Tadipatri) | `git pull`, then try the renderer once: `python3 scripts/render_config.py ~/INSIGHTZZ/config/site.yaml` (writes 4 files to `~/INSIGHTZZ/config/rendered/`, nothing reads them yet); optional: add `ip:` to both cameras and `light_on_value: 0` under `plc` in `site.yaml` | 4 `written`; a second run says 4 `unchanged` |
-| P5 | SUPERVISOR | **6f** `reload` and render at start, `DPC_WORKER_CONFIG` per worker, restart only changed workers; plus **F10** `run_timeout_seconds`, **F11** MQTT login from `site.yaml`, **F15** retry rule decided in D1 | Edit CAM2 exposure, `reload`: only CAM2 restarts |
+| P5 | SUPERVISOR | **6f** `reload` and render at start, `DPC_WORKER_CONFIG` per worker, restart only changed workers; plus **F10** `run_timeout_seconds`, **F11** MQTT login from `site.yaml`, **D-068** captures keep the retry limit; inspection follows its camera (stop when the capture stops, start once when it is healthy again) | Edit CAM2 exposure, `reload`: only CAM2 restarts |
 | P6 | W-frame_capture_basler | **7b** capture reads its rendered JSON (no XML); carry over the deprecation fix and `health_interval_s` from branch `feat/frame_capture_basler-robustness` (then delete it); **F7** health "matched no row" uses `CLIENT.FOUND_ROWS` | Both Tadipatri captures run from JSON; `BASLER_CONFIG*.xml` no longer read |
 | P7 | W-inspection | **7** Left/Right read their rendered JSON and the model package; folders from the layout; heartbeat; wheel-stand counts and cycle total into `site.yaml`; check whether `INPUT_IMG_DIR` is used; no business-logic change | Replay of saved images gives the same detections and defects as the old code; runs under the Supervisor (`restart_cost: high`, `queue_lag`); `INF` drains, cron removed |
 | P8 | DB | **F13** CONTRACTS 5 and `db/README.md` name `health_status` for Tadipatri; **F8** reviewed upgrade script for `tadipatri4` to schema v1 (after a full backup) | Docs fixed; script reviewed by you |
@@ -48,7 +48,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-22 (full clean
 ## Decisions waiting for you
 | # | Question | Options |
 |---|---|---|
-| D1 (F15) | A capture with `max_retries: 30` ends FAILED after about 20-25 min without the camera and then needs a manual start. Should cheap-to-restart workers (captures) retry forever? | (a) retry forever for captures; (b) keep the limit |
+| D1 (F15) | DECIDED 2026-10-24 (D-068): keep the capture retry limit; each inspection side follows its camera | - |
 | D2 | The GitHub repo is public (code, docs, site reference values, model metadata). | (a) make it private; (b) keep public |
 
 ## Automation cases (from the 2026-10-13 review)
