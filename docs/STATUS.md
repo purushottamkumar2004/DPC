@@ -25,6 +25,8 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-22 (full clean
 | Tadipatri `site.yaml` v3 | Converted and valid |
 | Legacy configs read and mapped (inspection, PLC, UI, mail, cleanup) | D-063, D-064, CODE_AUDIT 7, SITES |
 
+**Install guide:** `docs/INSTALL.md` is the single step-by-step installation for a new site; every handoff carries an `Install impact:` line and MASTER keeps the guide current.
+
 ## Pending, in order (do one at a time)
 | # | Owner | What | Done when |
 |---|---|---|---|

@@ -42,3 +42,6 @@ One `main` branch for all sites; releases are tags (`v0.<n>`). A site pins a tag
 
 ## Not committed on purpose
 Models (`*.pth`), images, logs, real configs, `site.yaml`, secrets.
+
+## Installing a site
+Step by step: [`docs/INSTALL.md`](docs/INSTALL.md). Data sheet and acceptance checklist: `docs/COMMISSIONING.md`.
