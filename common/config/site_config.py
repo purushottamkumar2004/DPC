@@ -182,6 +182,7 @@ class Camera:
     exposure_us: int
     rotate: int          # 0 | 90 | 180 | 270
     flir: Optional[FlirSettings]
+    ip: Optional[str] = None     # GigE address, optional (D-064): UI status and dpc-check ping
 
     @property
     def log_file_name(self) -> str:
@@ -256,6 +257,7 @@ class PlcConfig:
     conveyor_status_register: int
     cleaning_pulse_seconds: float
     legacy_db_numbers: Optional[Dict[str, int]]   # {"write": n, "read": n}, legacy XML only
+    light_on_value: int          # value that switches the light ON: 1, or 0 where inverted (D-064)
     log: LogSettings
 
 
@@ -651,6 +653,18 @@ def _read_graph(top: _Section, needed_by: List[str]) -> Optional[GraphSettings]:
 
 # ---- capture ----
 
+def _ipv4(s: _Section, name: str, required: bool = True) -> Optional[str]:
+    value = s.string(name, required=required)
+    if value is None:
+        return None
+    try:
+        ipaddress.IPv4Address(value)
+    except ValueError:
+        s.problem(name, f"must be an IPv4 address, got {value!r}")
+        return None
+    return value
+
+
 def _read_camera(item: Any, key: str, problems: List[str]) -> Camera:
     s = _Section(item, key, problems)
     driver = s.string("driver", choices=CAMERA_DRIVERS)
@@ -672,6 +686,7 @@ def _read_camera(item: Any, key: str, problems: List[str]) -> Camera:
         exposure_us=s.integer("exposure_us", low=10, high=1000000),
         rotate=s.integer("rotate", choices=ROTATIONS),
         flir=flir,
+        ip=_ipv4(s, "ip", required=False),
     )
     s.finish()
     if cam.id and cam.side and CAMERA_SIDES[cam.id] != cam.side:
@@ -687,7 +702,7 @@ def _read_cameras(s: _Section) -> Tuple[Camera, ...]:
         s.problem("cameras", "must be a list with 1 or 2 cameras")
         return ()
     cameras = tuple(_read_camera(item, f"{s.path('cameras')}[{i}]", s.problems) for i, item in enumerate(items))
-    for attr in ("id", "side", "serial"):
+    for attr in ("id", "side", "serial", "ip"):
         values = [getattr(c, attr) for c in cameras if getattr(c, attr) is not None]
         for value in sorted({v for v in values if values.count(v) > 1}):
             s.problem("cameras", f"{attr} {value!r} is used by more than one camera")
@@ -801,13 +816,7 @@ def _read_inspection(top: _Section, paths: Paths, sides: List[str]) -> Inspectio
 
 def _read_plc(top: _Section) -> PlcConfig:
     s = top.section("plc")
-    ip = s.string("ip")
-    if ip is not None:
-        try:
-            ipaddress.IPv4Address(ip)
-        except ValueError:
-            s.problem("ip", f"must be an IPv4 address, got {ip!r}")
-            ip = None
+    ip = _ipv4(s, "ip")
     legacy = None
     if s.present("legacy_db_numbers"):
         ls = s.section("legacy_db_numbers", required=False)
@@ -826,6 +835,8 @@ def _read_plc(top: _Section) -> PlcConfig:
         cleaning_pulse_seconds=s.number("cleaning_pulse_seconds", required=False, default=10.0,
                                         low=0, low_exclusive=True, high=600),
         legacy_db_numbers=legacy,
+        # Tadipatri's light register is inverted (0 = ON); writing 1 there would switch it off
+        light_on_value=s.integer("light_on_value", required=False, default=1, choices=(0, 1)),
         log=_read_log(s),
     )
     s.finish()

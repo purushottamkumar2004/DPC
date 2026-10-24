@@ -9,11 +9,16 @@ Builds <models-dir>/<name>/<version>/ with:
     ready                  marker: verified after building
 and points <name>/current at it (first install only; afterwards the Supervisor moves `current`).
 
-Example (Tadipatri's present model, classes taken from the legacy algorithm XML):
-    python3 ~/INSIGHTZZ/code/scripts/make_model_package.py \\
-        --name dpc_maskrcnn --version 2026.10.1 \\
-        --weights /path/to/model_final.pth --detectron-yaml /path/to/mask_rcnn.yaml \\
-        --classes-from-xml /path/to/leftConfig.xml --legacy-label-map
+Three ways to run it:
+  1. New package from loose files (Tadipatri's present model, classes from the legacy XML):
+       make_model_package.py --name dpc_maskrcnn --version 2026.10.1 \
+           --weights /path/to/model_final.pth --detectron-yaml /path/to/mask_rcnn.yaml \
+           --classes-from-xml /path/to/leftConfig.xml --legacy-label-map [--export-to-repo]
+  2. A version already in git (D-065): only the weights are needed; their sha256 must match
+     the repo manifest, everything else comes from the repo folder:
+       make_model_package.py --from-repo models/dpc_maskrcnn/2026.10.12 --weights /path/to/model_final.pth
+  3. Export an installed package's small files to git (never the weights):
+       make_model_package.py --name dpc_maskrcnn --version 2026.10.12 --export-to-repo
 
 Class order matters: index i of the model output is class i, so the list is kept exactly as
 given. Source files are only read and copied, never changed. Nothing is written unless every
@@ -159,9 +164,12 @@ def base_config_warning(path: str) -> Optional[str]:
 # Build
 # ======================================================================
 
-def build_package(models_dir: str, name: str, version: str, weights: str, detectron_yaml: str,
-                  classes: List[str], label_map: Dict[str, str], trained_at: str) -> str:
-    """Copy and write everything in a temp folder next to the target, then rename it into place."""
+def _assemble(models_dir: str, name: str, version: str, copies: List[Tuple[str, str]],
+              classes_doc: Optional[Dict] = None, manifest: Optional[Dict] = None, trained_at: str = "",
+              packaged_from: Optional[Dict[str, str]] = None) -> str:
+    """Copy and write everything in a temp folder next to the target, then rename it into place.
+    copies: (source, name in the package). manifest None = write a new one with fresh sha256s;
+    given = copy it as it is (from the repo, already checked)."""
     model_root = os.path.join(models_dir, name)
     target = os.path.join(model_root, version)
     if os.path.lexists(target):
@@ -171,17 +179,19 @@ def build_package(models_dir: str, name: str, version: str, weights: str, detect
     shutil.rmtree(temp, ignore_errors=True)
     os.makedirs(temp)
     try:
-        for source in (weights, detectron_yaml):
-            shutil.copyfile(source, os.path.join(temp, os.path.basename(source)))   # read-only on the source
-        with open(os.path.join(temp, mp.CLASSES_FILE), "w", encoding="utf-8") as f:
-            json.dump({"classes": classes, "label_map": label_map}, f, indent=2)
-        files = {n: mp.sha256_of(os.path.join(temp, n)) for n in sorted(os.listdir(temp))}
-        manifest = {"name": name, "version": version, "trained_at": trained_at, "files": files,
-                    "packaged_at": datetime.datetime.now().isoformat(timespec="seconds"),
-                    "packaged_from": {"weights": os.path.abspath(weights),
-                                      "detectron_yaml": os.path.abspath(detectron_yaml)}}
+        for source, dest in copies:
+            shutil.copyfile(source, os.path.join(temp, dest))                  # read-only on the source
+        if classes_doc is not None:
+            with open(os.path.join(temp, mp.CLASSES_FILE), "w", encoding="utf-8") as f:
+                json.dump(classes_doc, f, indent=2)
+        if manifest is None:
+            files = {n: mp.sha256_of(os.path.join(temp, n)) for n in sorted(os.listdir(temp))}
+            manifest = {"name": name, "version": version, "trained_at": trained_at, "files": files,
+                        "packaged_at": datetime.datetime.now().isoformat(timespec="seconds")}
+            if packaged_from:
+                manifest["packaged_from"] = packaged_from
         with open(os.path.join(temp, mp.MANIFEST_FILE), "w", encoding="utf-8") as f:
-            json.dump(manifest, f, indent=2)                                         # last, as on OneDrive
+            json.dump(manifest, f, indent=2)                                     # last, as on OneDrive
         os.rename(temp, target)
     except BaseException:
         shutil.rmtree(temp, ignore_errors=True)
@@ -189,13 +199,134 @@ def build_package(models_dir: str, name: str, version: str, weights: str, detect
     return target
 
 
+def build_package(models_dir: str, name: str, version: str, weights: str, detectron_yaml: str,
+                  classes: List[str], label_map: Dict[str, str], trained_at: str) -> str:
+    """A new package from loose files."""
+    return _assemble(models_dir, name, version,
+                     copies=[(weights, os.path.basename(weights)), (detectron_yaml, os.path.basename(detectron_yaml))],
+                     classes_doc={"classes": classes, "label_map": label_map}, trained_at=trained_at,
+                     packaged_from={"weights": os.path.abspath(weights),
+                                    "detectron_yaml": os.path.abspath(detectron_yaml)})
+
+
+# ======================================================================
+# Git (D-065): models/<name>/<version>/ holds manifest.json, classes.json and the yaml
+# ======================================================================
+
+def _weights_name(manifest: "mp.Manifest") -> str:
+    return next(n for n in manifest.files if n.lower().endswith(mp.WEIGHTS_EXTENSIONS))
+
+
+def build_from_repo(models_dir: str, repo_version_dir: str, weights: str) -> str:
+    """Install a version that is already in git: the repo's small files plus the weights,
+    which must have the sha256 the repo manifest records."""
+    repo_version_dir = os.path.abspath(os.path.expanduser(repo_version_dir))
+    if not os.path.isdir(repo_version_dir):
+        raise PackagingError(f"--from-repo: {repo_version_dir} is not a folder")
+    try:
+        manifest = mp.read_manifest(repo_version_dir)
+    except mp.ModelPackageError as exc:
+        raise PackagingError("--from-repo: " + "; ".join(exc.problems)) from None
+    problems = []
+    folder_version = os.path.basename(repo_version_dir)
+    folder_name = os.path.basename(os.path.dirname(repo_version_dir))
+    if (manifest.name, manifest.version) != (folder_name, folder_version):
+        problems.append(f"--from-repo: manifest says {manifest.name}/{manifest.version}, "
+                        f"the folder is {folder_name}/{folder_version}")
+    weights_name = _weights_name(manifest)
+    for file_name, expected in manifest.files.items():
+        if file_name == weights_name:
+            continue
+        path = os.path.join(repo_version_dir, file_name)
+        if not os.path.isfile(path):
+            problems.append(f"--from-repo: {file_name} is missing in the repo folder")
+        elif mp.sha256_of(path) != expected:
+            problems.append(f"--from-repo: {file_name} in the repo does not match its manifest sha256")
+    if not os.path.isfile(weights):
+        problems.append(f"--weights: {weights} is not a file")
+    elif mp.sha256_of(weights) != manifest.files[weights_name]:
+        problems.append(f"--weights: sha256 differs from the repo manifest for {weights_name}; "
+                        f"these are not the weights of {manifest.name}/{manifest.version}")
+    if problems:
+        raise PackagingError("\n".join(problems))
+    with open(os.path.join(repo_version_dir, mp.MANIFEST_FILE), "r", encoding="utf-8") as f:
+        manifest_doc = json.load(f)                       # copied as it is: the repo is the reference
+    copies = [(os.path.join(repo_version_dir, n), n) for n in manifest.files if n != weights_name]
+    copies.append((weights, weights_name))
+    return _assemble(models_dir, manifest.name, manifest.version, copies, manifest=manifest_doc)
+
+
+def export_to_repo(package_dir: str, repo_models_dir: str) -> str:
+    """Copy manifest.json, classes.json and the Detectron yaml of a verified package into
+    <repo>/models/<name>/<version>/. Never the weights (D-065)."""
+    package = mp.verify_package(package_dir)
+    manifest = mp.read_manifest(package_dir)
+    target = os.path.join(repo_models_dir, package.name, package.version)
+    if os.path.lexists(target):
+        raise PackagingError(f"{target} already exists in the repo; a version is never overwritten")
+    names = [mp.MANIFEST_FILE] + [n for n in manifest.files if not n.lower().endswith(mp.WEIGHTS_EXTENSIONS)]
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    temp = os.path.join(os.path.dirname(target), f".{package.version}.export-{os.getpid()}")
+    shutil.rmtree(temp, ignore_errors=True)
+    os.makedirs(temp)
+    try:
+        for name in names:
+            shutil.copyfile(os.path.join(package_dir, name), os.path.join(temp, name))
+        os.rename(temp, target)
+    except BaseException:
+        shutil.rmtree(temp, ignore_errors=True)
+        raise
+    return target
+
+
+def _set_current_first_install(models_dir: str, name: str, version: str, no_current: bool) -> None:
+    model_root = os.path.join(models_dir, name)
+    if no_current:
+        print("  current not changed (--no-current)")
+        return
+    pinned = mp.read_pinned(model_root)
+    current = mp.read_current(model_root)
+    if pinned is not None or current is not None:
+        # After the first install the Supervisor owns `current` (D-060, D-061).
+        print(f"  current not changed: it is already set ({current}{', pinned' if pinned else ''}); "
+              f"switch with the Supervisor (model switch {version})")
+        return
+    mp.set_current(model_root, version)
+    print(f"  current -> {version}")
+
+
+def _mode(args) -> str:
+    """from_repo | export_only | build, with the flags each mode does not take refused."""
+    loose = [f for f, v in (("--detectron-yaml", args.detectron_yaml), ("--classes", args.classes),
+                            ("--classes-file", args.classes_file), ("--classes-from-xml", args.classes_from_xml),
+                            ("--label-map", args.label_map), ("--legacy-label-map", args.legacy_label_map),
+                            ("--trained-at", args.trained_at)) if v]
+    if args.from_repo:
+        extra = loose + [f for f, v in (("--name", args.name), ("--version", args.version),
+                                        ("--export-to-repo", args.export_to_repo)) if v]
+        if extra:
+            raise PackagingError(f"--from-repo takes only --weights (and --models-dir, --no-current); "
+                                 f"remove {', '.join(extra)}")
+        if not args.weights:
+            raise PackagingError("--from-repo needs --weights")
+        return "from_repo"
+    if not args.name or not args.version:
+        raise PackagingError("give --name and --version (or --from-repo)")
+    if args.export_to_repo and not args.weights and not loose:
+        return "export_only"
+    missing = [f for f, v in (("--weights", args.weights), ("--detectron-yaml", args.detectron_yaml)) if not v]
+    if missing:
+        raise PackagingError(f"a new package needs {', '.join(missing)}")
+    return "build"
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="make_model_package.py",
-                                     description="Package an existing model (CONTRACTS 12).")
-    parser.add_argument("--name", required=True, help="model name, as in site.yaml inspection.model.name")
-    parser.add_argument("--version", required=True, help="new version folder name, e.g. 2026.10.1")
-    parser.add_argument("--weights", required=True, help="the .pth weights file (copied)")
-    parser.add_argument("--detectron-yaml", required=True, help="the Detectron config .yaml (copied)")
+                                     description="Package a model (CONTRACTS 12, D-065).")
+    parser.add_argument("--name", help="model name, as in site.yaml inspection.model.name")
+    parser.add_argument("--version", help="version folder name, e.g. 2026.10.1")
+    parser.add_argument("--weights", help="the .pth weights file (copied, never changed)")
+    parser.add_argument("--detectron-yaml", help="the self-contained Detectron config .yaml (copied)")
     parser.add_argument("--classes", help="class names in model output order, comma separated")
     parser.add_argument("--classes-file", help="JSON list of class names (or a classes.json)")
     parser.add_argument("--classes-from-xml", help="legacy leftConfig.xml/rightConfig.xml: uses <ALL_CLASS_NAMES>")
@@ -203,12 +334,32 @@ def main(argv=None) -> int:
     parser.add_argument("--legacy-label-map", action="store_true",
                         help="add today's changeLabelName() mapping (entries for classes the model has)")
     parser.add_argument("--trained-at", help="training date (default: date of the weights file)")
+    parser.add_argument("--from-repo", help="models/<name>/<version> folder in git: install it with --weights")
+    parser.add_argument("--export-to-repo", action="store_true",
+                        help="copy manifest.json, classes.json and the yaml to <repo>/models/<name>/<version>/")
+    parser.add_argument("--repo-models-dir", default=os.path.join(REPO_ROOT, "models"),
+                        help="models folder of the code checkout (default: models/ of this repo)")
     parser.add_argument("--models-dir", default=DEFAULT_MODELS_DIR, help=f"default {DEFAULT_MODELS_DIR}")
     parser.add_argument("--no-current", action="store_true", help="do not point current at the new version")
     args = parser.parse_args(argv)
     models_dir = os.path.abspath(os.path.expanduser(args.models_dir))
+    repo_models_dir = os.path.abspath(os.path.expanduser(args.repo_models_dir))
 
     try:
+        mode = _mode(args)
+        if mode == "export_only":
+            target = export_to_repo(os.path.join(models_dir, args.name, args.version), repo_models_dir)
+            print(f"Exported {args.name}/{args.version} to {target} (manifest, classes, yaml; no weights)")
+            return 0
+        if mode == "from_repo":
+            target = build_from_repo(models_dir, args.from_repo, args.weights)
+            package = mp.verify_package(target)
+            open(os.path.join(target, mp.READY_FILE), "w").close()
+            print(f"Installed {package.name}/{package.version} from {args.from_repo} in {target}")
+            print(f"  weights match the repo manifest; {len(package.classes)} classes")
+            _set_current_first_install(models_dir, package.name, package.version, args.no_current)
+            return 0
+
         classes = collect_classes(args)
         label_map, skipped = collect_label_map(args, classes)
         check_inputs(args, classes, label_map)
@@ -228,20 +379,14 @@ def main(argv=None) -> int:
         print(f"  legacy label map entries skipped (no such class in this model): {', '.join(skipped)}")
     if warning:
         print(f"  WARNING {warning}")
-
-    model_root = os.path.join(models_dir, args.name)
-    if args.no_current:
-        print("  current not changed (--no-current)")
-        return 0
-    pinned = mp.read_pinned(model_root)
-    current = mp.read_current(model_root)
-    if pinned is not None or current is not None:
-        # After the first install the Supervisor owns `current` (D-060): switch with its model commands.
-        print(f"  current not changed: it is already set ({current}{', pinned' if pinned else ''}); "
-              f"switch with the Supervisor (model switch {args.version})")
-        return 0
-    mp.set_current(model_root, args.version)
-    print(f"  current -> {args.version}")
+    _set_current_first_install(models_dir, args.name, args.version, args.no_current)
+    if args.export_to_repo:
+        try:
+            exported = export_to_repo(target, repo_models_dir)
+        except (PackagingError, mp.ModelPackageError) as exc:
+            print(f"FAILED export: {exc}")
+            return 1
+        print(f"  exported to {exported} (manifest, classes, yaml; no weights): commit it")
     return 0
 
 

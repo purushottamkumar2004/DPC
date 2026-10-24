@@ -50,6 +50,7 @@ CAMERA_ENUM_TIMEOUT_S = 12
 DB_TIMEOUT_S = 4
 MQTT_TIMEOUT_S = 3
 GIT_TIMEOUT_S = 2
+PING_TIMEOUT_S = 1           # per camera with an ip (D-064); 2 cameras keep the total under 30 s
 
 # Folders under data/ that are not per camera or per side (CONTRACTS 4.1). wheel_status is left
 # out on purpose: its subfolders are still "assumed" (Q13).
@@ -186,24 +187,57 @@ def enumerate_basler_serials(timeout_s: float = CAMERA_ENUM_TIMEOUT_S) -> List[s
     return [line.strip() for line in done.stdout.splitlines() if line.strip()]
 
 
-def check_cameras(cfg: SiteConfig, enumerate_serials: Callable[[], List[str]] = enumerate_basler_serials) -> Result:
+def ping(ip: str, timeout_s: int = PING_TIMEOUT_S) -> Optional[bool]:
+    """True = answers, False = no answer, None = ping not available. One packet only."""
+    try:
+        done = subprocess.run(["ping", "-c", "1", "-W", str(timeout_s), ip],
+                              capture_output=True, timeout=timeout_s + 1)
+    except FileNotFoundError:
+        return None
+    except subprocess.TimeoutExpired:
+        return False
+    return done.returncode == 0
+
+
+def _ping_notes(cfg: SiteConfig, ping_ip: Callable[[str], Optional[bool]]) -> List[str]:
+    """For cameras with an ip (D-064): a note per camera that does not answer. A ping is only
+    a hint (a camera can block ICMP), so it never fails the check on its own."""
+    notes = []
+    for cam in cfg.cameras:
+        if cam.ip is None:
+            continue
+        answer = ping_ip(cam.ip)
+        if answer is None:
+            notes.append("ping not available, camera ips not checked")
+            break
+        if not answer:
+            notes.append(f"{cam.id} ip {cam.ip} does not answer ping")
+    return notes
+
+
+def check_cameras(cfg: SiteConfig, enumerate_serials: Callable[[], List[str]] = enumerate_basler_serials,
+                  ping_ip: Callable[[str], Optional[bool]] = None) -> Result:
+    ping_ip = ping_ip or ping
     basler = [c for c in cfg.cameras if c.driver == "basler"]
     flir = [c.id for c in cfg.cameras if c.driver == "flir"]
     flir_note = f"; {', '.join(flir)} (FLIR) not checked: only Basler enumeration is built" if flir else ""
+    ping_notes = _ping_notes(cfg, ping_ip)
+    ping_note = "".join(f"; {n}" for n in ping_notes)
     if not basler:
-        return Result(WARN, "cameras", "no Basler camera configured" + flir_note)
+        return Result(WARN, "cameras", "no Basler camera configured" + flir_note + ping_note)
     try:
         found = enumerate_serials()
     except EnumerationError as exc:
-        return Result(FAIL, "cameras", str(exc))
+        return Result(FAIL, "cameras", str(exc) + ping_note)
     missing = [f"{c.id} serial {c.serial}" for c in basler if c.serial not in found]
     extra = sorted(set(found) - {c.serial for c in cfg.cameras})
     extra_note = f"; also connected, not configured: {', '.join(extra)}" if extra else ""
     if missing:
         seen = ", ".join(found) if found else "none"
-        return Result(FAIL, "cameras", f"{'; '.join(missing)} not found (found: {seen}){extra_note}{flir_note}")
+        return Result(FAIL, "cameras", f"{'; '.join(missing)} not found (found: {seen}){extra_note}{flir_note}{ping_note}")
     ok = ", ".join(f"{c.id}={c.serial}" for c in basler)
-    return Result(WARN if flir else PASS, "cameras", f"detected {ok}{extra_note}{flir_note}")
+    status = WARN if (flir or ping_notes) else PASS
+    return Result(status, "cameras", f"detected {ok}{extra_note}{flir_note}{ping_note}")
 
 
 def _db_reason(exc: Exception, cfg: SiteConfig) -> str:
