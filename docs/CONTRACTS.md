@@ -308,3 +308,17 @@ Secrets live in `site.yaml` (section 7: `db.user`, `db.password`, `mqtt.user`, `
 **Exit:** 0 = all pass; 1 = any FAIL or SKIP; 2 = warnings only.
 **Grading:** `db.user` root = WARN (D-050); MQTT broker unreachable = WARN (D-034); disk used/(used+free) below `retention.disk_percent.delete` = PASS, between `delete` and `mail` = WARN, at or above `mail` = FAIL (same measure as cleanup). The layout check does not check `data/wheel_status` yet (Q13).
 
+## 13. Rendered worker config [ACCEPTED, not built] (D-062)
+`<root>/config/rendered/<worker_id>.json`, chmod 600, written atomically by the renderer from `site.yaml`; read by the worker from env `DPC_WORKER_CONFIG` (set by the Supervisor). Common shape:
+```json
+{"_generated": {"from": "site.yaml", "sha256": "<hex>", "at": "2026-10-22T10:00:00", "renderer": 1},
+ "worker_id": "frame_capture_cam1",
+ "paths": {"root": "/home/<user>/INSIGHTZZ", "logs": "...", "...": "..."},
+ "log": {"backup_count": 5},
+ "...worker keys...": {}}
+```
+Per-worker keys (filled in when each worker is migrated):
+- `frame_capture_<camn>` (Basler): camera (id, side, serial, fps, exposure_us, rotate), frame folders, health table, DB login. Replaces `BASLER_CONFIGn.xml`.
+- `inspection_left` / `inspection_right`: side, folders, model name (version from `current`, D-060), threshold, machine values, object sizes for that side, auto_roi, DB login, PLC address if used.
+Renderer CLI: `python3 scripts/render_config.py [site.yaml] [--check]`: prints one line per file `written|unchanged|removed <worker_id>`; exit 0 ok, 1 `site.yaml` invalid (nothing written).
+
