@@ -283,7 +283,7 @@ cleanup:  {raw_image_hours: 24, interval_seconds: 10, repeated: {days: 20, items
 transfer: {upload: {weekday: sunday, chunk_mb: 500, remote_folder: "DPC/data/<site.id>"}, models_folder: "DPC/models", log: {backup_count: 5}}
 ```
 Values above are examples. `mail.smtp` is a block (host, port, password) only when `sender: smtp`. Which keys each program reads is fixed when that program is migrated; new keys are append-only (section 8).
-**Built details (PR #10):** optional keys kept from v2: `plc.timeout_s`, `plc.legacy_db_numbers`, `mail.report_dir` (defaults as v2). `model.detect_labels` is dropped (append a key if inspection needs it). `graph` is required when `mail.sender: graph` or a `transfer` section exists. `transfer` is optional (absent = no transfer service); `transfer.upload` optional (absent = download only); defaults `weekday: sunday`, `chunk_mb: 500` (upload batch size, not the Graph request size), `remote_folder: "DPC/data/<site.id>"`. (D-060, built PR #11: `inspection.model` = `{name}` only; `inspection.model.version` and a `models` section are errors with a message pointing to the Supervisor; `transfer.models_folder` default `"DPC/models"`.) `mail.disk_report_to` empty or absent = `recipients`. `auto_roi` defaults: `mode: observe`, `learn_images: 30`. A v2 file is refused with one line per moved key; `scripts/convert_site_yaml_v3.py` converts it.
+**Built details (PR #10):** optional keys kept from v2: `plc.timeout_s`, `plc.legacy_db_numbers`, `mail.report_dir` (defaults as v2). `model.detect_labels` is dropped (append a key if inspection needs it). `graph` is required when `mail.sender: graph` or a `transfer` section exists. `transfer` is optional (absent = no transfer service); `transfer.upload` optional (absent = download only); defaults `weekday: sunday`, `chunk_mb: 500` (upload batch size, not the Graph request size), `remote_folder: "DPC/data/<site.id>"`. (D-064, built PR #12: optional `cameras[].ip` (IPv4, unique) and `plc.light_on_value` (0|1, default 1). D-060, built PR #11: `inspection.model` = `{name}` only; `inspection.model.version` and a `models` section are errors with a message pointing to the Supervisor; `transfer.models_folder` default `"DPC/models"`.) `mail.disk_report_to` empty or absent = `recipients`. `auto_roi` defaults: `mode: observe`, `learn_images: 30`. A v2 file is refused with one line per moved key; `scripts/convert_site_yaml_v3.py` converts it.
 
 ## 11. Learned values [ACCEPTED, not built] (D-054)
 `<root>/data/state/<program>/<topic>.json`, one writer each, atomic write, JSON with `schema_version`, `learned_from` {camera serial, rotate, model name, model version, images, time} and the values. Ignored and relearned when `learned_from` no longer matches; `site.yaml` fixed values win; delete to reset; unreadable = relearn, never crash.
@@ -304,11 +304,11 @@ Secrets live in `site.yaml` (section 7: `db.user`, `db.password`, `mqtt.user`, `
 
 ## 10. Commissioning check `dpc-check` [BUILT, PR #9] (D-035)
 **Command:** `python3 <root>/code/scripts/dpc_check.py [site.yaml]` (default site.yaml as in section 7). Read-only: never writes, never opens a camera (enumeration only).
-**Output:** one line per check, `<PASS|WARN|FAIL|SKIP> <name> <reason>`, in this order: `site.yaml`, `git`, `layout`, `disk`, `cameras`, `database`, `mqtt`, `model` (PR #11: shows the running version and pinned / not pinned; no `current` = WARN; pinned differs from `current` = WARN; dangling `current`, bad package or bad `pinned` marker = FAIL); then `RESULT ... (exit N) in T s`. No secret value is ever printed.
+**Output:** one line per check, `<PASS|WARN|FAIL|SKIP> <name> <reason>`, in this order: `site.yaml`, `git`, `layout`, `disk`, `cameras`, `database`, `mqtt`, `cameras` also pings each camera that has an `ip` (no answer = WARN, never FAIL; 1 s timeout, PR #12); `model` (PR #11: shows the running version and pinned / not pinned; no `current` = WARN; pinned differs from `current` = WARN; dangling `current`, bad package or bad `pinned` marker = FAIL); then `RESULT ... (exit N) in T s`. No secret value is ever printed.
 **Exit:** 0 = all pass; 1 = any FAIL or SKIP; 2 = warnings only.
 **Grading:** `db.user` root = WARN (D-050); MQTT broker unreachable = WARN (D-034); disk used/(used+free) below `retention.disk_percent.delete` = PASS, between `delete` and `mail` = WARN, at or above `mail` = FAIL (same measure as cleanup). The layout check does not check `data/wheel_status` yet (Q13).
 
-## 13. Rendered worker config [ACCEPTED, not built] (D-062)
+## 13. Rendered worker config [renderer BUILT, PR #12; no worker reads it yet] (D-062)
 `<root>/config/rendered/<worker_id>.json`, chmod 600, written atomically by the renderer from `site.yaml`; read by the worker from env `DPC_WORKER_CONFIG` (set by the Supervisor). Common shape:
 ```json
 {"_generated": {"from": "site.yaml", "sha256": "<hex>", "at": "2026-10-22T10:00:00", "renderer": 1},
@@ -317,8 +317,10 @@ Secrets live in `site.yaml` (section 7: `db.user`, `db.password`, `mqtt.user`, `
  "log": {"backup_count": 5},
  "...worker keys...": {}}
 ```
-Per-worker keys (filled in when each worker is migrated):
-- `frame_capture_<camn>` (Basler): camera (id, side, serial, fps, exposure_us, rotate), frame folders, health table, DB login. Replaces `BASLER_CONFIGn.xml`.
-- `inspection_left` / `inspection_right` (D-063): `side` (LEFT/RIGHT), `defect_side` (`Left`/`Right`, derived), `camera_id` (CAM1/CAM2 by side), folders derived from the layout (`inf`, `raw`, `defective`, `repeated`, `temp`, `plate`, `start_file`, `logs`), `model` {name, models_dir} (version from `current`, D-060), `threshold`, `machine` {total_wheel_count, expected_cycle_total?, wheel_stand_required_counts?}, `object_sizes` of that side, `auto_roi`, `db` login, `plc` {ip, legacy_db_numbers}, `log`.
+Per-worker keys **as built (PR #12)**:
+- `frame_capture_<camn>`: `worker_id`, `paths` {root, logs, live, tmp, inf, ui, raw_images}, `log` {backup_count, file_name}, `camera` {id, side, driver, serial, fps, exposure_us, rotate, ip[, flir]}, `db` {host, port, name, user, password, health_table}. Replaces `BASLER_CONFIGn.xml` (P6).
+- `inspection_<side>`: `worker_id`, `side`, `defect_side` (`Left`/`Right`), `camera_id`, `paths` {root, logs, inf, raw, defective, repeated, plate, temp, start_file}, `log` {backup_count}, `model` {name, models_dir} (version from `current`, D-060), `threshold`, `machine` {total_wheel_count[, expected_cycle_total][, wheel_stand_required_counts (string keys)]}, `object_sizes`, `auto_roi` {mode, learn_images}, `db` {...}, `plc` {ip[, legacy_db_numbers]}. Folders per D-067.
+- No PLC worker is rendered yet, so `plc.light_on_value` is in no file until the PLC service exists.
+**Renderer semantics (built):** "changed" means the settings changed (the `_generated` header is ignored for the comparison); `_generated.sha256` is the `site.yaml` the settings were last written from; only files carrying a `_generated.renderer` key are ever removed; `--check` is a dry run (exit 0). API: `common.config.render.render()` (used by the Supervisor in P5).
 Renderer CLI: `python3 scripts/render_config.py [site.yaml] [--check]`: prints one line per file `written|unchanged|removed <worker_id>`; exit 0 ok, 1 `site.yaml` invalid (nothing written).
 

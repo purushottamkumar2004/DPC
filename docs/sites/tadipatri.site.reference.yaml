@@ -37,7 +37,7 @@ capture:
       fps: 4.0
       exposure_us: 1500
       rotate: 0
-      # ip: 192.168.1.102         # add when STATUS 6g (D-064) is merged
+      ip: 192.168.1.102
     - id: CAM2
       side: RIGHT
       driver: basler
@@ -45,7 +45,7 @@ capture:
       fps: 4.0
       exposure_us: 2000
       rotate: 0
-      # ip: 192.168.1.103         # add when STATUS 6g (D-064) is merged
+      ip: 192.168.1.103
 inspection:
   log: {backup_count: 5}
   model:
@@ -63,7 +63,7 @@ plc:
   port: 502
   timeout_s: 3
   light_register: 4109            # inverted: 0 = ON, 1 = OFF
-  # light_on_value: 0             # add when STATUS 6g (D-064) is merged
+  light_on_value: 0               # inverted light (D-064)
   cleaning_register: 4106         # 1 = ON, 0 = OFF
   conveyor_status_register: 4098
   cleaning_pulse_seconds: 10
