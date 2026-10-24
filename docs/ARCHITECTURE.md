@@ -159,3 +159,6 @@ The algorithms still hardcode legacy paths (D-023): they cannot use this layout 
 
 ## 10. Repository and chat structure (D-036)
 One monorepo, one folder per owner, and one Claude chat role per owner (MASTER, SUPERVISOR, W-<worker>, UI, CONFIG, SITE). Chats share nothing except the repo docs: CONTRACTS.md is the glue, OWNERS.md says who may change what, CHAT_WORKFLOW.md has the loop and the openers. Branching: one `main`, short-lived `feat/` and `hotfix/` branches, tagged releases, no long-lived site branches (D-039).
+
+## Inspection logic
+The detailed description of the inspection programs (wheel counting, plate/cycle, bolt and clip checks, defects, dedupe, state, Left vs Right) lives next to the code in `workers/inspection/INSPECTION.md`, written by W-inspection (STATUS P7a) and kept current with every inspection change.
