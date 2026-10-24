@@ -13,3 +13,9 @@ config/rendered/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Model weights never go into git (D-065); only models/<name>/<version>/{manifest.json,classes.json,*.yaml}
+*.pth
+*.pt
+*.pkl
+*.onnx

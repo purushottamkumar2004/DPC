@@ -191,6 +191,9 @@ Developer and MASTER, 2026-10-22. **Once per site** in `site.yaml`: `inspection.
 ## D-064 | 2026-10 | Accepted | Two `site.yaml` keys from the legacy PLC and UI configs
 Append-only additions to v3 (CONTRACTS 7.1): `cameras[].ip` (optional; GigE camera address, used by the UI status and `dpc-check`), and `plc.light_on_value` (0 or 1, default 1; Tadipatri's light register is inverted, 0 = ON). Without the second key, a program writing 1 to switch the light on would switch it off. Legacy UI paths (live images, reports, daily defects) are derived from the layout when the UI is migrated, never typed (D-063).
 
+## D-065 | 2026-10 | Accepted | Model metadata in git, weights never
+Developer decision 2026-10-22 (middle way to D-057). For every packaged model version, the **small files** are kept in the repo at `models/<name>/<version>/`: `manifest.json` (incl. the weights sha256), `classes.json` and the self-contained Detectron `.yaml`. The **weights (`.pth`) are never in git** (GitHub refuses files over 100 MB, the repo is public, and git history keeps every version forever); they come from OneDrive (D-057) or a manual copy, and are verified against the sha256 in the repo's manifest. Packaging an already-known version then needs only the weights file: `make_model_package.py --from-repo models/<name>/<version> --weights <.pth>` (STATUS 6h). `.gitignore` blocks `*.pth`, `*.pt`, `*.pkl`, `*.onnx` everywhere.
+
 ## Open questions
 - Q20 (answered 2026-10-22): Tadipatri PLC IP is 192.168.1.5; the 192.168.1.4 in the legacy PLC test script is wrong.
 - Q18: Who in the Microsoft 365 tenant grants admin consent for Graph file permissions (D-057), and is the target a OneDrive or a SharePoint document library? (Not blocking: the developer settles it while testing item 9.)
