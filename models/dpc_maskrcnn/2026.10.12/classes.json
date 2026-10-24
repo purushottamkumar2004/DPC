@@ -1,0 +1,24 @@
+{
+  "classes": [
+    "half_bottom_chain",
+    "bottom_chain_bolt_clip",
+    "wheel",
+    "bottom_chain_bolt",
+    "top_chain_bolt",
+    "wheel_stand",
+    "wheel_bolt",
+    "top_chain",
+    "nut_bolt",
+    "half_bucket_clip",
+    "top_chain_bolt_clip_missing",
+    "bottom_chain",
+    "half_top_chain",
+    "half_wheel",
+    "bucket_clip",
+    "top_chain_bolt_clip",
+    "high_dusty_bucket_clip",
+    "plate",
+    "wheel_magnet"
+  ],
+  "label_map": {}
+}

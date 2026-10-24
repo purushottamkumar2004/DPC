@@ -1,0 +1,15 @@
+{
+  "name": "dpc_maskrcnn",
+  "version": "2026.10.12",
+  "trained_at": "2026-10-12",
+  "files": {
+    "classes.json": "2c68e48c030e2f0c49f723a199e8ffa29a1075930c4ef7077978d9946677c397",
+    "dpc_maskrcnn_R101.yaml": "3ed4163da8f97f87ca4419f43501da648e9ce497a420e3d38d6ef2f3b82ca55f",
+    "model_0041159.pth": "998e2c1ee5a35c5eb2715f2ce02a6bb0d80b5a7153e2d28f5066979203e1dc44"
+  },
+  "packaged_at": "2026-10-24T12:33:44",
+  "packaged_from": {
+    "weights": "/home/dpc_tadipatri/INSIGHTZZ/old/MODELS/FIRST_MODE/Mahir_Oct_12_Int_Model/model_0041159.pth",
+    "detectron_yaml": "/tmp/dpc_maskrcnn_R101.yaml"
+  }
+}
