@@ -222,6 +222,9 @@ MASTER decisions on contracts only; no business-logic change. (1) `INPUT_IMG_DIR
 ## D-073 | 2026-10 | Accepted | Inspection behaviour decisions for the shared program (P7-dec, answered one by one)
 - **D6 (R6), 2026-10-25:** both sides insert their defects into `defects_table` (Left's behaviour); Right's commented-out full-clip insert is not kept.
 
+## D-074 | 2026-10 | Accepted | `~/INSIGHTZZ/old/` is not a code reference
+Developer decision 2026-10-25. The previous setup copied to `~/INSIGHTZZ/old/` on Tadipatri is not compared or used as a reference. The repo `main` is the only source for how a worker behaves; INSPECTION.md describes the repo copies only (section 15). The old folder is still useful for data (configs read in D-063/D-064, the original model weights) until it is deleted.
+
 ## Open questions
 - Q21: Should skidding, wheel-missing and cycle-restart findings create DB rows and mails? Today they only save images, so nobody is alerted (INSPECTION.md 8.1). (STATUS D9)
 - Q20 (answered 2026-10-22): Tadipatri PLC IP is 192.168.1.5; the 192.168.1.4 in the legacy PLC test script is wrong.
