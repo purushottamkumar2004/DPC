@@ -4,7 +4,7 @@ Read-only analysis, written by W-inspection on 2026-10-25 from `main` at commit 
 
 - `LeftAlgorithm.py` (2,527 lines) is the reference (D-069) and is described in full. References are `L:<line>`.
 - `RightAlgorithm.py` (3,243 lines) is described only where it differs from Left (section 14). References are `R:<line>`.
-- `T:` marks the Tadipatri copy of Left that the developer pasted on 2026-10-25 (section 15). Its line numbers are not quoted; differences are named by repo line.
+- Only the repo copies are analysed. Code under `~/INSIGHTZZ/old/` on the site machine is not a reference (developer decision, 2026-10-25; section 15).
 - "assumed" means not visible in the code read here.
 
 Headline findings (details in the sections named):
@@ -12,9 +12,8 @@ Headline findings (details in the sections named):
 1. **Only one defect type ever reaches `defects_table` on Left: `Nut_Bolt_Missing_In_Bucket_Clip` for full clips (L:732).** Wheel skidding, wheel missing, cycle restart and stand counts save images only; bolt-missing, gap and chain checks are not called (section 8).
 2. **Right writes no defect rows at all** (full-clip insert commented out R:843; the half-clip insert R:982 would crash) (section 14).
 3. **The half bucket clip check can never run** with the current model: it needs a `half_high_dusty_bucket_clip` detection, a class the 19-class model does not have (L:777-786, section 7.2).
-4. **At Tadipatri the plate/cycle logic was commented out** in Left: the wheel counter never resets, and full-clip defects stop being inserted once the counter passes `TOTAL_WHEEL_COUNT` (190) after each start (section 15).
-5. **Any exception in a check restarts inspection inside the same process**: model reload, `INF` backlog deleted, all state lost, wait for the next plate (section 2.4).
-6. `start.txt` and `INPUT_IMG_DIR` are not used by either side (section 12).
+4. **Any exception in a check restarts inspection inside the same process**: model reload, `INF` backlog deleted, all state lost, wait for the next plate (section 2.4).
+5. `start.txt` and `INPUT_IMG_DIR` are not used by either side (section 12).
 
 ---
 
@@ -358,40 +357,8 @@ Identical in both (by diff): plate handling and `is_new_plate_detected`, `checkW
 
 **Keep/drop list for the developer:** R1, R2 (+R15) are the real right-only behaviours. R3, R4, R10, R11, R19 become per-side config. R5, R6, R9 need a decision on which value is right. R7, R8, R12-R14, R16-R18, R20-R23 are drift: proposed drop (R12: keep Right's try/except as the better behaviour, a business-logic-neutral change).
 
-## 15. Tadipatri check (code that ran at Tadipatri)
+## 15. Tadipatri check: not done
+By developer decision (2026-10-25), code in `~/INSIGHTZZ/old/` on the Tadipatri machine is not used as a reference and is not compared. The repo copies of `LeftAlgorithm.py` and `RightAlgorithm.py` are the only reference for P7. Nothing in sections 1-14 depends on the old folder.
 
-### 15.1 From the pasted Tadipatri `LeftAlgorithm.py` (2026-10-25, compared by reading)
-Differences against the repo copy:
-- **T1 Plate/cycle block commented out** (repo L:2389-2428). At Tadipatri: no first-plate wait, no counter reset, no cycle-restart image, no PLATE copies. Inspection starts on the first frame and the wheel counter only grows from process start.
-  Consequence: the full-clip insert gate `wheel_counter <= TOTAL_WHEEL_COUNT` (L:704, 190 at Tadipatri) is true only for the first 190 wheels after each start (or in-process restart). After that every confirmed full-clip defect goes to REPEATED and **no row is inserted**. Wheel numbers in rows are "wheels since start", not positions on the chain. WheelMissing images also stop after wheel 190 (L:1961).
-- **T2 Paths** (repo L:2257-2259): `dailyDataDir = /home/dpc_tadipatri/INSIGHTZZ/old/CODE/FRAME_CAPTURE/CAM1/RAW_IMAGES/`, `PLATE_IMG_OUTPUT_DIR = /home/dpc_tadipatri/INSIGHTZZ/old/PLATE_DIR/LEFT`, `bolt_save_dir = /home/dpc_tadipatri/INSIGHTZZ/old/bolt_data_left`; the debug `dailyDataDir` too.
-- **T3** `raw_data_dir` set to `""` (repo L:2255); unused either way.
-- **T4 Not changed at Tadipatri:** `MAGNET_NOT_DETECTED_DIR` and `SOURCE_IMAGE_DIR` still point to `/home/ddpc_maihar/...` (repo L:44-45). If that folder cannot be created on the Tadipatri machine, the first wide wheel without a magnet raises in `checkWheelRotation` and restarts inspection in-process (B8); and skidding evidence copies always log "Image not found". The commands below check this.
-- Everything else read the same (functions, thresholds, 65, stand counts, hardcoded 0.5). The `diff` below confirms it line by line.
-
-### 15.2 Commands to run on the Tadipatri machine
-Run as the login user; paste the output. Passwords are masked before printing.
-
-```bash
-cd ~/INSIGHTZZ/code && git pull --ff-only
-OLD=~/INSIGHTZZ/old/CODE/ALGORITHM
-NEW=~/INSIGHTZZ/code/workers/inspection
-ls -la "$OLD"
-md5sum "$OLD"/*.py "$NEW"/*.py
-# Python files: full unified diff, whitespace changes ignored
-diff -u -w "$NEW/LeftAlgorithm.py"  "$OLD/LeftAlgorithm.py"
-diff -u -w "$NEW/RightAlgorithm.py" "$OLD/RightAlgorithm.py"
-# Legacy XMLs with the DB password masked
-mask() { sed -E 's#(<DB_PASS>)[^<]*(</DB_PASS>)#\1***\2#' "$1"; }
-diff -u <(mask "$NEW/leftConfig.example.xml")  <(mask "$OLD/leftConfig.xml")
-diff -u <(mask "$NEW/rightConfig.example.xml") <(mask "$OLD/rightConfig.xml")
-# T4: does the Maihar path exist here, and did inspection restart in-process?
-ls -ld /home/ddpc_maihar /home/ddpc_maihar/INSIGHTZZ/MAGNET_NOT_DETECTED_DIR 2>&1
-LOGS=$(dirname "$(sed -n 's#.*<LOG_FILE_PATH>\(.*\)</LOG_FILE_PATH>.*#\1/x#p' "$OLD/leftConfig.xml")")
-ls -la "$LOGS" | grep -i algorithm
-grep -c "Model Loaded" "$LOGS"/LeftAlgorithm.log* 2>/dev/null
-grep -h "checkWheelRotation() Exception\|PermissionError\|mainFunction() Exception" "$LOGS"/LeftAlgorithm.log* 2>/dev/null | tail -5
-```
-
-### 15.3 Results
-Pending: to be filled from the command output (Right, XMLs, T4 confirmation).
+Still worth checking on the new deployment (repo code), as part of P7 testing:
+- `MAGNET_NOT_DETECTED_DIR` and `SOURCE_IMAGE_DIR` are hardcoded to `/home/ddpc_maihar/...` (L:44-45). On a machine without that folder, the first wide wheel seen without a magnet raises in `checkWheelRotation` and restarts inspection in-process (B8). P7 moves these paths to config (section 10).
