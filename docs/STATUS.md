@@ -66,7 +66,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-22 (full clean
 |---|---|---|
 | D3 (R1, D-029) | DECIDED (D-073): one side writes it, `inspection.live_wheel_counter_side` (Tadipatri RIGHT) | - |
 | D4 (R2) | DECIDED (D-073): keep, on both sides; time in config; crash fixed. Rule: every feature on both sides, single-side only by explicit config (D3) | - |
-| D5 (R5, R9) | Clip confirmation 500 ms / 500 px (Right) vs 300 / 200 (Left); skidding gap 1000 ms (Right) vs 500 ms (Left) | per side in config with today's values / one value for both |
+| D5 (R5, R9) | DECIDED (D-073): per side, each side keeps today's values | - |
 | D6 (R6) | DECIDED (D-073): both sides insert their defects | - |
 | D7 | An exception in a check makes inspection restart inside its own process (model reload, backlog deleted, state lost), invisible to the Supervisor | keep / exit and let the Supervisor restart (behaviour change) |
 | D8 | Wheel-stand counts per side and the expected cycle total (Left 65, Right 188) for Tadipatri | your real values |
