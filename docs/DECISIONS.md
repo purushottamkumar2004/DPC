@@ -221,6 +221,8 @@ MASTER decisions on contracts only; no business-logic change. (1) `INPUT_IMG_DIR
 
 ## D-073 | 2026-10 | Accepted | Inspection behaviour decisions for the shared program (P7-dec, answered one by one)
 - **D6 (R6), 2026-10-25:** both sides insert their defects into `defects_table` (Left's behaviour); Right's commented-out full-clip insert is not kept.
+- **Rule (2026-10-25): every feature runs on both sides.** A feature runs on one side only when it is a true exception, switched by an explicit config key (example: the live wheel number, D3). Right-only and Left-only features found in INSPECTION.md become both-side features in the shared program.
+- **D4 (R2, R15), 2026-10-25:** keep the best image per wheel and the daily copy (today Right only, 17:58, `WHEEL_STATUS/IMAGES/RIGHT/wheel.txt` and per-wheel copies), on **both sides**. Time in config (`inspection.wheel_report.daily_time`, default "17:58"); folders derived from the layout (`data/wheel_status/IMAGES/<SIDE>`, Q13); the crash when a best image was already deleted is fixed.
 - **D3 (R1, D-029), 2026-10-25:** the live wheel number (`wheel_counter_table`, row ID 1, read by the UI) is written by exactly one side, chosen in config: new key `inspection.live_wheel_counter_side: LEFT | RIGHT` (Tadipatri: RIGHT, as today); the other side counts but does not write it. Settles D-029.
 
 ## D-074 | 2026-10 | Accepted | `~/INSIGHTZZ/old/` is not a code reference
