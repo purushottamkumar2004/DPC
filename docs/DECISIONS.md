@@ -221,6 +221,7 @@ MASTER decisions on contracts only; no business-logic change. (1) `INPUT_IMG_DIR
 
 ## D-073 | 2026-10 | Accepted | Inspection behaviour decisions for the shared program (P7-dec, answered one by one)
 - **D6 (R6), 2026-10-25:** both sides insert their defects into `defects_table` (Left's behaviour); Right's commented-out full-clip insert is not kept.
+- **D3 (R1, D-029), 2026-10-25:** the live wheel number (`wheel_counter_table`, row ID 1, read by the UI) is written by exactly one side, chosen in config: new key `inspection.live_wheel_counter_side: LEFT | RIGHT` (Tadipatri: RIGHT, as today); the other side counts but does not write it. Settles D-029.
 
 ## D-074 | 2026-10 | Accepted | `~/INSIGHTZZ/old/` is not a code reference
 Developer decision 2026-10-25. The previous setup copied to `~/INSIGHTZZ/old/` on Tadipatri is not compared or used as a reference. The repo `main` is the only source for how a worker behaves; INSPECTION.md describes the repo copies only (section 15). The old folder is still useful for data (configs read in D-063/D-064, the original model weights) until it is deleted.
