@@ -67,7 +67,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-22 (full clean
 | D3 (R1, D-029) | Only Right writes the live wheel number to `wheel_counter_table` (the UI shows it). In the shared program, who writes it? | (a) one side, chosen in config; (b) each side its own row |
 | D4 (R2) | Right saves the best image per wheel and copies them daily at 17:58 to `WHEEL_STATUS`. Keep it? | keep (time and folders to config) / drop |
 | D5 (R5, R9) | Clip confirmation 500 ms / 500 px (Right) vs 300 / 200 (Left); skidding gap 1000 ms (Right) vs 500 ms (Left) | per side in config with today's values / one value for both |
-| D6 (R6) | Right's full-clip DB insert is commented out; after the merge both sides would insert (Left's behaviour) | both insert / keep Right silent |
+| D6 (R6) | DECIDED (D-073): both sides insert their defects | - |
 | D7 | An exception in a check makes inspection restart inside its own process (model reload, backlog deleted, state lost), invisible to the Supervisor | keep / exit and let the Supervisor restart (behaviour change) |
 | D8 | Wheel-stand counts per side and the expected cycle total (Left 65, Right 188) for Tadipatri | your real values |
 | D9 (Q21) | Skidding, wheel missing, cycle restart: images only today. DB rows and mail? | yes / no / later |
