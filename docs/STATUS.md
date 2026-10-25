@@ -52,6 +52,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-22 (full clean
 | P12 | new W-transfer | **9** OneDrive transfer service: weekly chunked upload, model download + verify + ready (D-057); Q18 settled while testing | Upload resumes after a cut; bad checksum rejected |
 | P13 | W-inspection | **10** Auto-ROI in observe mode (D-054) | Learned file per side; nothing removed |
 | F19 | SUPERVISOR (small) | Without `-c`, `supervisor.py reload` (and the other commands) use the example config in the code folder and look for the pid in `code/supervisor/runtime/`; on a site they should find `<root>/config/workers.yaml` and `<root>/run/` by themselves (e.g. default from `DPC_SITE_CONFIG`/`paths.root`, or the installed unit) | `python3 supervisor.py reload` works on Tadipatri without `-c` |
+| F21 | SUPERVISOR + every worker | D-073 D7: a worker that dies writes `<root>/run/<worker_id>.last_error.json` (time, exception type, message, file:line, short traceback, no secrets); the Supervisor adds it as `last_error` to `worker_failure` / `worker_restarted`, to the worker status and to its log; append-only in CONTRACTS 2. Inspection does it in P7; captures with their next change | A forced error in a dummy worker shows its type and line in the MQTT event and in `supervisor.log` |
 | F18 | SUPERVISOR (later) | `reload` does not re-read `workers.yaml`; a reload command over MQTT (`dpc/supervisor/command`) for the UI | When the UI work starts |
 | Later | various | Mail and PLC services migrated (PLC service D-024, light/dust/sunlight cases A8-A10), FLIR capture on JSON, UI monitoring, installer + wizard | - |
 
@@ -68,7 +69,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-22 (full clean
 | D4 (R2) | DECIDED (D-073): keep, on both sides; time in config; crash fixed. Rule: every feature on both sides, single-side only by explicit config (D3) | - |
 | D5 (R5, R9) | DECIDED (D-073): per side, each side keeps today's values | - |
 | D6 (R6) | DECIDED (D-073): both sides insert their defects | - |
-| D7 | An exception in a check makes inspection restart inside its own process (model reload, backlog deleted, state lost), invisible to the Supervisor | keep / exit and let the Supervisor restart (behaviour change) |
+| D7 | DECIDED (D-073): exit and let the Supervisor restart; every restart carries its cause (`last_error`) | - |
 | D8 | Wheel-stand counts per side and the expected cycle total (Left 65, Right 188) for Tadipatri | your real values |
 | D9 (Q21) | Skidding, wheel missing, cycle restart: images only today. DB rows and mail? | yes / no / later |
 
