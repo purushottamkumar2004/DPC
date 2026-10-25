@@ -123,7 +123,7 @@ class Tadipatri(Site):                                               # P4 done w
             self.assertEqual(left[key], right[key], key)
         self.assertEqual(left["model"], {"name": "dpc_maskrcnn",
                                          "models_dir": os.path.join(self.root, "data", "models", "dpc_maskrcnn")})
-        self.assertEqual(left["machine"], {"total_wheel_count": 190})
+        self.assertEqual(left["machine"], {"total_wheel_count": 190, "expected_cycle_total": 190})
         self.assertEqual(left["plc"], {"ip": "192.168.1.5", "legacy_db_numbers": {"write": 12, "read": 13}})
         self.assertEqual(left["object_sizes"]["chain_w"], 880)
         data = os.path.join(self.root, "data")
@@ -131,7 +131,12 @@ class Tadipatri(Site):                                               # P4 done w
         self.assertEqual(right["paths"]["raw"], f"{data}/frames/CAM2/RAW_IMAGES")
         self.assertEqual(right["paths"]["defective"], f"{data}/images/DEFECTIVE/RIGHT")
         self.assertEqual(right["paths"]["plate"], f"{data}/images/PLATE/RIGHT")
-        self.assertEqual(right["paths"]["start_file"], f"{data}/state/inspection_right/start.txt")
+        self.assertEqual(right["paths"]["defect_raw"], f"{data}/images/RAW/RIGHT")                # D-072
+        self.assertEqual(right["paths"]["temp"], f"{data}/images/TEMP/RIGHT")
+        self.assertEqual(right["paths"]["magnet"], f"{data}/images/MAGNET/RIGHT")
+        self.assertEqual(right["paths"]["bolt_data"], f"{data}/bolt_data/RIGHT")
+        self.assertEqual(right["paths"]["wheel_status_images"], f"{data}/wheel_status/IMAGES/RIGHT")   # D-073 D4
+        self.assertNotIn("start_file", right["paths"])                                          # D-072 (2)
         for doc in (left, right):                                    # no model files or classes (D-060)
             text = json.dumps(doc)
             for word in ("classes", "weights", ".pth", "detectron", "version"):
@@ -241,13 +246,55 @@ class Errors(Site):
                          {"interface": "GEV Interface 1", "throughput_bps": 19662239})
         self.assertNotIn("flir", self.load("frame_capture_cam1")["camera"])
 
-    def test_optional_machine_values(self):
-        self.data["inspection"]["machine"].update(expected_cycle_total=188, wheel_stand_required_counts={34: 3, 7: 2})
+    def test_expected_cycle_total(self):
+        self.data["inspection"]["machine"]["expected_cycle_total"] = 188
         self.write()
         self.render()
-        self.assertEqual(self.load("inspection_left")["machine"],
-                         {"total_wheel_count": 190, "expected_cycle_total": 188,
-                          "wheel_stand_required_counts": {"7": 2, "34": 3}})
+        self.assertEqual(self.load("inspection_left")["machine"], {"total_wheel_count": 190, "expected_cycle_total": 188})
+
+
+class P7Prep(Site):                                                  # D-072, D-073: today's values
+    def test_live_wheel_counter_written_by_one_side(self):
+        self.render()
+        self.assertEqual((self.load("inspection_left")["writes_live_wheel_counter"],
+                          self.load("inspection_right")["writes_live_wheel_counter"]), (False, True))
+        self.data["inspection"]["live_wheel_counter_side"] = "LEFT"
+        self.write()
+        self.render()
+        self.assertEqual((self.load("inspection_left")["writes_live_wheel_counter"],
+                          self.load("inspection_right")["writes_live_wheel_counter"]), (True, False))
+
+    def test_each_side_gets_its_own_tuning(self):                    # P7-prep done when
+        self.render()
+        left, right = self.load("inspection_left"), self.load("inspection_right")
+        self.assertEqual((left["motion"], right["motion"]), ("rtl", "ltr"))
+        self.assertEqual(left["bucket_clip_window"], {"xmin": 50, "xmax": 1990, "ymin": 750, "ymax": 1085})
+        self.assertEqual(right["bucket_clip_window"], {"xmin": 10, "xmax": 1270, "ymin": 550, "ymax": 780})
+        self.assertEqual(right["half_bucket_clip_window"], {"xmin": 100, "xmax": 1850, "ymin": 480, "ymax": 730})
+        self.assertEqual(left["tracker"]["clip_confirm"], {"frames": 5, "min_pairs": 3, "max_gap_ms": 300, "max_dist_px": 200})
+        self.assertEqual(right["tracker"]["clip_confirm"], {"frames": 5, "min_pairs": 3, "max_gap_ms": 500, "max_dist_px": 500})
+        self.assertEqual((left["tracker"]["skidding"]["time_gap_reset_ms"],
+                          right["tracker"]["skidding"]["time_gap_reset_ms"]), (500, 1000))
+        self.assertEqual(right["tracker"]["wheel_missing"],
+                         {"min_frames": 9, "belt_stop_frames": 20,
+                          "bbox": {"xmin": 668, "xmax": 1474, "ymin": 508, "ymax": 1278}})
+        self.assertEqual(left["wheel_report"], {"daily_time": "17:58"})
+
+    def test_a_right_tuning_change_rewrites_only_right(self):
+        self.render()
+        self.data["inspection"]["sides"]["RIGHT"]["tracker"] = {"skidding": {"time_gap_reset_ms": 800}}
+        self.write()
+        self.assertEqual(self.render(), {"frame_capture_cam1": "unchanged", "frame_capture_cam2": "unchanged",
+                                         "inspection_left": "unchanged", "inspection_right": "written"})
+
+    def test_capture_health_interval(self):                          # P4d
+        self.render()
+        self.assertEqual(self.load("frame_capture_cam1")["health_interval_s"], 600)
+        self.data["capture"]["health_interval_s"] = 120
+        self.write()
+        changes = self.render()
+        self.assertEqual((changes["frame_capture_cam1"], changes["inspection_left"]), ("written", "unchanged"))
+        self.assertEqual(self.load("frame_capture_cam2")["health_interval_s"], 120)
 
 
 if __name__ == "__main__":

@@ -42,6 +42,7 @@ graph:                            # Microsoft Graph login, shared by mail (sende
 # ---------- programs ----------
 capture:
   log: {backup_count: 5}
+  health_interval_s: 600          # seconds between camera health rows (default 600)
   cameras:                        # 1 or 2 cameras; CAM1 = LEFT, CAM2 = RIGHT
     - id: CAM1
       side: LEFT
@@ -69,11 +70,29 @@ inspection:
   threshold: 0.5
   machine:
     total_wheel_count: 190        # EDIT; wheel positions per revolution
-    # expected_cycle_total: 188   # optional until the inspection reads it (D-023)
-    # wheel_stand_required_counts: {34: 3}   # optional; wheel number -> required wheel_stand count
-  sides:                          # one per configured camera side; pixels; EDIT for the site's model
+    expected_cycle_total: 190     # wheels per revolution for the cycle-restart check; default = total_wheel_count
+    # wheel-stand counts are learned by inspection, not set here (D-073 D8)
+  live_wheel_counter_side: RIGHT  # the one side that writes the live wheel number for the UI (D-073 D3)
+  wheel_report: {daily_time: "17:58"}   # daily best image per wheel, both sides (D-073 D4); quoted
+  sides:                          # one per configured camera side; object_sizes in pixels, EDIT for the site's model
     LEFT:  {object_sizes: {wheel_w: 530, wheel_h: 495, bucket_clip_w: 300, chain_w: 880, half_bucket_clip_w: 150}}
     RIGHT: {object_sizes: {wheel_w: 530, wheel_h: 495, bucket_clip_w: 300, chain_w: 880, half_bucket_clip_w: 150}}
+  # Optional per-side tuning (D-072, D-073 D5). Leave out to keep each side's value from today's code;
+  # set only what you change. Example for LEFT with its default values:
+  #   LEFT:
+  #     object_sizes: {...}
+  #     motion: rtl                 # rtl | ltr (RIGHT default: ltr)
+  #     bucket_clip_window: {xmin: 50, xmax: 1990, ymin: 750, ymax: 1085}
+  #     half_bucket_clip_window: {xmin: 100, xmax: 1850, ymin: 470, ymax: 750}
+  #     tracker:
+  #       new_wheel_jump_px: 100
+  #       new_plate_jump_px: 150
+  #       high_dusty_suppress_px: 50
+  #       clip_confirm: {frames: 5, min_pairs: 3, max_gap_ms: 300, max_dist_px: 200}      # RIGHT: 500 ms / 500 px
+  #       skidding: {window_frames: 3, required_ratio: 0.7, time_gap_reset_ms: 500,       # RIGHT: 1000 ms
+  #                  offset_px: 80, min_vertical_px: 8, vertical_factor: 0.5, same_wheel_scale: 0.5,
+  #                  min_magnet_travel_px: 9, wheel_xmin: 20, wheel_xmax: 2025, magnet_check_min_wheel_w: 600}
+  #       wheel_missing: {min_frames: 9, belt_stop_frames: 20, bbox: {xmin: 668, xmax: 1474, ymin: 508, ymax: 1278}}
   auto_roi: {mode: observe, learn_images: 30}   # off | observe | filter (D-054)
 
 plc:

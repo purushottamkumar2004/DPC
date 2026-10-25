@@ -21,7 +21,7 @@ import datetime
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
 from common.config.site_config import SiteConfig, load_site_config, default_config_path
@@ -64,24 +64,21 @@ def capture_config(cfg: SiteConfig, camera) -> Dict[str, Any]:
                   "raw_images": p.frame_dir(camera.id, "RAW_IMAGES")},
         "log": {"backup_count": cfg.capture.log.backup_count, "file_name": camera.log_file_name},
         "camera": cam,
+        "health_interval_s": cfg.capture.health_interval_s,     # P4d; the capture reads it at top level
         "db": _db(cfg),
     }
 
 
 def inspection_config(cfg: SiteConfig, camera) -> Dict[str, Any]:
     """inspection_left / inspection_right (D-063): site-wide values copied into both files,
-    object sizes of this side only, folders derived, no model files or classes (they come
-    from the model package that data/models/<name>/current points to, D-060)."""
+    this side's object sizes and tuning only, folders derived, no model files or classes
+    (they come from the model package that data/models/<name>/current points to, D-060)."""
     p, side, insp = cfg.paths, camera.side, cfg.inspection
     worker_id = SIDE_WORKER[side]
-    machine = {"total_wheel_count": insp.machine.total_wheel_count}
-    if insp.machine.expected_cycle_total is not None:
-        machine["expected_cycle_total"] = insp.machine.expected_cycle_total
-    if insp.machine.wheel_stand_required_counts:
-        # JSON keys are strings; the worker converts them back to wheel numbers
-        machine["wheel_stand_required_counts"] = {str(k): v for k, v in
-                                                  sorted(insp.machine.wheel_stand_required_counts.items())}
-    sizes = insp.sides[side].object_sizes
+    machine = {"total_wheel_count": insp.machine.total_wheel_count,
+               "expected_cycle_total": insp.machine.expected_cycle_total}
+    side_cfg = insp.sides[side]
+    sizes = side_cfg.object_sizes
     plc = {"ip": cfg.plc.ip}
     if cfg.plc.legacy_db_numbers is not None:
         plc["legacy_db_numbers"] = dict(cfg.plc.legacy_db_numbers)
@@ -90,14 +87,18 @@ def inspection_config(cfg: SiteConfig, camera) -> Dict[str, Any]:
         "side": side,
         "defect_side": camera.defect_side,          # Left / Right (D-063)
         "camera_id": camera.id,
+        "writes_live_wheel_counter": insp.live_wheel_counter_side == side,   # one writer (D-073 D3)
         "paths": {"root": p.root, "logs": p.logs,
                   "inf": p.frame_dir(camera.id, "INF"),
-                  "raw": p.frame_dir(camera.id, "RAW_IMAGES"),     # rename on one filesystem (D-031)
+                  "raw": p.frame_dir(camera.id, "RAW_IMAGES"),     # frames out of INF, rename (D-031)
+                  "defect_raw": p.image_dir("RAW", side),           # raw copies of defect frames (D-072)
                   "defective": p.image_dir("DEFECTIVE", side),
                   "repeated": p.image_dir("REPEATED", side),
                   "plate": p.image_dir("PLATE", side),
-                  "temp": os.path.join(p.data, "images", "TEMP", side),
-                  "start_file": os.path.join(p.data, "state", worker_id, "start.txt")},
+                  "temp": p.image_dir("TEMP", side),
+                  "magnet": p.image_dir("MAGNET", side),            # magnet diagnostics (D-072)
+                  "bolt_data": os.path.join(p.data, "bolt_data", side),
+                  "wheel_status_images": os.path.join(p.data, "wheel_status", "IMAGES", side)},   # D-073 D4
         "log": {"backup_count": insp.log.backup_count},
         "model": {"name": insp.model.name, "models_dir": insp.model.root},
         "threshold": insp.threshold,
@@ -105,6 +106,12 @@ def inspection_config(cfg: SiteConfig, camera) -> Dict[str, Any]:
         "object_sizes": {"wheel_w": sizes.wheel_w, "wheel_h": sizes.wheel_h, "bucket_clip_w": sizes.bucket_clip_w,
                          "chain_w": sizes.chain_w, "half_bucket_clip_w": sizes.half_bucket_clip_w},
         "auto_roi": {"mode": insp.auto_roi.mode, "learn_images": insp.auto_roi.learn_images},
+        "wheel_report": {"daily_time": insp.wheel_report.daily_time},
+        # this side's tuning (defaults = today's values of this side, D-073 D5)
+        "motion": side_cfg.motion,
+        "bucket_clip_window": asdict(side_cfg.bucket_clip_window),
+        "half_bucket_clip_window": asdict(side_cfg.half_bucket_clip_window),
+        "tracker": asdict(side_cfg.tracker),
         "db": _db(cfg),
         "plc": plc,
     }
