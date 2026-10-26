@@ -1,7 +1,7 @@
 # Installing DPC on a new site
 
 Owned by MASTER. **Kept current with every change:** a handoff that adds or changes an install step says so in its `Install impact:` line, and MASTER updates this file in the same commit as STATUS.
-Last verified end to end: Tadipatri, 2026-10-25 (captures under the Supervisor; inspection, mail, PLC and cleanup not yet installed).
+Last verified end to end: Tadipatri, 2026-10-25 (layout extended 2026-10-26: re-run `setup_dpc_layout.sh` on existing sites) (captures under the Supervisor; inspection, mail, PLC and cleanup not yet installed).
 
 What a site needs before you start, and what to write down while installing, is the data sheet in `COMMISSIONING.md` section 1. The acceptance checklist is `COMMISSIONING.md` section 3.
 

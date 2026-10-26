@@ -232,6 +232,9 @@ MASTER decisions on contracts only; no business-logic change. (1) `INPUT_IMG_DIR
 ## D-074 | 2026-10 | Accepted | `~/INSIGHTZZ/old/` is not a code reference
 Developer decision 2026-10-25. The previous setup copied to `~/INSIGHTZZ/old/` on Tadipatri is not compared or used as a reference. The repo `main` is the only source for how a worker behaves; INSPECTION.md describes the repo copies only (section 15). The old folder is still useful for data (configs read in D-063/D-064, the original model weights) until it is deleted.
 
+## D-075 | 2026-10 | Accepted | P7-prep choices (CONFIG handoff 2026-10-26)
+Accepted as built: `live_wheel_counter_side` defaults to RIGHT when a RIGHT camera exists, else the only side; `tracker` exposes `skidding.required_ratio` (0.7) and `high_dusty_suppress_px`; `OFFSET_PX_X` (10) is not exposed (unused on both sides); Right's half-clip x window 100..1850 is taken from R:894-895. `data/wheel_status/IMAGES/<SIDE>` is added to the layout (CONTRACTS 4.1); `setup_dpc_layout.sh` and the `dpc-check` layout check will include it (STATUS F23), until then W-inspection creates it when missing.
+
 ## Open questions
 - Q21: Should skidding, wheel-missing and cycle-restart findings create DB rows and mails? Today they only save images, so nobody is alerted (INSPECTION.md 8.1). (STATUS D9)
 - Q20 (answered 2026-10-22): Tadipatri PLC IP is 192.168.1.5; the 192.168.1.4 in the legacy PLC test script is wrong.

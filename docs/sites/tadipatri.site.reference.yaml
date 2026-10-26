@@ -52,7 +52,10 @@ inspection:
     name: dpc_maskrcnn            # running version dpc_maskrcnn/2026.10.12 (Supervisor-managed, D-060)
   threshold: 0.5
   machine:
-    total_wheel_count: 190        # wheel_stand counts and expected cycle total move here in item 7
+    total_wheel_count: 190
+    expected_cycle_total: 190     # D-073 D8
+  live_wheel_counter_side: RIGHT  # D-073 D3
+  wheel_report: {daily_time: "17:58"}   # D-073 D4 (default)
   sides:
     LEFT:  {object_sizes: {wheel_w: 530, wheel_h: 495, bucket_clip_w: 300, chain_w: 880, half_bucket_clip_w: 150}}
     RIGHT: {object_sizes: {wheel_w: 530, wheel_h: 495, bucket_clip_w: 300, chain_w: 880, half_bucket_clip_w: 150}}
