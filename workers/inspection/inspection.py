@@ -78,7 +78,7 @@ def connect_db(settings, stats):
     while not _stop_requested:
         try:
             return pymysql.connect(host=settings.db.host, port=settings.db.port, user=settings.db.user,
-                                   passwd=settings.db.password, db=settings.db.name)
+                                   password=settings.db.password, database=settings.db.name)
         except pymysql.MySQLError as e:
             logger.critical(f"getDatabaseConnection() Exception is : {e}")
             stats.tick()                         # waiting for the DB is not a hung loop

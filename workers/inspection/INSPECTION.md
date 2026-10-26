@@ -74,7 +74,7 @@ flowchart TD
     - the live wheel-number write;
     - saving a wheel-missing defect (as in the reference pattern);
     - a DB error inside the dedupe query (it counts as "not found"; the following insert then fails and is fatal).
-- **`last_error.json`:** `{at, type, message, where (file:line), traceback (last 12 lines)}`. The DB and MQTT passwords are replaced by `***`. Written atomically.
+- **`last_error.json`:** `{at, type, message, where, traceback (last 12 lines)}`. `where` is the deepest line in this program's own code, e.g. `defects.py:62 in insert`, not a line inside pymysql. The DB and MQTT passwords are replaced by `***`. Written atomically.
 - **Heartbeat:** `dpc/worker/<worker_id>/health` every 10 s.
   - Fields: `worker_id`, `healthy`, `pid`, `version` (`git describe`), `config_hash` (first 12 hex of `_generated.sha256`), `fps` (frames processed per second over the last 60 s), `inf_queue_depth`, `last_frame_age_s`.
   - `healthy` is false when the main loop has not turned for 60 s, for example a hung GPU call. An empty `INF` still turns the loop.
@@ -214,7 +214,7 @@ The mail sender sends every unsent row of any type, so all of them are now maile
 - **New observation, kept:** a frame is deleted as invalid when it is less than 0.03 s old (L:503-526, `is_valid_image`). With the atomic hand-off (D-031) a fresh `INF` link can be that young, so a frame can be lost. It is rare at 4 fps. Fix: skip the frame instead of deleting it; developer decision.
 
 ## 11. Tests
-- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 29 tests.
+- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 30 tests.
   - Settings from the real renderer: Tadipatri per-side values; a missing key is named.
   - Wheel counter in both directions, plate tracker (and B5 pinned).
   - Clip confirmation per side, half-clip rule.
@@ -222,10 +222,20 @@ The mail sender sends every unsent row of any type, so all of them are now maile
   - Skidding: skid, rotating wheel, stopped belt.
   - Cycle restart, defect store (new / duplicate / gate), daily report skip.
   - The frame flow with a fake detector (plate gating, moves, live counter on Right only).
-  - `last_error.json` (scrubbed, config-error case), heartbeat payload.
+  - `last_error.json` (scrubbed, config-error case, `where` in own code), heartbeat payload.
 - **`test_equivalence.py`:** the old functions of `LeftAlgorithm.py` / `RightAlgorithm.py` (Detectron2 stubbed) and the new classes get the same random detection sequences. Results are identical for:
   - wheel counter and plate (3,000 frames, both directions);
   - bucket-clip inserts (6,000 frames per side; Right compared with its saved images, since its insert was commented out);
   - wheel-missing slots;
   - skidding findings.
-- **`tests/replay/replay_inspection.py`** (site machine, GPU): the same saved frames through the old program (from git, paths redirected to `/tmp`) and the new one, each with a scratch DB. Bolt defects are compared and new types listed. Smoke-tested with a fake detector and MariaDB: 900 frames, 23/23 bolt defects identical, 6 `WheelMissing`, 6 `Wheel_Skidding`. See `tests/replay/README.md`.
+- **`tests/replay/replay_inspection.py`** (site machine, GPU): the same saved frames through the old program and the new one, each with a scratch DB. Bolt defects are compared and new types listed.
+  - The old program comes from git, with paths redirected to `/tmp`.
+  - For RIGHT, the old program's commented-out full-clip insert is switched on in the scratch copy, which is D6. Without it the old Right never finds its own earlier defects in the dedupe and its clip confirmations diverge.
+  - See `tests/replay/README.md`.
+- **Smoke tests on 2026-10-26** (real MariaDB, real mosquitto, scripted fake detector, 900 frames per side):
+  - Replay LEFT PASS: 23/23 bolt defects, plus 6 `WheelMissing` and 6 `Wheel_Skidding`.
+  - Replay RIGHT PASS: 15/15 bolt defects, plus 1 `WheelMissing` and 5 `Wheel_Skidding`.
+  - Heartbeat received from the broker and accepted by the Supervisor's `parse_heartbeat` with all extended fields.
+  - SIGTERM: exit 0, no `last_error.json`.
+  - `defects_table` gone mid-run: exit 1, `last_error.json` with `ProgrammingError` at `defects.py:62 in insert`, no password in it.
+  - DB down at start: the program waits and retries (does not exit).

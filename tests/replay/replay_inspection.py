@@ -19,11 +19,13 @@ that it shares the GPU: stop live inspection for that side first):
      all are processed, stop
   5. compare the defects_table rows; write report.json and print a summary
 
-Pass (exit 0): every `Nut_Bolt_Missing_In_Bucket_Clip` of the old run (wheel, box) is in the
-new run and the new run has none extra. For RIGHT the old program saved bolt defects as
-images only (its insert was commented out, R:843), so the old side is read from its
-DEFECTIVE image names (type + wheel). New defect types (WheelMissing, Wheel_Skidding,
-Batch_Wheels_Missing) are listed, not compared (the old program never inserted them).
+Pass (exit 0): every `Nut_Bolt_Missing_In_Bucket_Clip` row of the old run (wheel, box) is in
+the new run and the new run has none extra. RIGHT: the old program's full-clip insert was
+commented out (R:843); D-073 D6 switches it on, so the scratch copy of the old Right gets that
+one line enabled (nothing else changes). Without it the old Right would never find its own
+earlier defects in the 24 h dedupe, and its clip confirmations would run differently.
+New defect types (WheelMissing, Wheel_Skidding, Batch_Wheels_Missing) are listed, not compared
+(the old program never inserted them).
 """
 
 import argparse
@@ -51,6 +53,9 @@ NEW_TYPES = ("WheelMissing", "Wheel_Skidding", "Batch_Wheels_Missing")
 LEGACY_PREFIX = "/home/ddpc_maihar/INSIGHTZZ/"
 OLD_FILE = {"LEFT": "LeftAlgorithm.py", "RIGHT": "RightAlgorithm.py"}
 OLD_XML = {"LEFT": "leftConfig", "RIGHT": "rightConfig"}
+# D6 in the old Right: its full-clip insert (R:843) is the commented line right before the clear.
+RIGHT_INSERT_OFF = re.compile(r"# (insertDefectData\(logger, cur, dbConn, defectName, fileName, wheel_counter, "
+                              r"xmin, xmax, ymin, ymax\))\n(\s*)bucket_clip_dict\.clear\(\)")
 CAM = {"LEFT": "CAM1", "RIGHT": "CAM2"}
 START_TIMEOUT_S = 300
 IDLE_DONE_S = 15          # INF empty for this long = every frame processed (the move out of INF is last)
@@ -73,7 +78,7 @@ def sql_statements(path):
 def create_db(db, name):
     if not re.fullmatch(r"[A-Za-z0-9_]+_replay_(old|new)", name):
         raise SystemExit(f"refusing to (re)create database {name!r}")
-    conn = pymysql.connect(host=db["host"], port=db["port"], user=db["user"], passwd=db["password"])
+    conn = pymysql.connect(host=db["host"], port=db["port"], user=db["user"], password=db["password"])
     with conn.cursor() as cur:
         cur.execute(f"DROP DATABASE IF EXISTS `{name}`")
         cur.execute(f"CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
@@ -86,7 +91,7 @@ def create_db(db, name):
 
 
 def read_defects(db, name):
-    conn = pymysql.connect(host=db["host"], port=db["port"], user=db["user"], passwd=db["password"], db=name)
+    conn = pymysql.connect(host=db["host"], port=db["port"], user=db["user"], password=db["password"], database=name)
     with conn.cursor() as cur:
         cur.execute("SELECT defect_side, defect_type, wheel_no, xmin, xmax, ymin, ymax, view_defect "
                     "FROM defects_table ORDER BY ID")
@@ -146,8 +151,13 @@ def run_old(args, cfg, package, scratch, frames):
     code = subprocess.run(["git", "-C", REPO, "show", f"{args.old_ref}:workers/inspection/{OLD_FILE[side]}"],
                           check=True, capture_output=True, text=True).stdout
     os.makedirs(base, exist_ok=True)
+    code = code.replace(LEGACY_PREFIX, legacy)
+    if side == "RIGHT":
+        code, n = RIGHT_INSERT_OFF.subn(r"\1\n\2bucket_clip_dict.clear()", code)
+        if n != 1:
+            raise SystemExit(f"old RightAlgorithm.py: expected 1 commented full-clip insert to enable, found {n}")
     with open(os.path.join(base, OLD_FILE[side]), "w") as f:
-        f.write(code.replace(LEGACY_PREFIX, legacy))
+        f.write(code)
     folders = {k: os.path.join(base, k) + "/" for k in ("LOGS", "DEFECTIVE", "RAW", "REPEATED")}
     inf = os.path.join(legacy, "CODE", "FRAME_CAPTURE", CAM[side], "INF") + "/"
     for d in list(folders.values()) + [inf, os.path.join(legacy, "CODE", "FRAME_CAPTURE", CAM[side], "RAW_IMAGES"),
@@ -176,7 +186,6 @@ def run_old(args, cfg, package, scratch, frames):
     run_program([sys.executable, OLD_FILE[side]], base, dict(os.environ),
                 os.path.join(folders["LOGS"], OLD_FILE[side][:-2] + "log"), inf, frames,
                 "No files found in directory")
-    return folders["DEFECTIVE"]
 
 
 def run_new(args, cfg, scratch, frames):
@@ -205,22 +214,9 @@ def run_new(args, cfg, scratch, frames):
 # ----------------------------------------------------------------------
 # Comparison
 # ----------------------------------------------------------------------
-def old_bolt_events_from_images(defective_dir):
-    """RIGHT: '<ts>_Nut_Bolt_Missing_In_Bucket_Clip<wheel>.jpg' in DEFECTIVE/<date>/."""
-    events = []
-    for dirpath, _, names in os.walk(defective_dir):
-        for n in sorted(names):
-            m = re.fullmatch(rf"\d{{4}}(?:_\d+){{6}}_{BOLT}(\d+)\.jpg", n)
-            if m:
-                events.append({"type": BOLT, "wheel": m.group(1), "box": None})
-    return events
-
-
 def _same(a, b):
     if a["wheel"] != b["wheel"]:
         return False
-    if a["box"] is None or b["box"] is None:          # RIGHT old side: images carry no box
-        return True
     return all(abs(x - y) <= BOX_TOLERANCE_PX for x, y in zip(a["box"], b["box"]))
 
 
@@ -275,12 +271,10 @@ def main():
     create_db(db, old_db)
     create_db(db, new_db)
 
-    old_defective = run_old(args, cfg, package, scratch, frames)
+    run_old(args, cfg, package, scratch, frames)
     run_new(args, cfg, scratch, frames)
 
     old_rows = read_defects(db, old_db)
-    if args.side == "RIGHT":
-        old_rows = old_bolt_events_from_images(old_defective)
     new_rows = read_defects(db, new_db)
     result = compare(old_rows, new_rows)
     result.update({"side": args.side, "frames": len(frames), "first": os.path.basename(frames[0]),
@@ -294,7 +288,7 @@ def main():
     print(f"{'PASS' if result['pass'] else 'FAIL'}: bolt defects old {result['old_bolt_defects']} / "
           f"new {result['new_bolt_defects']}; new types {result['new_types']}; report {report}")
     if not args.keep:
-        conn = pymysql.connect(host=db["host"], port=db["port"], user=db["user"], passwd=db["password"])
+        conn = pymysql.connect(host=db["host"], port=db["port"], user=db["user"], password=db["password"])
         with conn.cursor() as cur:
             cur.execute(f"DROP DATABASE IF EXISTS `{old_db}`")
             cur.execute(f"DROP DATABASE IF EXISTS `{new_db}`")
