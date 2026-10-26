@@ -175,6 +175,17 @@ class Failures(Site):                                                # done when
         self.assertIn("data/frames/CAM2/INF", results["layout"].detail)
         self.assertIn("setup_dpc_layout.sh", results["layout"].detail)
 
+    def test_new_layout_folders_are_checked(self):                    # P4b, D-072
+        expected = dc.expected_dirs(self.cfg)
+        data = os.path.join(self.root, "data")
+        for side in ("LEFT", "RIGHT"):
+            for folder in (f"images/MAGNET/{side}", f"images/TEMP/{side}", f"bolt_data/{side}"):
+                self.assertIn(os.path.join(data, folder), expected)
+        shutil.rmtree(os.path.join(data, "images", "MAGNET", "LEFT"))
+        results, _ = self.run_all()
+        self.assertEqual(results["layout"].status, dc.FAIL)
+        self.assertIn("data/images/MAGNET/LEFT", results["layout"].detail)
+
     def test_frame_folders_on_two_filesystems(self):
         real_stat = os.stat
 

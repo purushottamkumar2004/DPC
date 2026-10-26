@@ -117,6 +117,8 @@ class ExampleLoads(_TempDirTest):
         block = section[section.index("```yaml") + 7:section.index("```", section.index("```yaml") + 7)]
         data = yaml.safe_load(block.replace("<secret>", "x"))
         data["paths"]["root"] = self.root
+        # CONTRACTS 7.1 still shows wheel_stand_required_counts, withdrawn by D-073 D8 (doc fix in the handoff)
+        data["inspection"]["machine"].pop("wheel_stand_required_counts", None)
         cfg = sc.load_site_config(self.write_yaml(data))
         self.assertEqual(cfg.inspection.model.name, "dpc_maskrcnn")
         self.assertEqual(cfg.transfer.models_folder, "DPC/models")
@@ -324,6 +326,7 @@ class MovedToSupervisor(_TempDirTest):                                # 6d done 
     def test_sides_must_match_cameras(self):
         data = self.config_data()
         del data["capture"]["cameras"][1]
+        del data["inspection"]["live_wheel_counter_side"]
         self.assertEqual(self.problems_for(data),
                          ["inspection.sides.RIGHT: no camera is configured for this side"])
         data = self.config_data()
@@ -333,6 +336,7 @@ class MovedToSupervisor(_TempDirTest):                                # 6d done 
     def test_single_camera_site(self):
         data = self.config_data()
         del data["capture"]["cameras"][1]
+        del data["inspection"]["live_wheel_counter_side"]
         del data["inspection"]["sides"]["RIGHT"]
         self.assertEqual(len(sc.load_site_config(self.write_yaml(data)).cameras), 1)
 
@@ -393,12 +397,6 @@ class KeptRules(_TempDirTest):
         data = self.config_data()
         data["capture"]["cameras"][1]["driver"] = "flir"
         self.assertEqual(self.problems_for(data), ["capture.cameras[1].flir: missing"])
-
-    def test_wheel_stand_counts(self):
-        data = self.config_data()
-        data["inspection"]["machine"]["wheel_stand_required_counts"] = {500: 3}
-        self.assertProblem(self.problems_for(data),
-                           r"^inspection\.machine\.wheel_stand_required_counts\[500\]: wheel number is above")
 
     def test_chmod_600_required(self):
         path = self.write_yaml(self.config_data(), mode=0o644)
@@ -465,6 +463,116 @@ class D064Keys(_TempDirTest):                                         # P4 / 6g
         cfg = sc.load_site_config(self.write_yaml(data))
         self.assertEqual([c.ip for c in cfg.cameras], ["192.168.1.102", "192.168.1.103"])
         self.assertEqual(cfg.plc.light_on_value, 0)
+
+
+class P7Prep(_TempDirTest):                                           # D-072, D-073
+    def load(self, data):
+        return sc.load_site_config(self.write_yaml(data))
+
+    def bare(self):
+        """The example without any P7-prep key: every value must come from the defaults."""
+        data = self.config_data()
+        insp = data["inspection"]
+        for key in ("live_wheel_counter_side", "wheel_report"):
+            insp.pop(key)
+        insp["machine"].pop("expected_cycle_total")
+        data["capture"].pop("health_interval_s")
+        return data
+
+    def test_defaults_are_each_sides_current_values(self):            # done when (D-073 D5)
+        cfg = self.load(self.bare())
+        left, right = cfg.inspection.sides["LEFT"], cfg.inspection.sides["RIGHT"]
+        self.assertEqual((left.motion, right.motion), ("rtl", "ltr"))
+        self.assertEqual(left.bucket_clip_window, sc.Window(50, 1990, 750, 1085))
+        self.assertEqual(right.bucket_clip_window, sc.Window(10, 1270, 550, 780))
+        self.assertEqual(left.half_bucket_clip_window, sc.Window(100, 1850, 470, 750))
+        self.assertEqual(right.half_bucket_clip_window, sc.Window(100, 1850, 480, 730))
+        self.assertEqual(left.tracker.clip_confirm, sc.ClipConfirm(5, 3, 300, 200))
+        self.assertEqual(right.tracker.clip_confirm, sc.ClipConfirm(5, 3, 500, 500))
+        self.assertEqual((left.tracker.skidding.time_gap_reset_ms, right.tracker.skidding.time_gap_reset_ms), (500, 1000))
+        for side in (left, right):
+            t = side.tracker
+            self.assertEqual((t.new_wheel_jump_px, t.new_plate_jump_px, t.high_dusty_suppress_px), (100, 150, 50))
+            self.assertEqual((t.skidding.window_frames, t.skidding.required_ratio, t.skidding.offset_px,
+                              t.skidding.min_vertical_px, t.skidding.vertical_factor, t.skidding.same_wheel_scale,
+                              t.skidding.min_magnet_travel_px, t.skidding.wheel_xmin, t.skidding.wheel_xmax,
+                              t.skidding.magnet_check_min_wheel_w), (3, 0.7, 80, 8, 0.5, 0.5, 9, 20, 2025, 600))
+            self.assertEqual((t.wheel_missing.min_frames, t.wheel_missing.belt_stop_frames), (9, 20))
+            self.assertEqual(t.wheel_missing.bbox, sc.Window(668, 1474, 508, 1278))
+
+    def test_site_defaults(self):
+        cfg = self.load(self.bare())
+        self.assertEqual(cfg.inspection.machine.expected_cycle_total, cfg.inspection.machine.total_wheel_count)
+        self.assertEqual(cfg.inspection.live_wheel_counter_side, "RIGHT")          # today: Right writes (D-073 D3)
+        self.assertEqual(cfg.inspection.wheel_report.daily_time, "17:58")
+        self.assertEqual(cfg.capture.health_interval_s, 600)
+
+    def test_one_value_changes_only_itself(self):
+        data = self.bare()
+        data["inspection"]["sides"]["RIGHT"]["tracker"] = {"clip_confirm": {"max_gap_ms": 450},
+                                                          "wheel_missing": {"bbox": {"xmin": 600}}}
+        data["inspection"]["sides"]["LEFT"]["bucket_clip_window"] = {"ymin": 700}
+        cfg = self.load(data)
+        right, left = cfg.inspection.sides["RIGHT"], cfg.inspection.sides["LEFT"]
+        self.assertEqual(right.tracker.clip_confirm, sc.ClipConfirm(5, 3, 450, 500))
+        self.assertEqual(right.tracker.wheel_missing.bbox, sc.Window(600, 1474, 508, 1278))
+        self.assertEqual(left.bucket_clip_window, sc.Window(50, 1990, 700, 1085))
+        self.assertEqual(left.tracker.clip_confirm, sc.ClipConfirm(5, 3, 300, 200))
+
+    def test_set_values(self):
+        data = self.config_data()
+        data["inspection"].update(live_wheel_counter_side="LEFT", wheel_report={"daily_time": "06:30"})
+        data["inspection"]["machine"]["expected_cycle_total"] = 188
+        data["capture"]["health_interval_s"] = 120
+        data["inspection"]["sides"]["LEFT"]["motion"] = "ltr"
+        cfg = self.load(data)
+        self.assertEqual((cfg.inspection.live_wheel_counter_side, cfg.inspection.wheel_report.daily_time,
+                          cfg.inspection.machine.expected_cycle_total, cfg.capture.health_interval_s,
+                          cfg.inspection.sides["LEFT"].motion), ("LEFT", "06:30", 188, 120, "ltr"))
+
+    def test_bad_values(self):
+        data = self.config_data()
+        side = data["inspection"]["sides"]["LEFT"]
+        side["motion"] = "up"
+        side["bucket_clip_window"] = {"xmin": 900, "xmax": 100}
+        side["tracker"] = {"clip_confirm": {"frames": 3, "min_pairs": 3}, "skidding": {"wheel_xmin": 3000},
+                           "wheel_missing": {"min_frames": 30}, "speed": 1}
+        data["inspection"]["wheel_report"] = {"daily_time": "25:00"}
+        data["capture"]["health_interval_s"] = 0
+        problems = self.problems_for(data)
+        for pattern in (r"^inspection\.sides\.LEFT\.motion: must be one of rtl, ltr",
+                        r"^inspection\.sides\.LEFT\.bucket_clip_window: needs xmin < xmax",
+                        r"^inspection\.sides\.LEFT\.tracker\.clip_confirm\.min_pairs: must be at most frames - 1 \(2\)",
+                        r"^inspection\.sides\.LEFT\.tracker\.skidding\.wheel_xmin: must be below wheel_xmax",
+                        r"^inspection\.sides\.LEFT\.tracker\.wheel_missing\.min_frames: must be at most belt_stop_frames",
+                        r"^inspection\.sides\.LEFT\.tracker\.speed: unknown key",
+                        r'^inspection\.wheel_report\.daily_time: use "HH:MM"',
+                        r"^capture\.health_interval_s: must be between 1 and 86400"):
+            self.assertProblem(problems, pattern)
+
+    def test_live_counter_side_must_have_a_camera(self):
+        data = self.config_data()
+        del data["capture"]["cameras"][1]
+        del data["inspection"]["sides"]["RIGHT"]
+        self.assertEqual(self.problems_for(data), ["inspection.live_wheel_counter_side: RIGHT has no camera on this site"])
+        del data["inspection"]["live_wheel_counter_side"]
+        self.assertEqual(self.load(data).inspection.live_wheel_counter_side, "LEFT")   # the only side
+
+    def test_wheel_stand_counts_withdrawn(self):                       # D-073 D8
+        data = self.config_data()
+        data["inspection"]["machine"]["wheel_stand_required_counts"] = {34: 3}
+        self.assertEqual(self.problems_for(data), [
+            "inspection.machine.wheel_stand_required_counts: withdrawn (D-073 D8): the wheel-stand mapping "
+            "is learned by inspection (data/state/inspection_<side>/wheel_stands.json)"])
+
+    def test_tadipatri_reference_with_handoff_values(self):
+        with open(os.path.join(REPO_ROOT, "docs", "sites", "tadipatri.site.reference.yaml"), encoding="utf-8") as f:
+            data = yaml.safe_load(f.read().replace('"<secret>"', '"x"'))
+        data["paths"]["root"] = self.root
+        data["inspection"]["live_wheel_counter_side"] = "RIGHT"
+        data["inspection"]["machine"]["expected_cycle_total"] = 190
+        cfg = self.load(data)
+        self.assertEqual(cfg.inspection.sides["RIGHT"].tracker.skidding.time_gap_reset_ms, 1000)
 
 
 class Secrets(_TempDirTest):

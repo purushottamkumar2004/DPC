@@ -52,13 +52,55 @@ CAMERA_SIDES = {"CAM1": "LEFT", "CAM2": "RIGHT"}      # CONTRACTS 4.1: CAM1 -> L
 CAMERA_DRIVERS = ("basler", "flir")
 ROTATIONS = (0, 90, 180, 270)
 FRAME_SUBDIRS = ("live", "_tmp", "INF", "RAW_IMAGES", "UI")
-IMAGE_KINDS = ("DEFECTIVE", "REPEATED", "RAW", "PLATE")
+IMAGE_KINDS = ("DEFECTIVE", "REPEATED", "RAW", "PLATE", "MAGNET", "TEMP")   # data/images/<KIND>/<SIDE> (4.1, D-067, D-072)
 OBJECT_SIZE_KEYS = ("wheel_w", "wheel_h", "bucket_clip_w", "chain_w", "half_bucket_clip_w")
 DISK_PERCENT_ORDER = ("delete", "raw_delete", "mail", "inference_delete")   # must increase in this order
 AUTO_ROI_MODES = ("off", "observe", "filter")          # D-054
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 SITE_ID_TOKEN = "<site.id>"                            # replaced in transfer.upload.remote_folder
 
+# Per-side defaults = each side's value in today's code (INSPECTION.md, D-072, D-073 D5): nothing
+# changes until a value is set in site.yaml. Left = LeftAlgorithm.py (L:), Right = RightAlgorithm.py (R:).
+SIDE_DEFAULTS = {
+    "LEFT": {
+        "motion": "rtl",                                                     # L:1776-1810
+        "bucket_clip_window": {"xmin": 50, "xmax": 1990, "ymin": 750, "ymax": 1085},       # L:604-607
+        "half_bucket_clip_window": {"xmin": 100, "xmax": 1850, "ymin": 470, "ymax": 750},  # L:772-775
+        "tracker": {
+            "new_wheel_jump_px": 100,                                        # L:1775
+            "new_plate_jump_px": 150,                                        # L:2208
+            "high_dusty_suppress_px": 50,                                    # L:323
+            "clip_confirm": {"frames": 5, "min_pairs": 3, "max_gap_ms": 300, "max_dist_px": 200},  # L:657-676
+            "skidding": {"window_frames": 3, "required_ratio": 0.7, "time_gap_reset_ms": 500,      # L:1256-1263
+                         "offset_px": 80, "min_vertical_px": 8, "vertical_factor": 0.5,
+                         "same_wheel_scale": 0.5, "min_magnet_travel_px": 9,                    # L:1516
+                         "wheel_xmin": 20, "wheel_xmax": 2025,                                   # L:1502
+                         "magnet_check_min_wheel_w": 600},                                       # L:1282
+            "wheel_missing": {"min_frames": 9, "belt_stop_frames": 20,                            # L:1927-1929
+                              "bbox": {"xmin": 668, "xmax": 1474, "ymin": 508, "ymax": 1278}},
+        },
+    },
+    "RIGHT": {
+        "motion": "ltr",                                                     # R:1906-1935
+        "bucket_clip_window": {"xmin": 10, "xmax": 1270, "ymin": 550, "ymax": 780},        # R:712-715
+        "half_bucket_clip_window": {"xmin": 100, "xmax": 1850, "ymin": 480, "ymax": 730},  # R:894-897
+        "tracker": {
+            "new_wheel_jump_px": 100,                                        # R:1906
+            "new_plate_jump_px": 150,                                        # R:2598
+            "high_dusty_suppress_px": 50,                                    # R:337
+            "clip_confirm": {"frames": 5, "min_pairs": 3, "max_gap_ms": 500, "max_dist_px": 500},  # R:784
+            "skidding": {"window_frames": 3, "required_ratio": 0.7, "time_gap_reset_ms": 1000,     # R:1325-1332
+                         "offset_px": 80, "min_vertical_px": 8, "vertical_factor": 0.5,
+                         "same_wheel_scale": 0.5, "min_magnet_travel_px": 9,                    # R:1585
+                         "wheel_xmin": 20, "wheel_xmax": 2025,                                   # R:1571
+                         "magnet_check_min_wheel_w": 600},                                       # R:1351
+            "wheel_missing": {"min_frames": 9, "belt_stop_frames": 20,                            # R:2317-2319
+                              "bbox": {"xmin": 668, "xmax": 1474, "ymin": 508, "ymax": 1278}},
+        },
+    },
+}
+MOTIONS = ("rtl", "ltr")
+_HH_MM_RE = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 _SITE_ID_RE = re.compile(r"^[a-z0-9_-]+$")
 # DB and table names end up inside SQL text, so only plain identifiers are allowed.
 _SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+$")
@@ -198,6 +240,7 @@ class Camera:
 class CaptureConfig:
     log: LogSettings
     cameras: Tuple[Camera, ...]
+    health_interval_s: int = 600     # health row rhythm (P4d)
 
 
 @dataclass(frozen=True)
@@ -210,15 +253,72 @@ class ObjectSizes:
 
 
 @dataclass(frozen=True)
+class Window:
+    """A pixel window in this camera's image: a detection must lie inside it."""
+    xmin: int
+    xmax: int
+    ymin: int
+    ymax: int
+
+
+@dataclass(frozen=True)
+class ClipConfirm:
+    frames: int          # candidates kept
+    min_pairs: int       # consecutive pairs that must pass
+    max_gap_ms: int
+    max_dist_px: int
+
+
+@dataclass(frozen=True)
+class Skidding:
+    window_frames: int
+    required_ratio: float
+    time_gap_reset_ms: int
+    offset_px: int
+    min_vertical_px: int
+    vertical_factor: float
+    same_wheel_scale: float
+    min_magnet_travel_px: int        # below this over the window = Wheel_Skidding
+    wheel_xmin: int
+    wheel_xmax: int
+    magnet_check_min_wheel_w: int    # wider wheel without magnet -> MAGNET diagnostics
+
+
+@dataclass(frozen=True)
+class WheelMissingSettings:
+    min_frames: int                  # frames without a wheel that make a WheelMissing
+    belt_stop_frames: int            # more than this = belt stopped, cancel
+    bbox: Window                     # fixed box drawn on the defect image
+
+
+@dataclass(frozen=True)
+class Tracker:
+    new_wheel_jump_px: int
+    new_plate_jump_px: int
+    high_dusty_suppress_px: int
+    clip_confirm: ClipConfirm
+    skidding: Skidding
+    wheel_missing: WheelMissingSettings
+
+
+@dataclass(frozen=True)
 class SideSettings:
     object_sizes: ObjectSizes
+    motion: str                      # rtl | ltr: direction the belt moves in this camera's image
+    bucket_clip_window: Window
+    half_bucket_clip_window: Window
+    tracker: Tracker
 
 
 @dataclass(frozen=True)
 class MachineConfig:
     total_wheel_count: int
-    expected_cycle_total: Optional[int]
-    wheel_stand_required_counts: Dict[int, int]
+    expected_cycle_total: int        # default = total_wheel_count (D-073 D8)
+
+
+@dataclass(frozen=True)
+class WheelReport:
+    daily_time: str                  # "HH:MM": daily best-image copy per wheel (D-073 D4)
 
 
 @dataclass(frozen=True)
@@ -244,6 +344,8 @@ class InspectionConfig:
     machine: MachineConfig
     sides: Dict[str, SideSettings]      # LEFT / RIGHT, one per configured camera side
     auto_roi: AutoRoi
+    live_wheel_counter_side: str        # the one side that writes wheel_counter_table (D-073 D3)
+    wheel_report: WheelReport
 
 
 @dataclass(frozen=True)
@@ -711,20 +813,93 @@ def _read_cameras(s: _Section) -> Tuple[Camera, ...]:
 
 def _read_capture(top: _Section) -> CaptureConfig:
     s = top.section("capture")
-    cfg = CaptureConfig(log=_read_log(s), cameras=_read_cameras(s))
+    cfg = CaptureConfig(log=_read_log(s), cameras=_read_cameras(s),
+                        health_interval_s=s.integer("health_interval_s", required=False, default=600,
+                                                    low=1, high=86400))
     s.finish()
     return cfg
 
 
 # ---- inspection ----
 
+def _read_window(parent: _Section, name: str, default: Dict[str, int]) -> Window:
+    """Optional {xmin, xmax, ymin, ymax}; a missing corner keeps its default."""
+    w = parent.section(name, required=False)
+    values = {k: w.integer(k, required=False, default=default[k], low=0, high=100000)
+              for k in ("xmin", "xmax", "ymin", "ymax")}
+    w.finish()
+    if None not in values.values() and not (values["xmin"] < values["xmax"] and values["ymin"] < values["ymax"]):
+        w.problem("", "needs xmin < xmax and ymin < ymax")
+    return Window(**values)
+
+
+def _read_tracker(parent: _Section, default: Dict[str, Any]) -> Tracker:
+    t = parent.section("tracker", required=False)
+    c = t.section("clip_confirm", required=False)
+    dc = default["clip_confirm"]
+    clip = ClipConfirm(frames=c.integer("frames", required=False, default=dc["frames"], low=2, high=100),
+                       min_pairs=c.integer("min_pairs", required=False, default=dc["min_pairs"], low=1, high=99),
+                       max_gap_ms=c.integer("max_gap_ms", required=False, default=dc["max_gap_ms"], low=1, high=60000),
+                       max_dist_px=c.integer("max_dist_px", required=False, default=dc["max_dist_px"], low=1, high=100000))
+    if clip.frames is not None and clip.min_pairs is not None and clip.min_pairs > clip.frames - 1:
+        c.problem("min_pairs", f"must be at most frames - 1 ({clip.frames - 1}), got {clip.min_pairs}")
+    c.finish()
+
+    k = t.section("skidding", required=False)
+    dk = default["skidding"]
+    ints = {name: k.integer(name, required=False, default=dk[name], low=0, high=100000)
+            for name in ("window_frames", "time_gap_reset_ms", "offset_px", "min_vertical_px",
+                         "min_magnet_travel_px", "wheel_xmin", "wheel_xmax", "magnet_check_min_wheel_w")}
+    floats = {name: k.number(name, required=False, default=dk[name], low=0, high=10)
+              for name in ("required_ratio", "vertical_factor", "same_wheel_scale")}
+    skid = Skidding(**ints, **floats)
+    if skid.window_frames == 0:
+        k.problem("window_frames", "must be at least 1")
+    if None not in (skid.wheel_xmin, skid.wheel_xmax) and skid.wheel_xmin >= skid.wheel_xmax:
+        k.problem("wheel_xmin", "must be below wheel_xmax")
+    k.finish()
+
+    m = t.section("wheel_missing", required=False)
+    dm = default["wheel_missing"]
+    missing = WheelMissingSettings(
+        min_frames=m.integer("min_frames", required=False, default=dm["min_frames"], low=1, high=100000),
+        belt_stop_frames=m.integer("belt_stop_frames", required=False, default=dm["belt_stop_frames"],
+                                   low=1, high=100000),
+        bbox=_read_window(m, "bbox", dm["bbox"]))
+    if None not in (missing.min_frames, missing.belt_stop_frames) and missing.min_frames > missing.belt_stop_frames:
+        m.problem("min_frames", f"must be at most belt_stop_frames ({missing.belt_stop_frames})")
+    m.finish()
+
+    tracker = Tracker(
+        new_wheel_jump_px=t.integer("new_wheel_jump_px", required=False, default=default["new_wheel_jump_px"],
+                                    low=1, high=100000),
+        new_plate_jump_px=t.integer("new_plate_jump_px", required=False, default=default["new_plate_jump_px"],
+                                    low=1, high=100000),
+        high_dusty_suppress_px=t.integer("high_dusty_suppress_px", required=False,
+                                         default=default["high_dusty_suppress_px"], low=0, high=100000),
+        clip_confirm=clip, skidding=skid, wheel_missing=missing)
+    t.finish()
+    return tracker
+
+
 def _read_side(s: _Section, side: str) -> SideSettings:
+    """One side. Everything but object_sizes is optional; the default is THIS side's value in
+    today's code (SIDE_DEFAULTS, D-073 D5)."""
+    default = SIDE_DEFAULTS[side]
     side_section = s.section(side)
     sizes = side_section.section("object_sizes")
     values = {k: sizes.integer(k, low=1, high=100000) for k in OBJECT_SIZE_KEYS}
     sizes.finish()
+    settings = SideSettings(
+        object_sizes=ObjectSizes(**values),
+        motion=side_section.string("motion", required=False, default=default["motion"], choices=MOTIONS),
+        bucket_clip_window=_read_window(side_section, "bucket_clip_window", default["bucket_clip_window"]),
+        half_bucket_clip_window=_read_window(side_section, "half_bucket_clip_window",
+                                             default["half_bucket_clip_window"]),
+        tracker=_read_tracker(side_section, default["tracker"]),
+    )
     side_section.finish()
-    return SideSettings(object_sizes=ObjectSizes(**values))
+    return settings
 
 
 def _read_sides(parent: _Section, sides: List[str]) -> Dict[str, SideSettings]:
@@ -742,37 +917,16 @@ def _read_sides(parent: _Section, sides: List[str]) -> Dict[str, SideSettings]:
     return result
 
 
-def _read_wheel_stand_counts(s: _Section, total_wheels: Optional[int]) -> Dict[int, int]:
-    raw = s._raw("wheel_stand_required_counts", required=False)
-    if raw is _MISSING:
-        return {}
-    if not isinstance(raw, dict):
-        s.problem("wheel_stand_required_counts", "must be a mapping of wheel number -> required count")
-        return {}
-    result = {}
-    for wheel, count in raw.items():
-        where = f"wheel_stand_required_counts[{wheel!r}]"
-        if isinstance(wheel, bool) or not isinstance(wheel, int) or wheel < 1:
-            s.problem(where, "wheel number must be an integer >= 1")
-        elif total_wheels is not None and wheel > total_wheels:
-            s.problem(where, f"wheel number is above total_wheel_count ({total_wheels})")
-        elif isinstance(count, bool) or not isinstance(count, int) or count < 1:
-            s.problem(where, f"required count must be an integer >= 1, got {count!r}")
-        else:
-            result[wheel] = count
-    return result
-
-
 def _read_machine(parent: _Section) -> MachineConfig:
     s = parent.section("machine")
     total = s.integer("total_wheel_count", low=1, high=100000)
-    cfg = MachineConfig(
-        total_wheel_count=total,
-        expected_cycle_total=s.integer("expected_cycle_total", required=False, low=1, high=100000),
-        wheel_stand_required_counts=_read_wheel_stand_counts(s, total),
-    )
+    expected = s.integer("expected_cycle_total", required=False, default=total, low=1, high=100000)
+    if "wheel_stand_required_counts" in s.data:
+        s.used.add("wheel_stand_required_counts")
+        s.problem("wheel_stand_required_counts", "withdrawn (D-073 D8): the wheel-stand mapping is learned by "
+                                                 "inspection (data/state/inspection_<side>/wheel_stands.json)")
     s.finish()
-    return cfg
+    return MachineConfig(total_wheel_count=total, expected_cycle_total=expected)
 
 
 MOVED_TO_SUPERVISOR = ("moved to the Supervisor (D-060): the running version is "
@@ -798,8 +952,22 @@ def _read_auto_roi(parent: _Section) -> AutoRoi:
     return roi
 
 
+def _read_wheel_report(parent: _Section) -> WheelReport:
+    s = parent.section("wheel_report", required=False)
+    report = WheelReport(daily_time=s.string("daily_time", required=False, default="17:58", pattern=_HH_MM_RE,
+                                             pattern_hint='use "HH:MM" (24 h, quoted)'))
+    s.finish()
+    return report
+
+
 def _read_inspection(top: _Section, paths: Paths, sides: List[str]) -> InspectionConfig:
     s = top.section("inspection")
+    # Today only Right writes the live wheel number (D-073 D3): RIGHT when that side exists.
+    default_writer = "RIGHT" if "RIGHT" in sides or not sides else sides[0]
+    writer = s.string("live_wheel_counter_side", required=False, default=default_writer,
+                      choices=tuple(CAMERA_SIDES.values()))
+    if writer is not None and sides and writer not in sides:
+        s.problem("live_wheel_counter_side", f"{writer} has no camera on this site")
     cfg = InspectionConfig(
         log=_read_log(s),
         model=_read_model_ref(s, paths),
@@ -807,6 +975,8 @@ def _read_inspection(top: _Section, paths: Paths, sides: List[str]) -> Inspectio
         machine=_read_machine(s),
         sides=_read_sides(s, sides),
         auto_roi=_read_auto_roi(s),
+        live_wheel_counter_side=writer,
+        wheel_report=_read_wheel_report(s),
     )
     s.finish()
     return cfg

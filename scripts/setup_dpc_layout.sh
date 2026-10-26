@@ -25,7 +25,7 @@ DRY_RUN=0
 CAMERAS=(CAM1 CAM2)               # CAM1 = LEFT, CAM2 = RIGHT
 SIDES=(LEFT RIGHT)
 FRAME_SUBDIRS=(live _tmp INF RAW_IMAGES UI)
-IMAGE_KINDS=(DEFECTIVE REPEATED RAW PLATE)
+IMAGE_KINDS=(DEFECTIVE REPEATED RAW PLATE MAGNET TEMP)   # MAGNET: magnet diagnostics (D-072), TEMP (D-067)
 WHEEL_STATUS_SUBDIRS=(LEFT RIGHT IMAGES PDFS)   # adjust to match your real WHEEL_STATUS tree
 DATA_TOP=(bolt_data state models)
 
@@ -80,6 +80,10 @@ done
 
 for d in "${DATA_TOP[@]}"; do
   mkd 0755 "$DATA/$d"
+done
+
+for side in "${SIDES[@]}"; do
+  mkd 0755 "$DATA/bolt_data/$side"     # bolt candidate frames per side (D-072); cleanup covers it (B10)
 done
 
 # _tmp, INF, live, UI and ui_live must share one filesystem so link/rename is atomic.

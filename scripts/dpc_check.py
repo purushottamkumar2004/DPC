@@ -120,6 +120,7 @@ def expected_dirs(cfg: SiteConfig) -> List[str]:
         dirs += [p.frame_dir(cam.id, sub) for sub in FRAME_SUBDIRS]
         dirs += [p.image_dir(kind, cam.side) for kind in IMAGE_KINDS]
     dirs += [os.path.join(p.data, d) for d in DATA_TOP_DIRS]
+    dirs += [os.path.join(p.data, "bolt_data", cam.side) for cam in cfg.cameras]     # D-072
     return dirs
 
 
