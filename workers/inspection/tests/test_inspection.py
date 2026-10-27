@@ -334,7 +334,16 @@ class ExitTest(Base):
         with open(path) as f:
             rec = json.load(f)
         self.assertEqual(rec["type"], "RuntimeError")
-        self.assertIn("test_inspection.py:", rec["where"])
+        self.assertIn("test_inspection.py:", rec["where"])      # the test file is not under the worker code dir
+
+    def test_last_error_where_points_at_own_code(self):
+        import defects
+        store = defects.DefectStore(FakeConn(FakeCursor()), None, self.left, LOG)   # cursor None: insert fails
+        try:
+            store.insert("WheelMissing", "x.jpg", 1, 0, 0, 0, 0)
+        except AttributeError as e:
+            rec = LE.error_record(e)
+        self.assertTrue(rec["where"].startswith("defects.py:") and rec["where"].endswith("in insert"), rec["where"])
         self.assertNotIn("secret-pw", json.dumps(rec))
 
     def test_bad_config_exits_1_with_last_error(self):

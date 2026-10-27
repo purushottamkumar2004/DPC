@@ -11,6 +11,7 @@ import os
 import traceback
 
 TRACEBACK_LINES = 12
+OWN_CODE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _scrub(text: str, secrets) -> str:
@@ -22,7 +23,10 @@ def _scrub(text: str, secrets) -> str:
 
 def error_record(exc: BaseException, secrets=()) -> dict:
     frames = traceback.extract_tb(exc.__traceback__)
-    where = f"{os.path.basename(frames[-1].filename)}:{frames[-1].lineno}" if frames else "unknown"
+    # `where` = the deepest line in this program's own code (not in pymysql or cv2), else the last line
+    own = [f for f in frames if os.path.abspath(f.filename).startswith(OWN_CODE_DIR + os.sep)]
+    last = (own or frames)[-1] if frames else None
+    where = f"{os.path.basename(last.filename)}:{last.lineno} in {last.name}" if last else "unknown"
     lines = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip().splitlines()
     return {
         "at": datetime.datetime.now().isoformat(timespec="seconds"),
