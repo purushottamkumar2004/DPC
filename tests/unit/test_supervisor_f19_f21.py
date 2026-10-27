@@ -86,7 +86,7 @@ class LastErrorF21(_FailingWorkerTest):
         failure = self.events("worker_failure")[0]["last_error"]
         self.assertEqual(failure["type"], "ValueError")
         self.assertEqual(failure["message"], "camera table missing")
-        where = f"failing_worker.py:{self.forced_error_line()}"
+        where = f"failing_worker.py:{self.forced_error_line()} in open_camera_table"   # D-079: file:line in function
         self.assertEqual(failure["where"], where)
         self.assertTrue(failure["traceback"][-1].startswith("ValueError"))
         self.assertEqual(self.events("worker_restarted")[0]["last_error"], failure, "the restart says why")
@@ -166,7 +166,7 @@ class LastErrorEndToEnd(_FailingWorkerTest):
         proc = subprocess.Popen([sys.executable, os.path.join(SUPERVISOR_DIR, "supervisor.py"), "run"],
                                 env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         log_file = os.path.join(self.root, "logs", "supervisor.log")
-        expected = f"last error: ValueError: camera table missing (failing_worker.py:{self.forced_error_line()})"
+        expected = f"last error: ValueError: camera table missing (failing_worker.py:{self.forced_error_line()} in open_camera_table)"
         try:
             deadline = time.time() + 20
             text = ""
