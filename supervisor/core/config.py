@@ -120,7 +120,7 @@ def _build(cls, data, where):
 def _expand_home(value: str) -> str:
     """'~' or '~/...' in an env value becomes the home folder, like every path in this file.
     A worker gets the value as-is from its environment and would otherwise see a literal '~'
-    (e.g. BASLER_CONFIG: ~/INSIGHTZZ/config/BASLER_CONFIG1.xml). Nothing else is expanded."""
+    (e.g. SOME_FILE: ~/INSIGHTZZ/data/x). Nothing else is expanded."""
     return os.path.expanduser(value) if value == "~" or value.startswith("~/") else value
 
 

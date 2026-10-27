@@ -150,9 +150,10 @@ Tests: `python3 -m unittest tests.unit.test_supervisor_v2 -v` from the repo root
 ## Running on a site (STATUS item 4)
 
 1. Workers file: copy `config/workers.basler-2cam.yaml` to `~/INSIGHTZZ/config/workers.yaml`
-   (two Basler captures; serials, fps, exposure and folders stay in `config/BASLER_CONFIG1.xml` / `2.xml`).
+   (two Basler captures and two inspection sides; every setting comes from `site.yaml` through the
+   rendered `config/rendered/<id>.json`). From then on `supervisor.py` finds it without `-c`.
    `env:` values that start with `~/` are expanded, like every path in the file.
-2. Check: `python3 supervisor.py check-config -c ~/INSIGHTZZ/config/workers.yaml`
+2. Check: `python3 supervisor.py check-config`
 3. Boot service: `./install_service.sh --dry-run` shows the filled unit, `./install_service.sh` installs and
    enables it. Run it as the site user, from the Python environment that has pypylon (`--python` to choose).
    `dpc-supervisor.service` is a template (`@USER@`, `@ROOT@`, `@PYTHON@`, `@PYTHON_DIR@`); do not copy it by hand.
@@ -174,3 +175,18 @@ Tests: `python3 -m unittest tests.unit.test_supervisor_v2 -v` from the repo root
 * **`run_timeout_seconds` (F10)**, oneshot/periodic only: a longer run is stopped and counts as a failed run.
 * **MQTT login (F11):** from `site.yaml` `mqtt.user` / `mqtt.password`; `workers.yaml` keeps
   `enabled, host, port, topic_prefix` (a login there is a config error).
+
+## Without -c, and why a worker stopped (F19, F21)
+
+* **Finding the files (F19).** Without `-c`, every command (`run`, `check-config`, `reload`, `status`,
+  `start`, `stop`, `restart`) uses `<root>/config/workers.yaml`, the folder that holds `site.yaml`
+  (`--site-config`, then `$DPC_SITE_CONFIG`, then `~/INSIGHTZZ/config/`). The pid and reload files are
+  in that file's `runtime.root` (`<root>/run`). A site folder without `workers.yaml` is an error; the
+  example with dummy workers is used only where `<root>/config` does not exist (development).
+* **last_error (F21, D-073 D7).** A worker that exits on an error writes
+  `<root>/run/<id>.last_error.json` `{at, type, message, where, traceback}`. When the process ends the
+  Supervisor reads it (only if written during that run), keeps the five fields (cut short), replaces
+  the `site.yaml` secret values by `***`, and adds it as `last_error` to `worker_failure`, the
+  `worker_restarted` that follows, and the worker status; `supervisor.log` gets
+  `[id] last error: ValueError: ... (file.py:123)` plus the traceback lines.
+  `runtime.root` must be `<root>/run` for the file to be found (it is in `workers.basler-2cam.yaml`).

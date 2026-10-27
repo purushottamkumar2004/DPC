@@ -83,7 +83,6 @@ workers:
     start_after: [plc_light]
     command: python3 FrameCapture_Basler.py
     working_directory: ~/INSIGHTZZ/code/workers/frame_capture_basler
-    env: {BASLER_CONFIG: ~/INSIGHTZZ/config/rendered/BASLER_CONFIG1.xml}
     stop_signal: SIGINT          # releases the camera on Ctrl+C
     stop_timeout_seconds: 30
     health:
@@ -92,20 +91,19 @@ workers:
       max_age_seconds: 30
       startup_grace_seconds: 60
 
-  - id: left_algorithm
-    type: algorithm
+  - id: inspection_left
+    type: inspection
     enabled: false
-    start_after: [frame_capture_cam1]
+    follows: frame_capture_cam1  # D-068: runs only while its capture is healthy
     restart_cost: high           # a restart loses wheel counter + plate state and the INF backlog
-    command: python3 LeftAlgorithm.py
+    command: python3 inspection.py
     working_directory: ~/INSIGHTZZ/code/workers/inspection
     stop_timeout_seconds: 20
-    restart: { max_retries: 2, retry_delay_seconds: 30 }
     health:
       type: queue_lag            # D-020; keep the limit above the normal backlog at this site's fps
       path: ~/INSIGHTZZ/data/frames/CAM1/INF
       max_oldest_age_seconds: 120
-      require_heartbeat: false   # true once the algorithm publishes heartbeats (D-049, Q1)
+      require_heartbeat: false   # true after F25 (D-049, Q1)
       max_age_seconds: 60        # heartbeat limit, used only with require_heartbeat: true
       startup_grace_seconds: 180 # Detectron2 model loading
 

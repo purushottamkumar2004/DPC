@@ -21,15 +21,17 @@ Modes (D-019): a process that ended on its own is judged by the worker's mode.
 import logging
 import time
 
+from core.last_error import summary
 from core.process_manager import ProcessManager, Worker, WorkerStatus
 
 log = logging.getLogger("supervisor.recovery")
 
 
 class RecoveryManager:
-    def __init__(self, process_manager: ProcessManager, mqtt):
+    def __init__(self, process_manager: ProcessManager, mqtt, last_error_reader=None):
         self.pm = process_manager
         self.mqtt = mqtt
+        self.read_last_error = last_error_reader or (lambda worker: None)   # F21
 
     # ------------------------------------------------------------------
     def handle_exit(self, worker: Worker):
@@ -38,10 +40,26 @@ class RecoveryManager:
         code = worker.exit_code
         if mode != "service" and code == 0:
             self._run_completed(worker)
-        elif mode == "periodic":
-            self.periodic_run_failed(worker, f"run exited with code {code}")
+            return
+        error = self._take_last_error(worker)
+        if mode == "periodic":
+            self.periodic_run_failed(worker, f"run exited with code {code}", last_error=error)
         else:
-            self.handle_failure(worker, f"process exited (exit code {code})")
+            self.handle_failure(worker, f"process exited (exit code {code})", last_error=error)
+
+    def _take_last_error(self, worker: Worker):
+        """F21: the worker's own account of why it stopped; logged and kept for the status."""
+        try:
+            error = self.read_last_error(worker)
+        except Exception as e:                       # a bad file must never stop the recovery
+            log.warning("[%s] could not read last_error.json (%s)", worker.id, type(e).__name__)
+            return None
+        if error:
+            worker.last_error = error
+            log.warning("[%s] last error: %s", worker.id, summary(error))
+            for line in error.get("traceback", []):
+                log.info("[%s]   %s", worker.id, line)
+        return error
 
     def handle_run_timeout(self, worker: Worker):
         """F10: a oneshot/periodic run took longer than run_timeout_seconds. The process is
@@ -61,9 +79,10 @@ class RecoveryManager:
         else:
             self.handle_failure(worker, reason)
 
-    def periodic_run_failed(self, worker: Worker, reason: str, started: bool = True):
+    def periodic_run_failed(self, worker: Worker, reason: str, started: bool = True, last_error=None):
         log.warning("[%s] failure: %s", worker.id, reason)
-        self.mqtt.publish_event(worker.id, "worker_failure", reason=reason, exit_code=worker.exit_code)
+        self.mqtt.publish_event(worker.id, "worker_failure", reason=reason, exit_code=worker.exit_code,
+                                **_with_error(last_error))
         self.pm.stop_worker(worker)
         worker.consecutive_failures += 1
         self._schedule_next_run(worker, started)
@@ -96,11 +115,12 @@ class RecoveryManager:
         return time.strftime("at %H:%M:%S", time.localtime(worker.next_run_at))
 
     # ------------------------------------------------------------------
-    def handle_failure(self, worker: Worker, reason: str):
+    def handle_failure(self, worker: Worker, reason: str, last_error=None):
         policy = worker.config.restart
         log.warning("[%s] failure: %s", worker.id, reason)
         self.mqtt.publish_event(worker.id, "worker_failure", reason=reason,
-                                exit_code=worker.exit_code)
+                                exit_code=worker.exit_code, **_with_error(last_error))
+        worker.restart_error = last_error    # repeated in the worker_restarted event that follows
 
         self.pm.stop_worker(worker)          # make sure a hung process is really gone
         worker.healthy_since = None
@@ -127,7 +147,8 @@ class RecoveryManager:
         log.info("[%s] restarting (attempt %d)", worker.id, worker.retry_count)
         if self.pm.restart_worker(worker):
             self.mqtt.publish_event(worker.id, "worker_restarted",
-                                    retry=worker.retry_count, pid=worker.pid)
+                                    retry=worker.retry_count, pid=worker.pid, **_with_error(worker.restart_error))
+            worker.restart_error = None
         else:
             self.handle_failure(worker, worker.message or "could not start process")
 
@@ -146,3 +167,8 @@ class RecoveryManager:
         worker.message = reason
         log.error("[%s] FAILED: %s", worker.id, reason)
         self.mqtt.publish_event(worker.id, "worker_failed", reason=reason)
+
+
+def _with_error(last_error) -> dict:
+    """{"last_error": {...}} for an event, or nothing (append-only, CONTRACTS 2)."""
+    return {"last_error": last_error} if last_error else {}

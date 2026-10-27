@@ -1,10 +1,11 @@
 # =====================================================================
-# Supervisor workers file for a site with TWO Basler cameras (first used at Tadipatri).
+# Supervisor workers file for a site with TWO Basler cameras and two inspection sides
+# (first used at Tadipatri).
 #
-# Deploy: copy to <root>/config/workers.yaml (hand-written until the renderer exists, D-022)
-#         and start the Supervisor with:  supervisor.py run -c ~/INSIGHTZZ/config/workers.yaml
-# Nothing in here is site-specific: the camera serial, fps, exposure, rotation, frame folders
-# and log file of each camera are in ~/INSIGHTZZ/config/BASLER_CONFIG1.xml and ..2.xml.
+# Deploy: copy to <root>/config/workers.yaml; supervisor.py finds it there without -c (F19).
+# Nothing in here is site-specific: every camera, inspection and site setting is in
+# site.yaml, rendered to <root>/config/rendered/<worker id>.json; the Supervisor gives each
+# worker its file in DPC_WORKER_CONFIG (D-062).
 # If paths.root in site.yaml is not ~/INSIGHTZZ, change the ~/INSIGHTZZ paths below.
 # No secrets in this file. `python3 supervisor.py check-config -c <this file>` validates it.
 # =====================================================================
@@ -52,8 +53,6 @@ workers:
     type: frame_capture
     command: python3 FrameCapture_Basler.py
     working_directory: ~/INSIGHTZZ/code/workers/frame_capture_basler
-    env:
-      BASLER_CONFIG: ~/INSIGHTZZ/config/BASLER_CONFIG1.xml
     stop_signal: SIGTERM
     stop_timeout_seconds: 15
     restart:
@@ -70,8 +69,6 @@ workers:
     type: frame_capture
     command: python3 FrameCapture_Basler.py
     working_directory: ~/INSIGHTZZ/code/workers/frame_capture_basler
-    env:
-      BASLER_CONFIG: ~/INSIGHTZZ/config/BASLER_CONFIG2.xml
     stop_signal: SIGTERM
     stop_timeout_seconds: 15
     restart:
@@ -84,16 +81,39 @@ workers:
       max_age_seconds: 60
       startup_grace_seconds: 30
 
-  # ---- inspection (P7: enable when the algorithms read their rendered JSON) ----
-  # Each side follows its camera (D-068): paused while that capture is down, started once
-  # when it is healthy again. DPC_WORKER_CONFIG is set by the Supervisor (rendered/<id>.json).
-  # - id: inspection_left
-  #   type: inspection
-  #   enabled: false
-  #   follows: frame_capture_cam1
-  #   restart_cost: high
-  #   command: python3 LeftAlgorithm.py
-  #   working_directory: ~/INSIGHTZZ/code/workers/inspection
-  #   stop_timeout_seconds: 20
-  #   health: {type: queue_lag, path: ~/INSIGHTZZ/data/frames/CAM1/INF, max_oldest_age_seconds: 120,
-  #            startup_grace_seconds: 180}
+  # ---- inspection: one program for both sides (D-069, D-076) ----
+  # Each side follows its camera (D-068, D-070): it starts once the capture is RUNNING, is
+  # paused while that capture is down, and is started once when it is healthy again.
+  # restart_cost high: a restart loses the wheel counter and plate state (D-020), so a failing
+  # health check must last high_cost_timeout_seconds (120 s) before a restart. A crash
+  # (exit 1) is still restarted at once; its cause is in <root>/run/<id>.last_error.json and
+  # shows up in the worker_failure event, the status and supervisor.log (F21).
+  - id: inspection_left
+    type: inspection
+    follows: frame_capture_cam1
+    restart_cost: high
+    command: python3 inspection.py
+    working_directory: ~/INSIGHTZZ/code/workers/inspection
+    stop_timeout_seconds: 20         # SIGTERM: finish the current frame, exit 0
+    health:
+      type: queue_lag                # oldest INF frame waiting (D-020)
+      path: ~/INSIGHTZZ/data/frames/CAM1/INF
+      max_oldest_age_seconds: 120
+      require_heartbeat: false       # true after F25 (heartbeat publishing checked on site)
+      max_age_seconds: 60            # heartbeat limit, used once require_heartbeat is true
+      startup_grace_seconds: 180     # model loading
+
+  - id: inspection_right
+    type: inspection
+    follows: frame_capture_cam2
+    restart_cost: high
+    command: python3 inspection.py
+    working_directory: ~/INSIGHTZZ/code/workers/inspection
+    stop_timeout_seconds: 20
+    health:
+      type: queue_lag
+      path: ~/INSIGHTZZ/data/frames/CAM2/INF
+      max_oldest_age_seconds: 120
+      require_heartbeat: false
+      max_age_seconds: 60
+      startup_grace_seconds: 180
