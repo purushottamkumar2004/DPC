@@ -78,6 +78,7 @@ SIDE_DEFAULTS = {
                          "magnet_check_min_wheel_w": 600},                                       # L:1282
             "wheel_missing": {"min_frames": 9, "belt_stop_frames": 20,                            # L:1927-1929
                               "bbox": {"xmin": 668, "xmax": 1474, "ymin": 508, "ymax": 1278}},
+            "best_image_band_x": {"min": 400, "max": 850},   # Left had no best image; Right's band (D-076)
         },
     },
     "RIGHT": {
@@ -96,6 +97,7 @@ SIDE_DEFAULTS = {
                          "magnet_check_min_wheel_w": 600},                                       # R:1351
             "wheel_missing": {"min_frames": 9, "belt_stop_frames": 20,                            # R:2317-2319
                               "bbox": {"xmin": 668, "xmax": 1474, "ymin": 508, "ymax": 1278}},
+            "best_image_band_x": {"min": 400, "max": 850},   # R:2826-2835 (D-076)
         },
     },
 }
@@ -292,6 +294,13 @@ class WheelMissingSettings:
 
 
 @dataclass(frozen=True)
+class BandX:
+    """x range of the wheel centre for the best image per wheel (D-073 D4, D-076)."""
+    min: int
+    max: int
+
+
+@dataclass(frozen=True)
 class Tracker:
     new_wheel_jump_px: int
     new_plate_jump_px: int
@@ -299,6 +308,7 @@ class Tracker:
     clip_confirm: ClipConfirm
     skidding: Skidding
     wheel_missing: WheelMissingSettings
+    best_image_band_x: BandX
 
 
 @dataclass(frozen=True)
@@ -870,6 +880,14 @@ def _read_tracker(parent: _Section, default: Dict[str, Any]) -> Tracker:
         m.problem("min_frames", f"must be at most belt_stop_frames ({missing.belt_stop_frames})")
     m.finish()
 
+    b = t.section("best_image_band_x", required=False)
+    db_ = default["best_image_band_x"]
+    band = BandX(min=b.integer("min", required=False, default=db_["min"], low=0, high=100000),
+                 max=b.integer("max", required=False, default=db_["max"], low=0, high=100000))
+    if None not in (band.min, band.max) and band.min >= band.max:
+        b.problem("", "needs min < max")
+    b.finish()
+
     tracker = Tracker(
         new_wheel_jump_px=t.integer("new_wheel_jump_px", required=False, default=default["new_wheel_jump_px"],
                                     low=1, high=100000),
@@ -877,7 +895,7 @@ def _read_tracker(parent: _Section, default: Dict[str, Any]) -> Tracker:
                                     low=1, high=100000),
         high_dusty_suppress_px=t.integer("high_dusty_suppress_px", required=False,
                                          default=default["high_dusty_suppress_px"], low=0, high=100000),
-        clip_confirm=clip, skidding=skid, wheel_missing=missing)
+        clip_confirm=clip, skidding=skid, wheel_missing=missing, best_image_band_x=band)
     t.finish()
     return tracker
 
