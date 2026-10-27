@@ -52,8 +52,8 @@ MQTT_TIMEOUT_S = 3
 GIT_TIMEOUT_S = 2
 PING_TIMEOUT_S = 1           # per camera with an ip (D-064); 2 cameras keep the total under 30 s
 
-# Folders under data/ that are not per camera or per side (CONTRACTS 4.1). wheel_status is left
-# out on purpose: its subfolders are still "assumed" (Q13).
+# Folders under data/ that are not per camera or per side (CONTRACTS 4.1). Of wheel_status only
+# IMAGES/<SIDE> is checked (D-075); its other subfolders are still "assumed" (Q13).
 DATA_TOP_DIRS = ("bolt_data", "state", "models")
 # The frame hand-off uses hard links and renames, so these must share one filesystem (D-031).
 SAME_FS_SUBDIRS = ("_tmp", "INF", "UI", "live", "RAW_IMAGES")
@@ -121,6 +121,7 @@ def expected_dirs(cfg: SiteConfig) -> List[str]:
         dirs += [p.image_dir(kind, cam.side) for kind in IMAGE_KINDS]
     dirs += [os.path.join(p.data, d) for d in DATA_TOP_DIRS]
     dirs += [os.path.join(p.data, "bolt_data", cam.side) for cam in cfg.cameras]     # D-072
+    dirs += [os.path.join(p.data, "wheel_status", "IMAGES", cam.side) for cam in cfg.cameras]   # D-075
     return dirs
 
 

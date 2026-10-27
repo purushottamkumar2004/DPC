@@ -93,6 +93,7 @@ inspection:
   #                  offset_px: 80, min_vertical_px: 8, vertical_factor: 0.5, same_wheel_scale: 0.5,
   #                  min_magnet_travel_px: 9, wheel_xmin: 20, wheel_xmax: 2025, magnet_check_min_wheel_w: 600}
   #       wheel_missing: {min_frames: 9, belt_stop_frames: 20, bbox: {xmin: 668, xmax: 1474, ymin: 508, ymax: 1278}}
+  #       best_image_band_x: {min: 400, max: 850}   # wheel centre x for the best image per wheel (both sides)
   auto_roi: {mode: observe, learn_images: 30}   # off | observe | filter (D-054)
 
 plc:

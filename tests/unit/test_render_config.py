@@ -147,8 +147,10 @@ class Tadipatri(Site):                                               # P4 done w
         for worker in WORKERS:
             text = json.dumps(self.load(worker))
             self.assertNotIn(GRAPH_SECRET, text)                     # no worker here uses Graph
-            for section in ("graph", "mail", "cleanup", "transfer", "mqtt"):
+            for section in ("graph", "mail", "cleanup", "transfer"):
                 self.assertNotIn(f'"{section}"', text)
+            if worker.startswith("frame_capture"):
+                self.assertNotIn('"mqtt"', text)                     # only inspection gets the broker (D-076)
 
     def test_object_sizes_per_side(self):
         self.data["inspection"]["sides"]["RIGHT"]["object_sizes"]["wheel_w"] = 600
@@ -295,6 +297,53 @@ class P7Prep(Site):                                                  # D-072, D-
         changes = self.render()
         self.assertEqual((changes["frame_capture_cam1"], changes["inspection_left"]), ("written", "unchanged"))
         self.assertEqual(self.load("frame_capture_cam2")["health_interval_s"], 120)
+
+
+class F25(Site):                                                     # D-076: mqtt block and best-image band
+    def test_mqtt_block_without_login(self):                         # done when: Tadipatri renders both keys
+        self.render()
+        for worker in ("inspection_left", "inspection_right"):
+            self.assertEqual(self.load(worker)["mqtt"], {"host": "localhost", "port": 1883, "user": None, "password": None})
+
+    def test_mqtt_block_with_login(self):
+        self.data["mqtt"].update(user="dpc_broker", password="s3cret-mqtt-Kp3")
+        self.write()
+        self.render()
+        self.assertEqual(self.load("inspection_right")["mqtt"],
+                         {"host": "localhost", "port": 1883, "user": "dpc_broker", "password": "s3cret-mqtt-Kp3"})
+        self.assertNotIn("s3cret-mqtt", json.dumps(self.load("frame_capture_cam1")))
+
+    def test_best_image_band_default_and_per_side(self):
+        self.render()
+        for worker in ("inspection_left", "inspection_right"):
+            self.assertEqual(self.load(worker)["tracker"]["best_image_band_x"], {"min": 400, "max": 850})
+        self.data["inspection"]["sides"]["LEFT"]["tracker"] = {"best_image_band_x": {"max": 900}}
+        self.write()
+        changes = self.render()
+        self.assertEqual((changes["inspection_left"], changes["inspection_right"]), ("written", "unchanged"))
+        self.assertEqual(self.load("inspection_left")["tracker"]["best_image_band_x"], {"min": 400, "max": 900})
+
+    def test_bad_band(self):
+        self.data["inspection"]["sides"]["RIGHT"]["tracker"] = {"best_image_band_x": {"min": 900, "max": 850}}
+        self.write()
+        with self.assertRaises(SiteConfigError) as ctx:
+            rd.render(self.path)
+        self.assertIn("inspection.sides.RIGHT.tracker.best_image_band_x: needs min < max", ctx.exception.problems)
+
+    def test_inspection_program_reads_the_rendered_file(self):
+        """The shared inspection program (workers/inspection/settings.py) accepts what is rendered,
+        heartbeat included (read-only use of the worker's parser)."""
+        sys.path.insert(0, os.path.join(REPO_ROOT, "workers", "inspection"))
+        try:
+            import settings as inspection_settings
+        finally:
+            sys.path.pop(0)
+        self.data["mqtt"].update(user="dpc_broker", password="s3cret-mqtt-Kp3")
+        self.write()
+        self.render()
+        for worker in ("inspection_left", "inspection_right"):
+            loaded = inspection_settings.load_settings(os.path.join(self.rendered, f"{worker}.json"))
+            self.assertEqual((loaded.mqtt.host, loaded.mqtt.port, loaded.mqtt.user), ("localhost", 1883, "dpc_broker"))
 
 
 if __name__ == "__main__":

@@ -499,6 +499,7 @@ class P7Prep(_TempDirTest):                                           # D-072, D
                               t.skidding.magnet_check_min_wheel_w), (3, 0.7, 80, 8, 0.5, 0.5, 9, 20, 2025, 600))
             self.assertEqual((t.wheel_missing.min_frames, t.wheel_missing.belt_stop_frames), (9, 20))
             self.assertEqual(t.wheel_missing.bbox, sc.Window(668, 1474, 508, 1278))
+            self.assertEqual(t.best_image_band_x, sc.BandX(400, 850))         # D-076, both sides
 
     def test_site_defaults(self):
         cfg = self.load(self.bare())

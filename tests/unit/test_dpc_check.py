@@ -179,7 +179,8 @@ class Failures(Site):                                                # done when
         expected = dc.expected_dirs(self.cfg)
         data = os.path.join(self.root, "data")
         for side in ("LEFT", "RIGHT"):
-            for folder in (f"images/MAGNET/{side}", f"images/TEMP/{side}", f"bolt_data/{side}"):
+            for folder in (f"images/MAGNET/{side}", f"images/TEMP/{side}", f"bolt_data/{side}",
+                           f"wheel_status/IMAGES/{side}"):                     # F23, D-075
                 self.assertIn(os.path.join(data, folder), expected)
         shutil.rmtree(os.path.join(data, "images", "MAGNET", "LEFT"))
         results, _ = self.run_all()
