@@ -31,6 +31,7 @@ sys.path.insert(0, BASE_DIR)
 from communication.mqtt_client import MqttClient, now_iso      # noqa: E402
 from core.config import ConfigError, ConfigurationManager, parse_quiet_window  # noqa: E402
 from core.monitor import Monitor                                # noqa: E402
+from core.last_error import LastErrorReader                     # noqa: E402
 from core.process_manager import ProcessManager, Worker, WorkerStatus  # noqa: E402
 from core.recovery_manager import RecoveryManager               # noqa: E402
 from core.runtime_manager import RuntimeManager                 # noqa: E402
@@ -40,7 +41,7 @@ from health.basic_health_check import build_health_check       # noqa: E402
 from health.heartbeat import parse_heartbeat                    # noqa: E402
 
 log = logging.getLogger("supervisor")
-DEFAULT_CONFIG = os.path.join(BASE_DIR, "config", "workers.yaml")
+EXAMPLE_CONFIG = os.path.join(BASE_DIR, "config", "workers.yaml")    # dummy workers, for development
 
 
 # ======================================================================
@@ -63,7 +64,9 @@ class Supervisor:
         self.process_manager = ProcessManager(self.settings.log_dir, extra_env=mqtt_env,
                                               site_env=self.site_env)
         self.runtime = RuntimeManager(self.settings.runtime_root)
-        self.recovery = RecoveryManager(self.process_manager, self.mqtt)
+        # F21: <root>/run/<id>.last_error.json; runtime.root is <root>/run on a site (CONTRACTS 4.1)
+        self.recovery = RecoveryManager(self.process_manager, self.mqtt,
+                                        LastErrorReader(self.settings.runtime_root, self.site_env.secret_values))
 
         # one Worker object per enabled worker, in START order (start_after respected);
         # shutdown walks the same dict backwards
@@ -484,6 +487,27 @@ def _change_summary(changes: dict) -> str:
     return ", ".join(f"{statuses.count(st)} {st}" for st in order if st in statuses)
 
 
+def find_workers_file(site_env: SiteEnv):
+    """F19: the workers file when -c is not given.
+
+    On a site it is <root>/config/workers.yaml, the folder that also holds site.yaml
+    (--site-config, then $DPC_SITE_CONFIG, then ~/INSIGHTZZ/config/site.yaml; CONTRACTS 4.1).
+    The pid and reload files are then found through that file's runtime.root (<root>/run).
+    The example with dummy workers is used only on a machine without that folder
+    (development); a site folder without workers.yaml is an error, never the example.
+    Returns (path, None) or (None, error text)."""
+    site_yaml = site_env.site_yaml_path() or os.path.expanduser("~/INSIGHTZZ/config/site.yaml")
+    config_dir = os.path.dirname(site_yaml)
+    site_file = os.path.join(config_dir, "workers.yaml")
+    if os.path.isfile(site_file):
+        return site_file, None
+    if os.path.isdir(config_dir):
+        return None, (f"no workers.yaml in {config_dir}. Copy one there (for two Basler cameras: "
+                      f"supervisor/config/workers.basler-2cam.yaml) or pass -c <file>.")
+    print(f"(no {config_dir} on this machine: using the example {EXAMPLE_CONFIG})", file=sys.stderr)
+    return EXAMPLE_CONFIG, None
+
+
 def _cli_mqtt(config, site_env):
     """An MQTT client for the command line, with the broker login from site.yaml (F11)."""
     try:
@@ -533,22 +557,31 @@ def main():
     parser = argparse.ArgumentParser(description="DPC Supervisor")
     parser.add_argument("action", choices=["run", "check-config", "reload", "status", "start", "stop", "restart"])
     parser.add_argument("worker_id", nargs="?", help="needed for start/stop/restart")
-    parser.add_argument("-c", "--config", default=DEFAULT_CONFIG)
+    parser.add_argument("-c", "--config", default=None,
+                        help="workers.yaml (default: <root>/config/workers.yaml next to site.yaml)")
     parser.add_argument("--site-config", default=None,
                         help="site.yaml (default: $DPC_SITE_CONFIG, then ~/INSIGHTZZ/config/site.yaml)")
     parser.add_argument("--confirm", action="store_true",
                         help="reload: also restart restart_cost: high workers now (inspection loses its wheel state)")
     args = parser.parse_args()
 
-    config = ConfigurationManager(args.config, BASE_DIR)
+    site_env = SiteEnv(args.site_config)
+    workers_file = args.config
+    if workers_file is None:
+        workers_file, problem = find_workers_file(site_env)
+        if problem:
+            print(f"Configuration error: {problem}")
+            return 2
+
+    config = ConfigurationManager(workers_file, BASE_DIR)
     try:
         config.load()
     except ConfigError as e:
         print(f"Configuration error: {e}")
         return 2
 
-    site_env = SiteEnv(args.site_config)
     if args.action == "check-config":
+        print(f"OK - {workers_file}")
         print(f"OK - {len(config.workers)} enabled worker(s) in start order: "
               f"{', '.join(w.id for w in config.start_order)}")
         users = [w.id for w in config.workers if w.env_from_site]

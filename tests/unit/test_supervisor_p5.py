@@ -120,8 +120,20 @@ class Reload(SiteYamlTest):
         return {w.id: w.pid for w in self.sup.workers.values()}
 
     def env_of(self, worker_id):
-        with open(self.path(f"env_{worker_id}.txt")) as f:
-            return dict(line.split("=", 1) for line in f.read().splitlines())
+        """The DPC_* variables the dummy wrote. F24: a RUNNING worker may still be writing the
+        file, so wait until it is complete (DPC_WORKER_ID sorts last of the names written)."""
+        path = self.path(f"env_{worker_id}.txt")
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            try:
+                with open(path) as f:
+                    text = f.read()
+            except FileNotFoundError:
+                text = ""
+            if "DPC_WORKER_ID=" in text and text.endswith("\n"):
+                return dict(line.split("=", 1) for line in text.splitlines())
+            time.sleep(0.05)
+        self.fail(f"{path} not complete within 10 s")
 
     def test_render_at_start_and_dpc_worker_config_per_worker(self):
         self.four_workers()
@@ -213,9 +225,10 @@ class Reload(SiteYamlTest):
         self.write_site_yaml(edit=set_exposure("CAM1", 1800), mode=0o644)
         self.build([dummy("frame_capture_cam1", f"--dump-env {self.path('env_cam1.txt')}")], site_env=SiteEnv(path))
         self.sup.start()
-        self.run_until(lambda: os.path.exists(self.path("env_cam1.txt")), message="no start")
-        with open(self.path("env_cam1.txt")) as f:
-            self.assertIn(f"DPC_WORKER_CONFIG={self.rendered('frame_capture_cam1')}", f.read())
+        self.run_until(lambda: "DPC_WORKER_ID=" in (self.read(self.path("env_cam1.txt"))
+                                                     if os.path.exists(self.path("env_cam1.txt")) else ""),
+                       message="no start")
+        self.assertIn(f"DPC_WORKER_CONFIG={self.rendered('frame_capture_cam1')}", self.read(self.path("env_cam1.txt")))
         with open(self.rendered("frame_capture_cam1")) as f:
             self.assertEqual(json.load(f)["camera"]["exposure_us"], 1500, "the old file stays")
         self.assertEqual(self.mqtt.supervisor_events()[0]["event"], "config_render_failed")

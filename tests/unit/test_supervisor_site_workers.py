@@ -32,8 +32,8 @@ INSTALLER = os.path.join(SUPERVISOR_DIR, "install_service.sh")
 class EnvHomeExpansion(unittest.TestCase):
     def test_only_a_leading_tilde_is_expanded(self):
         home = os.path.expanduser("~")
-        self.assertEqual(_expand_home("~/INSIGHTZZ/config/BASLER_CONFIG1.xml"),
-                         os.path.join(home, "INSIGHTZZ/config/BASLER_CONFIG1.xml"))
+        self.assertEqual(_expand_home("~/INSIGHTZZ/data/frames/CAM1/INF"),
+                         os.path.join(home, "INSIGHTZZ/data/frames/CAM1/INF"))
         self.assertEqual(_expand_home("~"), home)
         for unchanged in ("~other/x", "a~/b", "plain", "", "$HOME/x", "100~/s"):
             self.assertEqual(_expand_home(unchanged), unchanged)
@@ -47,12 +47,13 @@ class TwoCameraFile(unittest.TestCase):
         self.home = os.path.expanduser("~")
 
     def test_worker_ids_from_d033_and_order(self):
-        self.assertEqual([w.id for w in self.manager.start_order], ["frame_capture_cam1", "frame_capture_cam2"])
+        self.assertEqual([w.id for w in self.manager.start_order],
+                         ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right"])
 
-    def test_each_camera_has_its_own_xml_and_live_file(self):
+    def test_each_camera_has_its_own_live_file_and_no_xml(self):
         for n in (1, 2):
             w = self.workers[f"frame_capture_cam{n}"]
-            self.assertEqual(w.env["BASLER_CONFIG"], os.path.join(self.home, f"INSIGHTZZ/config/BASLER_CONFIG{n}.xml"))
+            self.assertEqual(w.env, {}, "F20: settings come from DPC_WORKER_CONFIG, not an XML")
             self.assertEqual(w.health.type, "file_activity")
             self.assertEqual(w.health.path, [os.path.join(self.home, f"INSIGHTZZ/data/frames/CAM{n}/live/IMG_1.jpg")])
             self.assertEqual(w.working_directory, os.path.join(self.home, "INSIGHTZZ/code/workers/frame_capture_basler"))
@@ -64,18 +65,43 @@ class TwoCameraFile(unittest.TestCase):
         self.assertEqual(s.runtime_root, os.path.join(self.home, "INSIGHTZZ/run"))
         with open(SITE_FILE) as f:
             text = f.read()
-        for forbidden in ("/home/", "tadipatri4", "/media/", "password:", "username:"):
+        for forbidden in ("/home/", "tadipatri4", "/media/", "password:", "username:", "XML", "xml",
+                          "BASLER_CONFIG", "LeftAlgorithm", "left_algorithm"):
             self.assertNotIn(forbidden, text)
-        self.assertNotRegex(text, r"\b2482\d{4}\b", "camera serials belong in the Basler XML, not here")
+        self.assertNotRegex(text, r"\b2482\d{4}\b", "camera serials belong in site.yaml, not here")
 
     def test_numbers_meet_the_site_targets(self):
         m = self.manager.settings.monitoring
-        for w in self.workers.values():
+        for w in (self.workers["frame_capture_cam1"], self.workers["frame_capture_cam2"]):
             worst_restart = m.check_interval_seconds + w.restart.retry_delay_seconds + m.check_interval_seconds
             self.assertLess(worst_restart, 10, "STATUS 4b: kill -9 -> restart within 10 s")
             self.assertGreater(w.health.max_age_seconds, 30, "the capture's own reopen (~30 s) goes first")
             self.assertGreaterEqual(w.restart.max_retries, 20, "a long cable pull must not end in FAILED quickly")
             self.assertLess(w.stop_timeout_seconds * 2, 90, "both stops fit in TimeoutStopSec")
+
+
+class InspectionWorkersF26(unittest.TestCase):
+    """STATUS F26: both sides exactly as listed there."""
+
+    def setUp(self):
+        manager = ConfigurationManager(SITE_FILE, SUPERVISOR_DIR)
+        manager.load()
+        self.workers = {w.id: w for w in manager.workers}
+        self.home = os.path.expanduser("~")
+
+    def test_both_sides(self):
+        for side, cam in (("left", 1), ("right", 2)):
+            w = self.workers[f"inspection_{side}"]
+            self.assertEqual(w.command, "python3 inspection.py")
+            self.assertEqual(w.working_directory, os.path.join(self.home, "INSIGHTZZ/code/workers/inspection"))
+            self.assertEqual((w.restart_cost, w.follows, w.mode), ("high", f"frame_capture_cam{cam}", "service"))
+            self.assertEqual(w.stop_timeout_seconds, 20)
+            h = w.health
+            self.assertEqual(h.type, "queue_lag")
+            self.assertEqual(h.path, [os.path.join(self.home, f"INSIGHTZZ/data/frames/CAM{cam}/INF")])
+            self.assertEqual((h.max_oldest_age_seconds, h.require_heartbeat, h.max_age_seconds,
+                              h.startup_grace_seconds), (120, False, 60, 180))
+            self.assertEqual(w.env, {})
 
 
 class SiteNumbersWithDummyCaptures(SupervisorTest):
@@ -85,7 +111,8 @@ class SiteNumbersWithDummyCaptures(SupervisorTest):
         with open(SITE_FILE) as f:
             data = yaml.safe_load(f)
         workers = []
-        for n, w in enumerate(data["workers"], start=1):
+        captures = [w for w in data["workers"] if w["id"].startswith("frame_capture")]
+        for n, w in enumerate(captures, start=1):
             live = self.path(f"live{n}.jpg")
             w = dict(w, command=f"{DUMMY} --interval 0.25 --heartbeat-file {live} {args}",
                      working_directory=self.tmp, env={})

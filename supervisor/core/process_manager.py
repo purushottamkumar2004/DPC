@@ -62,6 +62,9 @@ class Worker:
     # ---- P5 ----
     paused_by: Optional[str] = None        # D-068: stopped because the worker it follows stopped
     config_pending: bool = False           # 6f: rendered config changed, restart still to do (restart_cost high)
+    # ---- F21 ----
+    last_error: Optional[dict] = None      # newest last_error.json read for this worker (kept until a newer one)
+    restart_error: Optional[dict] = None   # the error that caused the restart now waiting (for worker_restarted)
 
     @property
     def id(self) -> str:
@@ -223,6 +226,8 @@ class ProcessManager:
             "follows": worker.config.follows,
             "paused_by": worker.paused_by,
             "config_pending": worker.config_pending,
+            # F21, append-only
+            "last_error": worker.last_error,
         }
 
     # ------------------------------------------------------------------

@@ -71,6 +71,18 @@ class SiteEnv:
         config = self.load()
         return legacy_env_vars(config)
 
+    SECRET_SUFFIXES = ("PASS", "PASSWORD", "SECRET")
+
+    def secret_values(self) -> List[str]:
+        """The secret values in site.yaml (DB, mail, MQTT passwords and secrets), so a text from
+        a worker can be scrubbed before it is logged or published. [] when site.yaml is not
+        readable (then there is nothing of it to leak)."""
+        try:
+            variables = self.variables()
+        except SiteEnvError:
+            return []
+        return [v for name, v in variables.items() if v and name.endswith(self.SECRET_SUFFIXES)]
+
     def mqtt_login(self) -> Tuple[Optional[str], Optional[str]]:
         """(user, password) for the broker, (None, None) when site.yaml gives no login. Raises SiteEnvError."""
         mqtt = self.load().mqtt
