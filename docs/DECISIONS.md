@@ -241,6 +241,9 @@ Accepted as built: `live_wheel_counter_side` defaults to RIGHT when a RIGHT came
 ## D-077 | 2026-10 | Accepted | The plate tracker follows the same motion direction as the wheel counter (B5)
 Developer decision 2026-10-26 (STATUS D10 = b). The plate and the wheels move together in one direction on each camera, so the plate tracker uses the per-side `motion` key (`rtl` | `ltr`, D-072) exactly like the wheel counter: a plate moving further in that direction is the same plate, and the cycle resets once per physical plate. Fixes B5 on the left side (repeated resets of the wheel counter and false `Batch_Wheels_Missing` defects at wheel 1); the right side is unchanged. To be confirmed on real frames in P7-replay.
 
+## D-078 | 2026-10 | Accepted | Very new INF frames: keep today's behaviour (D11 = a)
+Developer decision 2026-10-26. An `INF` image younger than 0.03 s is still deleted as invalid (`MIN_FILE_AGE_S`, inspection.py, from L:507), as in the old code. Accepted effect: with the atomic hand-off (D-031) an occasional complete frame can be dropped.
+
 ## Open questions
 - Q21: Should skidding, wheel-missing and cycle-restart findings create DB rows and mails? Today they only save images, so nobody is alerted (INSPECTION.md 8.1). (STATUS D9)
 - Q20 (answered 2026-10-22): Tadipatri PLC IP is 192.168.1.5; the 192.168.1.4 in the legacy PLC test script is wrong.

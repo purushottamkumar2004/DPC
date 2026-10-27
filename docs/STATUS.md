@@ -87,7 +87,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-22 (full clean
 | # | Question | Options |
 |---|---|---|
 | D10 (B5) | DECIDED (D-077): the plate tracker follows `motion` like the wheel counter | - |
-| D11 | A frame younger than 0.03 s is deleted as "invalid" (old behaviour, L:507). With the atomic hand-off (D-031) this can throw away a fresh, valid frame | (a) keep as is; (b) skip it now and take it on the next loop (no delete) |
+| D11 | DECIDED (D-078): keep as is (a frame younger than 0.03 s is deleted) | - |
 
 ## Automation cases (from the 2026-10-13 review)
 | # | Case | What the system will do | Covered by |
