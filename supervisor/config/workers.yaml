@@ -110,8 +110,7 @@ workers:
   - id: cleanup
     type: cleanup
     enabled: false
-    env_from_site: true          # delete_script.py reads DPC_DB_*, DPC_MS_*, DPC_DISK_REPORT_TO
-    command: python3 delete_script.py
+    command: python3 cleanup.py  # settings from rendered/cleanup.json (P9); no env_from_site
     working_directory: ~/INSIGHTZZ/code/workers/cleanup
 
   - id: light_reassert           # example periodic job (a PLC reboot leaves the light off, D-024)
