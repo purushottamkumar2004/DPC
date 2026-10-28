@@ -117,3 +117,18 @@ workers:
       require_heartbeat: false
       max_age_seconds: 60
       startup_grace_seconds: 180
+
+  # ---- cleanup (P9, D-082): keeps <root>/data from filling the disk ----
+  # Settings only from rendered/cleanup.json (DPC_WORKER_CONFIG). A config error or a crash
+  # writes <root>/run/cleanup.last_error.json and exits 1 (shown in worker_failure, F21);
+  # SIGTERM finishes the current pass step and exits 0.
+  - id: cleanup
+    type: cleanup
+    mode: service
+    restart_cost: normal
+    command: python3 cleanup.py
+    working_directory: ~/INSIGHTZZ/code/workers/cleanup
+    stop_signal: SIGTERM
+    stop_timeout_seconds: 15
+    health:
+      type: process

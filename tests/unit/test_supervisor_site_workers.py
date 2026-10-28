@@ -48,7 +48,7 @@ class TwoCameraFile(unittest.TestCase):
 
     def test_worker_ids_from_d033_and_order(self):
         self.assertEqual([w.id for w in self.manager.start_order],
-                         ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right"])
+                         ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right", "cleanup"])
 
     def test_each_camera_has_its_own_live_file_and_no_xml(self):
         for n in (1, 2):
@@ -102,6 +102,22 @@ class InspectionWorkersF26(unittest.TestCase):
             self.assertEqual((h.max_oldest_age_seconds, h.require_heartbeat, h.max_age_seconds,
                               h.startup_grace_seconds), (120, False, 60, 180))
             self.assertEqual(w.env, {})
+
+
+class CleanupWorkerF30(unittest.TestCase):
+    """STATUS F30: the cleanup worker exactly as listed there (P9, D-082)."""
+
+    def test_cleanup(self):
+        manager = ConfigurationManager(SITE_FILE, SUPERVISOR_DIR)
+        manager.load()
+        w = {x.id: x for x in manager.workers}["cleanup"]
+        self.assertEqual((w.type, w.mode, w.restart_cost), ("cleanup", "service", "normal"))
+        self.assertEqual(w.command, "python3 cleanup.py")
+        self.assertEqual(w.working_directory, os.path.join(os.path.expanduser("~"), "INSIGHTZZ/code/workers/cleanup"))
+        self.assertEqual((w.stop_signal, w.stop_timeout_seconds), ("SIGTERM", 15))
+        self.assertEqual(w.health.type, "process")
+        self.assertFalse(w.env_from_site, "cleanup reads cleanup.json, not the DPC_* env bridge")
+        self.assertEqual((w.env, w.start_after, w.follows), ({}, [], None))
 
 
 class SiteNumbersWithDummyCaptures(SupervisorTest):
