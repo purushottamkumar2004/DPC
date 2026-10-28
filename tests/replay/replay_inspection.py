@@ -24,8 +24,10 @@ the new run and the new run has none extra. RIGHT: the old program's full-clip i
 commented out (R:843); D-073 D6 switches it on, so the scratch copy of the old Right gets that
 one line enabled (nothing else changes). Without it the old Right would never find its own
 earlier defects in the 24 h dedupe, and its clip confirmations would run differently.
-New defect types (WheelMissing, Wheel_Skidding, Batch_Wheels_Missing) are listed, not compared
-(the old program never inserted them).
+LEFT: D-077 replaces the old Left plate rule (B5); the scratch copy of the old Left gets the
+D-077 rule (same as its wheel counter, rtl), because B5's extra cycle resets can shift the
+wheel numbers of every later defect. New defect types (WheelMissing, Wheel_Skidding,
+Batch_Wheels_Missing) are listed, not compared (the old program never inserted them).
 """
 
 import argparse
@@ -53,6 +55,27 @@ NEW_TYPES = ("WheelMissing", "Wheel_Skidding", "Batch_Wheels_Missing")
 LEGACY_PREFIX = "/home/ddpc_maihar/INSIGHTZZ/"
 OLD_FILE = {"LEFT": "LeftAlgorithm.py", "RIGHT": "RightAlgorithm.py"}
 OLD_XML = {"LEFT": "leftConfig", "RIGHT": "rightConfig"}
+# D-077 in the old Left: the plate follows the Left wheel rule (rtl). Defined again right before
+# the start of the program, so mainFunction uses it (module-level names are looked up at call time).
+LEFT_PLATE_D077 = '''
+
+def is_new_plate_detected(logger, plates_list, image_name, PLATE_STATE, NEW_PLATE_MOVEMENT_X_THRESHOLD=150):
+    """D-077 (replay only): leftmost xmin, low watermark, like checkWheelCounter on this side."""
+    if not plates_list:
+        return False
+    xmin = min(p[3] for p in plates_list)
+    last = PLATE_STATE.get("last_plate_xmin")
+    if last is None or xmin > last + NEW_PLATE_MOVEMENT_X_THRESHOLD:
+        PLATE_STATE["last_plate_xmin"] = xmin
+        logger.info(f"NEW PLATE DETECTED (D-077 replay rule): xmin {xmin}. Frame: {image_name}")
+        return True
+    if xmin < last:
+        PLATE_STATE["last_plate_xmin"] = xmin
+    return False
+
+'''
+MAIN_GUARD = "if __name__ == '__main__':"
+
 # D6 in the old Right: its full-clip insert (R:843) is the commented line right before the clear.
 RIGHT_INSERT_OFF = re.compile(r"# (insertDefectData\(logger, cur, dbConn, defectName, fileName, wheel_counter, "
                               r"xmin, xmax, ymin, ymax\))\n(\s*)bucket_clip_dict\.clear\(\)")
@@ -152,6 +175,10 @@ def run_old(args, cfg, package, scratch, frames):
                           check=True, capture_output=True, text=True).stdout
     os.makedirs(base, exist_ok=True)
     code = code.replace(LEGACY_PREFIX, legacy)
+    if side == "LEFT":
+        if code.count(MAIN_GUARD) != 1:
+            raise SystemExit("old LeftAlgorithm.py: main guard not found once; cannot apply D-077")
+        code = code.replace(MAIN_GUARD, LEFT_PLATE_D077 + MAIN_GUARD)
     if side == "RIGHT":
         code, n = RIGHT_INSERT_OFF.subn(r"\1\n\2bucket_clip_dict.clear()", code)
         if n != 1:
@@ -182,7 +209,8 @@ def run_old(args, cfg, package, scratch, frames):
     tree.write(os.path.join(base, f"{OLD_XML[side]}.xml"))
     os.chmod(os.path.join(base, f"{OLD_XML[side]}.xml"), 0o600)
 
-    log(f"OLD run: {OLD_FILE[side]} from {args.old_ref}")
+    log(f"OLD run: {OLD_FILE[side]} from {args.old_ref}, with "
+        f"{'D-077 (plate follows motion)' if side == 'LEFT' else 'D6 (full-clip insert on)'} applied")
     run_program([sys.executable, OLD_FILE[side]], base, dict(os.environ),
                 os.path.join(folders["LOGS"], OLD_FILE[side][:-2] + "log"), inf, frames,
                 "No files found in directory")

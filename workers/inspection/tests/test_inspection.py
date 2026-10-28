@@ -76,6 +76,9 @@ class SettingsTest(Base):
         self.assertEqual((l.expected_cycle_total, l.total_wheel_count), (190, 190))
         self.assertEqual(l.tracker.wheel_missing.min_frames, 9)
         self.assertEqual(l.daily_report_time, datetime.time(17, 58))
+        self.assertEqual((l.tracker.best_image_band_x, r.tracker.best_image_band_x),
+                         (S.Band(400, 850), S.Band(400, 850)))
+        self.assertIsNotNone(l.mqtt)
         self.assertTrue(l.paths.defect_raw.endswith("data/images/RAW/LEFT"))
         self.assertTrue(r.paths.raw.endswith("data/frames/CAM2/RAW_IMAGES"))
 
@@ -123,21 +126,23 @@ class WheelCounterTest(unittest.TestCase):
 
 
 class PlateTrackerTest(unittest.TestCase):
-    def test_first_then_same_then_new(self):
-        p = PlateTracker(150, LOG)
+    def test_ltr_first_then_same_then_new(self):
+        """Right (ltr): unchanged rule (L:2208-2243)."""
+        p = PlateTracker("ltr", 150, LOG)
         self.assertTrue(p.is_new_plate([det("plate", 100, 0, 400, 100)], "a"))
         self.assertFalse(p.is_new_plate([det("plate", 200, 0, 500, 100)], "b"))
         self.assertFalse(p.is_new_plate([det("plate", 300, 0, 450, 100)], "c"))
         self.assertTrue(p.is_new_plate([det("plate", 0, 0, 300, 100)], "d"))
         self.assertFalse(p.is_new_plate([], "e"))
 
-    def test_b5_kept_plate_moving_left_retriggers(self):
-        """B5 (INSPECTION.md): the tracker assumes left-to-right travel. A plate moving left
-        (the Left camera) is reported again every new_plate_jump_px of travel. Kept as it is
-        (P7, developer instruction: B1-B19 stay); this test fails when it is changed."""
-        p = PlateTracker(150, LOG)
-        hits = [p.is_new_plate([det("plate", x - 300, 0, x, 100)], "f") for x in range(1500, 900, -60)]
-        self.assertEqual([i for i, h in enumerate(hits) if h], [0, 3, 6, 9])
+    def test_plate_crossing_is_new_once_in_its_direction(self):
+        """D-077: one plate crossing the camera over many frames is one new plate, on both sides."""
+        for motion, xmins in (("rtl", range(1500, 0, -60)), ("ltr", range(0, 1500, 60))):
+            p = PlateTracker(motion, 150, LOG)
+            hits = [p.is_new_plate([det("plate", x, 0, x + 300, 100)], "f") for x in xmins]
+            self.assertEqual([i for i, h in enumerate(hits) if h], [0], motion)
+            back = 1500 if motion == "rtl" else 0           # the next plate enters again
+            self.assertTrue(p.is_new_plate([det("plate", back, 0, back + 300, 100)], "next"), motion)
 
 
 # ----------------------------------------------------------------------
@@ -281,6 +286,21 @@ class DefectStoreTest(Base):
 
 
 class WheelReportTest(Base):
+    def test_band_comes_from_settings(self):
+        import dataclasses
+        narrow = dataclasses.replace(self.right, tracker=dataclasses.replace(
+            self.right.tracker, best_image_band_x=S.Band(700, 800)))
+        report = WheelReport(narrow, LOG)
+        first = os.path.join(self.right.paths.raw, frame_name(40))
+        second = os.path.join(self.right.paths.raw, frame_name(41))
+        for path in (first, second):
+            open(path, "wb").close()
+        report.update(det("wheel", 400, 0, 900, 500), 5, first)            # new wheel: always taken
+        report.update(det("wheel", 400, 0, 900, 500), 5, second)           # centre 650: outside 700..800
+        self.assertEqual(report.best[5]["image_path"], first)
+        report.update(det("wheel", 500, 0, 1000, 500), 5, second)          # centre 750: inside
+        self.assertEqual(report.best[5]["image_path"], second)
+
     def test_daily_copy_skips_missing_images(self):
         report = WheelReport(self.right, LOG)
         present = os.path.join(self.right.paths.raw, frame_name(20))
@@ -323,6 +343,33 @@ class InspectionFlowTest(Base):
         self.assertEqual(insp.wheel_counter, 1)
         self.assertEqual(store.live, [1])                                     # Right writes it
         self.assertEqual(os.listdir(s.paths.plate), [frame_name(31)])
+
+
+    def test_left_plate_crossing_one_reset_no_false_cycle_restart(self):
+        """D-077 / B5: a plate crossing the Left camera (right to left) over 10 frames with a
+        wheel in view resets the cycle once and gives no Batch_Wheels_Missing. The next plate
+        after a few wheels gives one, with the wheels counted in between."""
+        s = self.left
+        store = FakeStore()
+        script = []
+        for k in range(10):                                   # plate + wheel moving left together
+            x = 1200 - 60 * k
+            script.append([det("plate", x, 0, x + 300, 100), det("wheel", x + 100, 100, x + 600, 600)])
+        for _ in range(3):                                    # three more wheels cross
+            script += [[det("wheel", x, 100, x + 500, 600)] for x in range(1400, 700, -100)]
+        script.append([det("plate", 1200, 0, 1500, 100)])     # the next plate enters
+        insp = I.Inspection(s, FakeDetector(script), store, HB.LoopStats())
+        resets = []
+        original = insp.plates.is_new_plate
+        insp.plates.is_new_plate = lambda plates, name: resets.append(original(plates, name)) or resets[-1]
+        for i in range(len(script)):
+            path = os.path.join(s.paths.inf, frame_name(i % 60, (i // 60) * 10))
+            cv2.imwrite(path, np.zeros((8, 8, 3), np.uint8))
+            insp.process(path)
+        self.assertEqual(sum(resets), 2)                       # first plate once, next plate once
+        restarts = [c for c in store.calls if c[0] == "Batch_Wheels_Missing"]
+        self.assertEqual(len(restarts), 1)
+        self.assertEqual(restarts[0][1], 4)                    # wheel seen with the plate + 3 more
 
 
 class ExitTest(Base):

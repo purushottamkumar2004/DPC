@@ -3,7 +3,8 @@
 Each physical object is counted once across frames by spatial continuity (a watermark of
 its edge), not by time. The direction of travel in the image is a per-side setting
 (`motion`, D-072): Left frames move right-to-left (`rtl`, L:1775-1818), Right frames
-left-to-right (`ltr`, R:1906-1935). Logic and log texts are those two functions unchanged.
+left-to-right (`ltr`, R:1906-1935). The wheel counter is those two functions unchanged; the
+plate tracker uses the same rule in the same direction (D-077).
 """
 
 import logging
@@ -70,11 +71,16 @@ class WheelCounter:
 
 
 class PlateTracker:
-    """L:2208-2243, the same on both sides: a plate is "new" the first time, or when the
-    rightmost plate xmax drops by more than the jump below the watermark. This assumes
-    left-to-right travel also on the Left camera (B5 in INSPECTION.md, kept as it is)."""
+    """Recognises each physical plate once (D-077): the same watermark logic as WheelCounter,
+    in the same per-side direction (`motion`), because plate and wheels travel together.
+      ltr (Right): rightmost xmax, high watermark; new when xmax drops more than the jump
+                   below it (unchanged, L:2208-2243 / R:2598-2634).
+      rtl (Left):  leftmost xmin, low watermark; new when xmin rises more than the jump
+                   above it. Before D-077 Left used the ltr rule too (B5): one plate moving
+                   left was reported again every `jump` px of its travel."""
 
-    def __init__(self, new_plate_jump_px: float, logger: logging.Logger):
+    def __init__(self, motion: str, new_plate_jump_px: float, logger: logging.Logger):
+        self.motion = motion
         self.jump = new_plate_jump_px
         self.log = logger
         self.watermark = None
@@ -82,15 +88,22 @@ class PlateTracker:
     def is_new_plate(self, plates, frame_name) -> bool:
         if not plates:
             return False
-        xmax = max(p[4] for p in plates)
+        if self.motion == "rtl":
+            edge = min(p[3] for p in plates)                      # leftmost xmin
+            is_jump = self.watermark is not None and edge > self.watermark + self.jump
+            moved_on = self.watermark is not None and edge < self.watermark
+        else:
+            edge = max(p[4] for p in plates)                      # rightmost xmax
+            is_jump = self.watermark is not None and edge < self.watermark - self.jump
+            moved_on = self.watermark is not None and edge > self.watermark
         if self.watermark is None:
             self.log.info(f"NEW PLATE DETECTED: First encounter. Frame: {frame_name}")
-            self.watermark = xmax
+            self.watermark = edge
             return True
-        if xmax < self.watermark - self.jump:
-            self.log.info(f"NEW PLATE DETECTED: Xmax jump ({xmax} < {self.watermark}). New vehicle confirmed.")
-            self.watermark = xmax
+        if is_jump:
+            self.log.info(f"NEW PLATE DETECTED: edge jump ({edge} vs {self.watermark}). New plate confirmed.")
+            self.watermark = edge
             return True
-        if xmax > self.watermark:
-            self.watermark = xmax
+        if moved_on:
+            self.watermark = edge                                 # same plate moved further
         return False

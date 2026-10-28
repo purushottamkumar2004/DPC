@@ -128,7 +128,7 @@ class Inspection:
     def __init__(self, settings, detector, store, stats):
         self.s, self.detector, self.store, self.stats = settings, detector, store, stats
         self.wheels = WheelCounter(settings.motion, settings.tracker.new_wheel_jump_px, logger)
-        self.plates = PlateTracker(settings.tracker.new_plate_jump_px, logger)
+        self.plates = PlateTracker(settings.motion, settings.tracker.new_plate_jump_px, logger)
         self.bucket_clip = BucketClipCheck(settings, store, logger)
         self.skidding = SkiddingCheck(settings, store, logger)
         self.wheel_missing = WheelMissingCheck(settings, store, logger)
