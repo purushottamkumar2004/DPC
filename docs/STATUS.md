@@ -89,7 +89,7 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-22 (full clean
 ### Decisions from P7 (waiting for you)
 | # | Question | Options |
 |---|---|---|
-| D12 | Tadipatri tuning differs per side: clip confirmation 300 ms / 200 px (LEFT) vs 500 ms / 500 px (RIGHT); skidding gap 500 ms (LEFT) vs 1000 ms (RIGHT). Deliberate tuning or accidental drift between the two old files? | tuning: keep and note the reason; drift: one value for both sides in `site.yaml` (config only); unknown: keep (D-073 D5) and decide after P7-replay |
+| D12 | DECIDED (D-080): deliberate; cameras at different distances need their own pixel and timing values | - |
 | D10 (B5) | DECIDED (D-077): the plate tracker follows `motion` like the wheel counter | - |
 | D11 | DECIDED (D-078): keep as is (a frame younger than 0.03 s is deleted) | - |
 
