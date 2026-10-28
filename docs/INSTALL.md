@@ -189,7 +189,7 @@ Then fill the site's entry in `SITES.md` and add a reference copy without secret
 cd ~/INSIGHTZZ/code && git status --short          # must show no changed tracked files
 git pull origin main                               # later: git fetch --tags && git checkout v0.<n>
 python3 scripts/dpc_check.py
-sudo systemctl restart dpc-supervisor              # or reload, if only site.yaml changed
+sudo systemctl restart dpc-supervisor              # ALWAYS after a pull that changes code: the running Supervisor and programs keep the old code until restarted (reload is only for site.yaml changes)
 ```
 Read the handoffs since the last update for an `Install impact:` line (for example "re-run install_service.sh").
 
