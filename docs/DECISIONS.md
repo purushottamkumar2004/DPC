@@ -250,6 +250,9 @@ The Supervisor adds `last_error` {at, type, message, where, traceback} to `worke
 ## D-080 | 2026-10 | Accepted | Per-side tuning values are deliberate (D12)
 Developer, 2026-10-28: the clip-confirmation (LEFT 300 ms / 200 px, RIGHT 500 ms / 500 px) and skidding-gap (LEFT 500 ms, RIGHT 1000 ms) values differ on purpose. One camera can be closer to the machine, so its components look bigger and move more pixels between frames; pixel distances and timing must be tuned per camera. Do not "harmonise" per-side `tracker` values; set them per side in `site.yaml` (`inspection.sides.<SIDE>.tracker`) when a camera is moved or a new site is commissioned (COMMISSIONING).
 
+## D-081 | 2026-10 | Accepted | Inspection is tested live at Tadipatri instead of a replay
+Developer decision 2026-10-28: Tadipatri is not in production, so the new inspection program (D-076) is validated on the running conveyor rather than by the offline replay (P7-replay is dropped). Sides are switched on one at a time. Finding on day 1: the fast wheel count on LEFT came from the camera mapping (serials swapped between CAM1 and CAM2); fixed in `site.yaml` and applied with a reload, then `inspection_left` restarted. Defect rows written before the fix carry wrong wheel numbers and are test data.
+
 ## Open questions
 - Q21: Should skidding, wheel-missing and cycle-restart findings create DB rows and mails? Today they only save images, so nobody is alerted (INSPECTION.md 8.1). (STATUS D9)
 - Q20 (answered 2026-10-22): Tadipatri PLC IP is 192.168.1.5; the 192.168.1.4 in the legacy PLC test script is wrong.
