@@ -12,7 +12,8 @@ Topics (prefix defaults to "dpc"):
   dpc/worker/<id>/event     supervisor -> world   (failure, restart, ...)
   dpc/worker/<id>/health    worker -> supervisor  (heartbeat)
   dpc/worker/<id>/command   anyone  -> supervisor (start/stop/restart)
-  dpc/supervisor/status     online/offline        (retained, last-will)
+  dpc/supervisor/status     online/offline        (retained, last-will) - ONLY the running
+                                                  Supervisor writes it (announce_presence=True)
   dpc/supervisor/event      supervisor -> world   (config_reloaded, config_reload_failed)
 """
 
@@ -34,14 +35,21 @@ def now_iso() -> str:
 
 
 class MqttClient:
-    def __init__(self, settings, client_id="dpc-supervisor", login=(None, None)):
+    def __init__(self, settings, client_id="dpc-supervisor", login=(None, None), announce_presence=False):
         """login = (user, password) from site.yaml mqtt.user / mqtt.password (F11), or
-        (None, None) for a broker without a login. Never logged."""
+        (None, None) for a broker without a login. Never logged.
+
+        announce_presence (F28): True ONLY for the running Supervisor. That client sets the
+        last-will "offline", publishes "online" on every (re)connect and "offline" when it
+        stops. Every other client (the CLI commands status/start/stop/restart, tools) leaves
+        dpc/supervisor/status alone: a CLI call must neither mark a running Supervisor
+        offline nor a stopped one online."""
         self.prefix = settings.topic_prefix
         self.host = settings.host
         self.port = settings.port
         self.enabled = settings.enabled and mqtt is not None
         self.connected = threading.Event()
+        self.announce_presence = announce_presence
         self._subscriptions = []         # [(topic_filter, callback)]
         self._client = None
 
@@ -58,8 +66,9 @@ class MqttClient:
         user, password = login
         if user:
             self._client.username_pw_set(user, password)
-        self._client.will_set(self.topic("supervisor", "status"),
-                              json.dumps({"status": "offline"}), retain=True)
+        if announce_presence:
+            self._client.will_set(self.topic("supervisor", "status"),
+                                  json.dumps({"status": "offline"}), retain=True)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
@@ -85,7 +94,9 @@ class MqttClient:
         if not self.enabled:
             return
         try:
-            self.publish(self.topic("supervisor", "status"), {"status": "offline"}, retain=True)
+            if self.announce_presence:
+                self.publish(self.topic("supervisor", "status"),
+                             {"status": "offline", "timestamp": now_iso()}, retain=True)
             self._client.loop_stop()
             self._client.disconnect()
         except Exception:
@@ -102,6 +113,13 @@ class MqttClient:
             self._client.publish(topic, json.dumps(payload), qos=0, retain=retain)
         except Exception as e:
             log.warning("MQTT publish failed (%s): %s", topic, e)
+
+    def publish_online(self):
+        """Retained "online" for dpc/supervisor/status. A no-op for clients that do not
+        announce presence (F28). The Supervisor calls it on connect and periodically, so a
+        stale "offline" (e.g. from an old CLI) is corrected within one status interval."""
+        if self.announce_presence:
+            self.publish(self.topic("supervisor", "status"), {"status": "online", "timestamp": now_iso()}, retain=True)
 
     def publish_status(self, worker_id: str, status: dict):
         self.publish(self.worker_topic(worker_id, "status"), status, retain=True)
@@ -126,8 +144,7 @@ class MqttClient:
         self.connected.set()
         for topic_filter, _ in self._subscriptions:      # (re)subscribe after every reconnect
             client.subscribe(topic_filter)
-        self.publish(self.topic("supervisor", "status"),
-                     {"status": "online", "timestamp": now_iso()}, retain=True)
+        self.publish_online()
 
     def _on_disconnect(self, client, userdata, *args):
         self.connected.clear()
