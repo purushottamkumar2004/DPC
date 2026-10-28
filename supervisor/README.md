@@ -190,3 +190,11 @@ Tests: `python3 -m unittest tests.unit.test_supervisor_v2 -v` from the repo root
   `worker_restarted` that follows, and the worker status; `supervisor.log` gets
   `[id] last error: ValueError: ... (file.py:123)` plus the traceback lines.
   `runtime.root` must be `<root>/run` for the file to be found (it is in `workers.basler-2cam.yaml`).
+
+## dpc/supervisor/status: only the running Supervisor writes it (F28)
+
+The Supervisor's own MQTT client (`announce_presence=True`) sets the last-will "offline", publishes
+"online" (retained) on every connect and again every `status_publish_interval_seconds`, and "offline"
+when it stops. CLI clients (`status`, `start`, `stop`, `restart`) have no last-will and never publish
+this topic, so `supervisor.py status` no longer marks a running Supervisor offline, and a CLI call
+while it is down does not mark it online. A stale "offline" is corrected within one status interval.

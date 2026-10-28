@@ -54,7 +54,8 @@ class Supervisor:
     def __init__(self, config: ConfigurationManager, mqtt=None, site_env: SiteEnv = None):
         self.settings = config.settings
         self.site_env = site_env or SiteEnv()
-        self.mqtt = mqtt or MqttClient(self.settings.mqtt, login=self._mqtt_login())
+        # the only client that announces the Supervisor's presence (last-will, online/offline; F28)
+        self.mqtt = mqtt or MqttClient(self.settings.mqtt, login=self._mqtt_login(), announce_presence=True)
         self.heartbeats = {}                  # worker_id -> Heartbeat of the last MQTT heartbeat
         self.commands = queue.Queue()         # commands from MQTT, handled in the main loop
         self.running = True
@@ -85,6 +86,7 @@ class Supervisor:
         self._leader_up = {}                  # follows: leader id -> RUNNING since it last went down
         self._next_launch_at = 0.0
         self._next_check = 0.0
+        self._next_presence = 0.0            # F28: re-publish "online" every status interval
 
     # ------------------------------------------------------------------
     def run(self):
@@ -126,6 +128,7 @@ class Supervisor:
             self._restart_pending_in_quiet_window()
             self._next_check = time.time() + self.settings.monitoring.check_interval_seconds
         self.monitor.publish_changes()
+        self._publish_presence_if_due()
 
     # ---- staged start (start_after) ----------------------------------------
     def _launch_ready_workers(self):
@@ -336,6 +339,14 @@ class Supervisor:
         """dpc/supervisor/event (append-only, CONTRACTS 2). Holds ids, statuses and safe error text only."""
         self.mqtt.publish(self.mqtt.topic("supervisor", "event"), {"event": event, "timestamp": now_iso(), **data})
 
+    def _publish_presence_if_due(self):
+        """F28: "online" (retained) again every status_publish_interval_seconds, so a stale
+        "offline" on dpc/supervisor/status never outlives one interval while we run."""
+        now = time.time()
+        if now >= self._next_presence:
+            self.mqtt.publish_online()
+            self._next_presence = now + self.settings.monitoring.status_publish_interval_seconds
+
     def request_stop(self, *_):
         log.info("Stop requested")
         self.running = False
@@ -515,6 +526,7 @@ def _cli_mqtt(config, site_env):
     except SiteEnvError as e:
         print(f"(site.yaml not read: {e}; trying the broker without a login)")
         login = (None, None)
+    # no announce_presence: a CLI call never touches dpc/supervisor/status (F28)
     return MqttClient(config.settings.mqtt, client_id=f"dpc-ctl-{os.getpid()}", login=login)
 
 

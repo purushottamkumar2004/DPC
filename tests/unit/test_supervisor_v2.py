@@ -71,6 +71,9 @@ class FakeMqtt:
     def worker_topic(self, worker_id, kind): return f"dpc/worker/{worker_id}/{kind}"
     def topic(self, *parts): return "/".join([self.prefix, *parts])
 
+    def publish_online(self):
+        self.published.append(("dpc/supervisor/status", {"status": "online"}))
+
     def publish(self, topic, payload, retain=False):
         self.published.append((topic, payload))
         self.raw.append(json.dumps(payload, default=str))
