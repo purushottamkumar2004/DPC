@@ -23,6 +23,8 @@ QUIRKS: <..>; both cameras share one Ethernet port on the server: if that port i
 ```
 SITE: tadipatri   HOST: dpc-tadipatri (HP Z2 Tower G9)   ROOT: /home/dpc_tadipatri/INSIGHTZZ   RELEASE: (none yet)
 REFERENCE site.yaml (all real non-secret values, validated by the loader): docs/sites/tadipatri.site.reference.yaml
+PER-SIDE DIFFERENCES (rendered 2026-10-28; same code both sides, D-069; everything else equal):
+  motion LEFT rtl / RIGHT ltr (camera view); bucket_clip_window LEFT 50,1990,750,1085 / RIGHT 10,1270,550,780 (xmin,xmax,ymin,ymax; camera geometry); half_bucket_clip_window y LEFT 470-750 / RIGHT 480-730 (camera geometry); tracker.clip_confirm max_gap_ms / max_dist_px LEFT 300/200 / RIGHT 500/500 and tracker.skidding.time_gap_reset_ms LEFT 500 / RIGHT 1000 (old-code values, origin unknown, STATUS D12); writes_live_wheel_counter LEFT false / RIGHT true (D-073 D3)
 DISK: one 938 GB NVMe mounted at /, services run as the login user dpc_tadipatri (D-030)
 CAMERAS: CAM1=LEFT Basler serial 24824427 exposure_us 1500 fps 4.0 rotate 0 (target; code still rotates 90 until D-041 is built); CAM2=RIGHT Basler serial 24874775 exposure_us 2000 fps 4.0 rotate 0 (same note). Mapping confirmed, both capture correctly (test 2026-10-12).
 DB: name tadipatri4   health table health_status (lowercase; renamed from tadipatri4_health_status_table on 2026-10-20; Basler XML element 16 HEALTH_TABLE and site.yaml db.health_table both = health_status). The old upper-case HEALTH_STATUS (DEVICE_NAME, STATUS) is a different legacy table: never point a program at it
