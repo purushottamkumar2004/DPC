@@ -1,7 +1,9 @@
 """Same decisions as the old code: the old functions of LeftAlgorithm.py / RightAlgorithm.py
 (Detectron2 stubbed, never called) and the new classes get the same random detection
 sequences; their decisions must match. Covers the wheel counter (both directions), the plate
-tracker, the bucket clip check, wheel missing and skidding. The old files stay in the repo
+tracker, the bucket clip check, wheel missing and skidding. Plate on Left: since D-077 the new
+tracker deliberately differs from the old Left plate code (B5); it is compared with the old Left
+wheel-counter rule fed with plates, which is exactly what D-077 asks for. The old files stay in the repo
 until Tadipatri runs the new program (P7 handoff); this test goes with them.
 
 Run from the repo root:
@@ -90,7 +92,10 @@ class Equivalence(unittest.TestCase):
         rng = random.Random(1)
         for old_mod, motion in ((self.L, "rtl"), (self.R, "ltr")):
             old_state, new = {"current_wheel_counter": 0}, WheelCounter(motion, 100, LOG)
-            old_plate, new_plate = {"last_plate_xmax": None}, PlateTracker(150, LOG)
+            old_plate, new_plate = {"last_plate_xmax": None}, PlateTracker(motion, 150, LOG)
+            # D-077: Right keeps the old plate rule; Left's plate now follows the old Left WHEEL
+            # rule (rtl) with the plate jump, so it is compared with that, not with old B5.
+            old_plate_as_wheel = {"current_wheel_counter": 0}
             for i in range(3000):
                 wheels = [det("wheel", x, 0, x + rng.randint(200, 600), 500)
                           for x in rng.sample(range(0, 1500), rng.randint(0, 2))]
@@ -98,8 +103,13 @@ class Equivalence(unittest.TestCase):
                 old = old_mod.checkWheelCounter(LOG, list(wheels), list(halves), old_state)
                 self.assertEqual(old, new.update(list(wheels), list(halves)), f"{motion} frame {i}")
                 plates = [det("plate", x, 0, x + 300, 100) for x in rng.sample(range(0, 1600), rng.randint(0, 1))]
-                self.assertEqual(old_mod.is_new_plate_detected(LOG, list(plates), "f", old_plate),
-                                 new_plate.is_new_plate(list(plates), "f"))
+                if motion == "ltr":
+                    expected = old_mod.is_new_plate_detected(LOG, list(plates), "f", old_plate)
+                else:
+                    before = old_plate_as_wheel["current_wheel_counter"]
+                    old_mod.checkWheelCounter(LOG, list(plates), [], old_plate_as_wheel, 150)
+                    expected = old_plate_as_wheel["current_wheel_counter"] > before
+                self.assertEqual(expected, new_plate.is_new_plate(list(plates), "f"), f"{motion} plate frame {i}")
 
     def test_bucket_clip_same_defects(self):
         for module, settings in ((self.L, self.left), (self.R, self.right)):

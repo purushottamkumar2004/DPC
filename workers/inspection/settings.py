@@ -63,6 +63,13 @@ class WheelMissing:
 
 
 @dataclass(frozen=True)
+class Band:
+    """x range a wheel centre must lie in: min < cx < max."""
+    min: float
+    max: float
+
+
+@dataclass(frozen=True)
 class Tracker:
     new_wheel_jump_px: float
     new_plate_jump_px: float
@@ -70,6 +77,7 @@ class Tracker:
     clip_confirm: ClipConfirm
     skidding: Skidding
     wheel_missing: WheelMissing
+    best_image_band_x: Band       # best image per wheel (D4, F25)
 
 
 @dataclass(frozen=True)
@@ -133,7 +141,7 @@ class Settings:
     half_bucket_clip_window: Window
     tracker: Tracker
     db: Db
-    mqtt: Optional[Mqtt]           # None: the rendered file has no mqtt block, heartbeat off
+    mqtt: Optional[Mqtt]           # None: no mqtt block (rendered before F25), heartbeat off
 
     def summary(self) -> str:
         """One log line of what this process will do. Never contains a secret."""
@@ -215,15 +223,19 @@ def _tracker(data) -> Tracker:
                            bbox=_window(m, "bbox", w_m))
     if missing.min_frames > missing.belt_stop_frames:
         raise SettingsError(f"'{w_m}.min_frames' must not exceed '{w_m}.belt_stop_frames'")
+    b = _get(t, "best_image_band_x", "tracker")
+    band = Band(min=_number(b, "min", "tracker.best_image_band_x"), max=_number(b, "max", "tracker.best_image_band_x"))
+    if band.min >= band.max:
+        raise SettingsError(f"'tracker.best_image_band_x' must have min < max, got {band}")
     return Tracker(new_wheel_jump_px=_number(t, "new_wheel_jump_px", "tracker", low=0),
                    new_plate_jump_px=_number(t, "new_plate_jump_px", "tracker", low=0),
                    high_dusty_suppress_px=_number(t, "high_dusty_suppress_px", "tracker", low=0),
-                   clip_confirm=clip, skidding=skid, wheel_missing=missing)
+                   clip_confirm=clip, skidding=skid, wheel_missing=missing, best_image_band_x=band)
 
 
 def _mqtt(data) -> Optional[Mqtt]:
-    """The heartbeat broker. Not rendered into inspection files yet (contract request in the
-    P7 handoff); without it the program runs without a heartbeat and says so once."""
+    """The heartbeat broker (F25). user/password null = no login. Without the block (a file
+    rendered before F25) the program runs without a heartbeat and says so once."""
     block = data.get("mqtt")
     if block is None:
         return None

@@ -25,11 +25,15 @@ scratch databases `<db>_replay_old` / `<db>_replay_new`; the scratch folder and 
 **Result:** prints a JSON summary and `PASS` / `FAIL`; exit 0 on pass.
 - Pass = every old `Nut_Bolt_Missing_In_Bucket_Clip` (wheel + box within 3 px) has one in the new run, and
   the new run has none extra.
-- RIGHT: the old program never inserted bolt defects (R:843), so its side is read from its DEFECTIVE
-  image names (wheel only).
+- The old program is run with the decisions that deliberately changed it, applied to its scratch copy
+  only, so that the comparison shows unintended differences:
+  - RIGHT: D-073 D6, its commented-out full-clip insert (R:843) switched on. Without it the old Right
+    never finds its own earlier defects in the 24 h dedupe and its clip confirmations diverge.
+  - LEFT: D-077, its plate rule replaced by the Left wheel rule (rtl). Without it B5's extra cycle resets
+    can shift the wheel numbers of every later defect.
 - `new_types` lists the defect types that are new in P7 (`WheelMissing`, `Wheel_Skidding`,
-  `Batch_Wheels_Missing`). For LEFT, check `Batch_Wheels_Missing` against the plates you know passed:
-  extra ones come from B5 (`workers/inspection/INSPECTION.md` section 10).
+  `Batch_Wheels_Missing`). Check `Batch_Wheels_Missing` against the plates you know passed: one per
+  plate whose revolution counted fewer wheels than `expected_cycle_total`, never several per plate.
 
 Safety: the script only creates and drops databases named `*_replay_old` / `*_replay_new`, never the live
 DB; the DB password is read from the rendered JSON and only written into the scratch folder (chmod 600).

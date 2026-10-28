@@ -78,7 +78,7 @@ flowchart TD
 - **Heartbeat:** `dpc/worker/<worker_id>/health` every 10 s.
   - Fields: `worker_id`, `healthy`, `pid`, `version` (`git describe`), `config_hash` (first 12 hex of `_generated.sha256`), `fps` (frames processed per second over the last 60 s), `inf_queue_depth`, `last_frame_age_s`.
   - `healthy` is false when the main loop has not turned for 60 s, for example a hung GPU call. An empty `INF` still turns the loop.
-  - **The rendered JSON has no `mqtt` block yet.** Until CONFIG renders one (P7 handoff), the program logs "Heartbeat off" once and runs without a heartbeat. Inspection never depends on the broker (D-034).
+  - The broker comes from the JSON `mqtt` block (F25; `user`/`password` null = no login). A file without the block (rendered before F25), or no paho-mqtt, means the program logs "Heartbeat off" once and runs without a heartbeat. Inspection never depends on the broker (D-034).
 
 ## 4. Settings used (rendered JSON, CONTRACTS 13)
 | Key | Used for |
@@ -101,12 +101,13 @@ flowchart TD
 | `motion` | wheel-counter direction (Left `rtl`, Right `ltr`) |
 | `bucket_clip_window`, `half_bucket_clip_window` | clip pixel windows (per side, D5) |
 | `tracker.*` | every tracker value (section 5 to 7), per side, today's values (D-073 D5) |
+| `tracker.best_image_band_x` | wheel-centre band for the best image per wheel (F25; default 400..850 = Right's R:2981, both sides) |
 | `db` | DB connection |
-| `mqtt` (not rendered yet) | heartbeat |
+| `mqtt` | heartbeat broker (F25) |
 
 Not used: `object_sizes.wheel_w`, `wheel_h`, `chain_w` (as before), `auto_roi` (D-054, not built), `plc` (inspection never talks to the PLC).
 
-**One value without a key:** the best-image centre band (400–850 px, Right's values R:2981, now on both sides) is the constant `CENTER_BAND_X` in `wheel_report.py`. A per-side key is requested in the handoff.
+Every value comes from the JSON; the last constant (the best-image band) became `tracker.best_image_band_x` in F25.
 
 ## 5. Detection, wheel counting, plate and cycle
 - **Detection** (`model.py`), as L:166-239.
@@ -119,11 +120,11 @@ Not used: `object_sizes.wheel_w`, `wheel_h`, `chain_w` (as before), `auto_roi` (
   - `rtl` (Left, L:1775-1818): the leftmost `xmin` with a low watermark. A new wheel when `xmin` > watermark + `tracker.new_wheel_jump_px`.
   - `ltr` (Right, R:1906-1935): the rightmost `xmax` with a high watermark. A new wheel when `xmax` < watermark − jump.
   - The watermark is never cleared, not even at a plate (B6).
-- **Plate** (`tracking.PlateTracker`, L:2208-2243, the same on both sides).
+- **Plate** (`tracking.PlateTracker`, D-077): the same watermark rule as the wheel counter, in the same `motion` direction, with `tracker.new_plate_jump_px`. One physical plate = one new plate.
+  - `ltr` (Right): the rightmost `xmax`, high watermark; new when it drops more than the jump below it. Unchanged (L:2208-2243).
+  - `rtl` (Left): the leftmost `xmin`, low watermark; new when it rises more than the jump above it. Before D-077 Left used the `ltr` rule (B5): a plate moving left was "new" again every 150 px of travel, which reset the cycle several times and gave false `Batch_Wheels_Missing` at wheel 1.
   - Every frame with `plate` or `plate_area` is copied to `paths.plate`.
-  - A plate is new the first time, or when the rightmost `xmax` drops more than `tracker.new_plate_jump_px` below the watermark.
   - At a new plate: the cycle-restart check (section 6), counter = 0, and this frame's wheels are ignored.
-  - **B5 is kept**: the tracker assumes left-to-right travel. On Left, one moving plate is reported again every 150 px of its travel (pinned by `test_b5_kept_plate_moving_left_retriggers`). See section 10.
 - **Before the first plate:** frames are inferred, then moved to `RAW_IMAGES` without counting or checks.
 
 ## 6. Checks
@@ -173,7 +174,7 @@ The mail sender sends every unsent row of any type, so all of them are now maile
 **Live wheel number (D3):** the side with `writes_live_wheel_counter: true` runs `UPDATE wheel_counter_table SET WHEEL_COUNT = %s WHERE ID = 1` whenever its counter changes, including 0 at each plate, as R:2782-2803 and R:3093-3095. Tadipatri: Right.
 
 **Daily wheel report (D4, both sides):**
-- For every `wheel` detection, the frame becomes the best image of the previous frame's wheel number (as R:2957-3015) when the wheel centre is inside the band, or when the previous best image is gone.
+- For every `wheel` detection, the frame becomes the best image of the previous frame's wheel number (as R:2957-3015) when the wheel centre is inside `tracker.best_image_band_x`, or when the previous best image is gone.
 - During the minute of `daily_time`, the list is written to `wheel_status_images/wheel.txt` and each best image is copied to `wheel_status_images/<YYYY-MM-DD>/wheel_<n>_<frame>.jpg`.
 - Fix (D4): a best image that no longer exists, or the empty initial entry for wheel 1, is skipped with one warning instead of crashing.
 - Unchanged: a day with no frame during that minute has no report.
@@ -205,18 +206,16 @@ The mail sender sends every unsent row of any type, so all of them are now maile
   - **B16:** cycle total from config (D8).
   - **R2:** the best-image crash is fixed (D4).
   - **R7/R8:** gone; both sides run the same code.
-- **Kept on purpose** (developer instruction, P7): B2, B3, B4, B5, B6, B7 (`is_reported`, D9 note), B9, B10, B11, B12, B14, B17 (log texts), B19 (each frame decoded twice).
-- **B5 risk, now that cycle restart is a defect.**
-  - On Left, a moving plate re-triggers "new plate" every 150 px of travel. After the first trigger the counter is 0 and the plate frames' wheels are ignored. But a wheel seen in a frame where the plate is visible and not "new" counts as 1. The next re-trigger then finds 0 < 1 < 190 and **inserts a false `Batch_Wheels_Missing` (and a mail)**.
-  - **Confirmed with a scripted scenario**: one plate moving 60 px/frame across the Left camera with a wheel in view gives one `Batch_Wheels_Missing` at wheel 1.
-  - It can also shift the cycle's numbering by one.
-  - Fix (b) in the P7 handoff: make the plate tracker follow `motion`, as the wheel counter does. That is a business-logic change for the developer to decide. First check: the Left replay on real frames (`new_types.Batch_Wheels_Missing`).
+  - **B5:** fixed by D-077 (P7-fix): the plate tracker follows `motion`.
+- **Kept on purpose** (developer instruction, P7): B2, B3, B4, B6, B7 (`is_reported`, D9 note), B9, B10, B11, B12, B14, B17 (log texts), B19 (each frame decoded twice).
 - **New observation, kept:** a frame is deleted as invalid when it is less than 0.03 s old (L:503-526, `is_valid_image`). With the atomic hand-off (D-031) a fresh `INF` link can be that young, so a frame can be lost. It is rare at 4 fps. Fix: skip the frame instead of deleting it; developer decision.
 
 ## 11. Tests
-- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 30 tests.
+- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 32 tests.
   - Settings from the real renderer: Tadipatri per-side values; a missing key is named.
-  - Wheel counter in both directions, plate tracker (and B5 pinned).
+  - Wheel counter in both directions; plate tracker: one plate crossing = one new plate, on both sides (D-077).
+  - D-077 through the real frame flow: a plate crossing the Left camera with a wheel in view gives one reset and no `Batch_Wheels_Missing`; the next plate gives one, with the right count. (With the old B5 rule the same test gives 4 resets and a false restart at wheel 1.)
+  - `tracker.best_image_band_x` read from the JSON and used by the best-image choice.
   - Clip confirmation per side, half-clip rule.
   - Wheel missing: gap, short gap, belt stop, previous slot.
   - Skidding: skid, rotating wheel, stopped belt.
@@ -224,13 +223,12 @@ The mail sender sends every unsent row of any type, so all of them are now maile
   - The frame flow with a fake detector (plate gating, moves, live counter on Right only).
   - `last_error.json` (scrubbed, config-error case, `where` in own code), heartbeat payload.
 - **`test_equivalence.py`:** the old functions of `LeftAlgorithm.py` / `RightAlgorithm.py` (Detectron2 stubbed) and the new classes get the same random detection sequences. Results are identical for:
-  - wheel counter and plate (3,000 frames, both directions);
+  - wheel counter (3,000 frames, both directions); plate on Right against the old plate code; plate on Left against the old Left *wheel* rule fed with plates, which is what D-077 asks for (the old Left plate code is B5, deliberately different now);
   - bucket-clip inserts (6,000 frames per side; Right compared with its saved images, since its insert was commented out);
   - wheel-missing slots;
   - skidding findings.
 - **`tests/replay/replay_inspection.py`** (site machine, GPU): the same saved frames through the old program and the new one, each with a scratch DB. Bolt defects are compared and new types listed.
-  - The old program comes from git, with paths redirected to `/tmp`.
-  - For RIGHT, the old program's commented-out full-clip insert is switched on in the scratch copy, which is D6. Without it the old Right never finds its own earlier defects in the dedupe and its clip confirmations diverge.
+  - The old program comes from git, with paths redirected to `/tmp`, and with the deliberate changes applied to the scratch copy: D-077 (plate rule) on LEFT, D6 (insert on) on RIGHT.
   - See `tests/replay/README.md`.
 - **Smoke tests on 2026-10-26** (real MariaDB, real mosquitto, scripted fake detector, 900 frames per side):
   - Replay LEFT PASS: 23/23 bolt defects, plus 6 `WheelMissing` and 6 `Wheel_Skidding`.
