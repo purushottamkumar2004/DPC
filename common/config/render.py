@@ -119,13 +119,52 @@ def inspection_config(cfg: SiteConfig, camera) -> Dict[str, Any]:
     }
 
 
+def cleanup_config(cfg: SiteConfig) -> Dict[str, Any]:
+    """cleanup (F29, D-082): exactly the keys workers/cleanup/cleanup_settings.py reads. Folder lists
+    have one entry per configured camera / side, in camera order; all lie inside <root>/data.
+    The disk mail is Graph only (D-082 item 7): graph is null unless mail.sender is graph."""
+    p, c = cfg.paths, cfg.cleanup
+    cams = cfg.cameras
+    folders = {
+        "raw_images": [p.frame_dir(cam.id, "RAW_IMAGES") for cam in cams],
+        "inf": [p.frame_dir(cam.id, "INF") for cam in cams],
+        "repeated": [p.image_dir("REPEATED", cam.side) for cam in cams],
+        "plate": [p.image_dir("PLATE", cam.side) for cam in cams],
+        "defective": [p.image_dir("DEFECTIVE", cam.side) for cam in cams],
+        "defect_raw": [p.image_dir("RAW", cam.side) for cam in cams],
+        "magnet": [p.image_dir("MAGNET", cam.side) for cam in cams],
+        "bolt_data": [os.path.join(p.data, "bolt_data", cam.side) for cam in cams],
+    }
+    graph = None
+    if cfg.graph is not None and cfg.mail.sender == "graph":
+        graph = {"tenant_id": cfg.graph.tenant_id, "client_id": cfg.graph.client_id,
+                 "client_secret": cfg.graph.client_secret}
+    return {
+        "worker_id": "cleanup",
+        "site": {"id": cfg.site.id, "name": cfg.site.name},
+        "cameras": [{"id": cam.id, "side": cam.side} for cam in cams],
+        "paths": {"root": p.root, "logs": p.logs, "data": p.data, **folders},
+        "log": {"backup_count": c.log.backup_count},
+        "cleanup": {"raw_image_hours": c.raw_image_hours, "interval_seconds": c.interval_seconds,
+                    "repeated": {"days": c.repeated.days, "items": c.repeated.items},
+                    "plate_days": c.plate_days,
+                    "defective": {"days": c.defective.days, "items": c.defective.items},
+                    "disk_percent": dict(c.disk_percent), "disk_report_time": c.disk_report_time},
+        # to: disk_report_to, else recipients (the loader already falls back); cc empty on purpose
+        "mail": {"sender_address": cfg.mail.sender_address, "to": list(cfg.mail.disk_report_to), "cc": []},
+        "graph": graph,
+    }
+
+
 def worker_configs(cfg: SiteConfig) -> Dict[str, Dict[str, Any]]:
-    """worker_id -> settings, for the configured cameras only (a one-camera site gets two files)."""
+    """worker_id -> settings. Capture and inspection for the configured cameras only (a
+    one-camera site gets two of each kind less); cleanup always."""
     configs = {}
     for camera in cfg.cameras:
         configs[CAMERA_WORKER[camera.id]] = capture_config(cfg, camera)
     for camera in cfg.cameras:
         configs[SIDE_WORKER[camera.side]] = inspection_config(cfg, camera)
+    configs["cleanup"] = cleanup_config(cfg)
     return configs
 
 

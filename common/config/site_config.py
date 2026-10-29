@@ -408,6 +408,7 @@ class CleanupConfig:
     defective: KeepLimit
     disk_percent: Dict[str, int]
     log: LogSettings
+    disk_report_time: str = "09:00"   # "HH:MM" of the daily disk mail (F29; was DAILY_REPORT_HOUR 9)
 
 
 @dataclass(frozen=True)
@@ -1104,6 +1105,8 @@ def _read_cleanup(top: _Section) -> CleanupConfig:
         defective=_read_keep_limit(s, "defective", 10, 200),
         disk_percent=disk,
         log=_read_log(s),
+        disk_report_time=s.string("disk_report_time", required=False, default="09:00", pattern=_HH_MM_RE,
+                                  pattern_hint='use "HH:MM" (24 h, quoted)'),
     )
     s.finish()
     return cfg
