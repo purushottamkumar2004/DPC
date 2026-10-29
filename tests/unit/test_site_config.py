@@ -576,6 +576,20 @@ class P7Prep(_TempDirTest):                                           # D-072, D
         self.assertEqual(cfg.inspection.sides["RIGHT"].tracker.skidding.time_gap_reset_ms, 1000)
 
 
+class DiskReportTime(_TempDirTest):                                   # F29
+    def test_default_and_value(self):
+        data = self.config_data()
+        data["cleanup"].pop("disk_report_time", None)
+        self.assertEqual(sc.load_site_config(self.write_yaml(data)).cleanup.disk_report_time, "09:00")
+        data["cleanup"]["disk_report_time"] = "18:05"
+        self.assertEqual(sc.load_site_config(self.write_yaml(data)).cleanup.disk_report_time, "18:05")
+
+    def test_bad_value(self):
+        data = self.config_data()
+        data["cleanup"]["disk_report_time"] = "9:00"
+        self.assertProblem(self.problems_for(data), r'^cleanup\.disk_report_time: use "HH:MM"')
+
+
 class Secrets(_TempDirTest):
     def assertNoSecret(self, text):
         for value in list(SECRETS.values()) + ["s3cret"]:

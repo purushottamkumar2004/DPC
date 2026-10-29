@@ -127,6 +127,7 @@ cleanup:                          # all optional; these are the defaults
   plate_days: 10
   defective: {days: 10, items: 200}
   disk_percent: {delete: 75, raw_delete: 85, mail: 90, inference_delete: 95}   # strictly increasing
+  disk_report_time: "09:00"       # daily disk mail (Graph only, D-082); quoted HH:MM
   log: {backup_count: 5}
 
 transfer:                         # optional: leave out if this site runs no transfer service (D-057)

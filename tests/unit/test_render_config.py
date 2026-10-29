@@ -31,7 +31,8 @@ _spec.loader.exec_module(cli)
 REFERENCE = os.path.join(REPO_ROOT, "docs", "sites", "tadipatri.site.reference.yaml")
 DB_PASSWORD = "s3cret-db-Rt55"
 GRAPH_SECRET = "s3cret-graph-Uy21"
-WORKERS = ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right"]
+WORKERS = ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right", "cleanup"]
+CLEANUP_SETTINGS = os.path.join(REPO_ROOT, "workers", "cleanup")
 
 
 class Site(unittest.TestCase):
@@ -78,7 +79,7 @@ class Site(unittest.TestCase):
 class Tadipatri(Site):                                               # P4 done when
     def test_four_files_then_unchanged(self):
         self.assertEqual(self.render(), {w: "written" for w in WORKERS})
-        self.assertEqual(sorted(os.listdir(self.rendered)), [f"{w}.json" for w in WORKERS])
+        self.assertEqual(sorted(os.listdir(self.rendered)), sorted(f"{w}.json" for w in WORKERS))
         self.assertEqual(self.render(), {w: "unchanged" for w in WORKERS})
 
     def test_cli_lines(self):
@@ -146,7 +147,9 @@ class Tadipatri(Site):                                               # P4 done w
         self.render()
         for worker in WORKERS:
             text = json.dumps(self.load(worker))
-            self.assertNotIn(GRAPH_SECRET, text)                     # no worker here uses Graph
+            if worker == "cleanup":
+                continue                                             # disk mail via Graph (F29, checked below)
+            self.assertNotIn(GRAPH_SECRET, text)
             for section in ("graph", "mail", "cleanup", "transfer"):
                 self.assertNotIn(f'"{section}"', text)
             if worker.startswith("frame_capture"):
@@ -169,7 +172,8 @@ class Changes(Site):
         self.data["inspection"]["threshold"] = 0.6
         self.write()
         self.assertEqual(self.render(), {"frame_capture_cam1": "unchanged", "frame_capture_cam2": "unchanged",
-                                         "inspection_left": "written", "inspection_right": "written"})
+                                         "inspection_left": "written", "inspection_right": "written",
+                                         "cleanup": "unchanged"})
         self.data["capture"]["cameras"][0]["exposure_us"] = 1800
         self.write()
         self.assertEqual(self.render()["frame_capture_cam1"], "written")
@@ -178,7 +182,9 @@ class Changes(Site):
         self.render()
         self.data["db"]["password"] = "s3cret-new"
         self.write()
-        self.assertEqual(self.render(), {w: "written" for w in WORKERS})
+        expected = {w: "written" for w in WORKERS}
+        expected["cleanup"] = "unchanged"                            # cleanup has no DB login
+        self.assertEqual(self.render(), expected)
 
     def test_removed_camera_removes_its_files(self):
         self.render()
@@ -188,7 +194,8 @@ class Changes(Site):
         changes = self.render()
         self.assertEqual(changes["frame_capture_cam2"], "removed")
         self.assertEqual(changes["inspection_right"], "removed")
-        self.assertEqual(sorted(os.listdir(self.rendered)), ["frame_capture_cam1.json", "inspection_left.json"])
+        self.assertEqual(sorted(os.listdir(self.rendered)),
+                         ["cleanup.json", "frame_capture_cam1.json", "inspection_left.json"])
 
     def test_foreign_files_are_never_removed(self):
         self.render()
@@ -287,7 +294,8 @@ class P7Prep(Site):                                                  # D-072, D-
         self.data["inspection"]["sides"]["RIGHT"]["tracker"] = {"skidding": {"time_gap_reset_ms": 800}}
         self.write()
         self.assertEqual(self.render(), {"frame_capture_cam1": "unchanged", "frame_capture_cam2": "unchanged",
-                                         "inspection_left": "unchanged", "inspection_right": "written"})
+                                         "inspection_left": "unchanged", "inspection_right": "written",
+                                         "cleanup": "unchanged"})
 
     def test_capture_health_interval(self):                          # P4d
         self.render()
@@ -344,6 +352,99 @@ class F25(Site):                                                     # D-076: mq
         for worker in ("inspection_left", "inspection_right"):
             loaded = inspection_settings.load_settings(os.path.join(self.rendered, f"{worker}.json"))
             self.assertEqual((loaded.mqtt.host, loaded.mqtt.port, loaded.mqtt.user), ("localhost", 1883, "dpc_broker"))
+
+
+class CleanupFile(Site):                                             # F29, D-082
+    KEYS = {"worker_id", "site", "cameras", "paths", "log", "cleanup", "mail", "graph"}
+
+    def cleanup_settings(self):
+        """workers/cleanup/cleanup_settings.py, used read-only to prove the file is what it reads."""
+        sys.path.insert(0, CLEANUP_SETTINGS)
+        try:
+            import cleanup_settings
+        finally:
+            sys.path.pop(0)
+        return cleanup_settings
+
+    def test_tadipatri_renders_cleanup_json_with_the_exact_keys(self):
+        self.assertEqual(self.render()["cleanup"], "written")
+        path = os.path.join(self.rendered, "cleanup.json")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        doc = self.load("cleanup")
+        self.assertEqual(set(doc) - {"_generated"}, self.KEYS)
+        self.assertEqual(doc["worker_id"], "cleanup")
+        self.assertEqual(doc["site"], {"id": "tadipatri", "name": self.data["site"]["name"]})
+        self.assertEqual(doc["cameras"], [{"id": "CAM1", "side": "LEFT"}, {"id": "CAM2", "side": "RIGHT"}])
+        data = os.path.join(self.root, "data")
+        self.assertEqual(doc["paths"], {
+            "root": self.root, "logs": os.path.join(self.root, "logs"), "data": data,
+            "raw_images": [f"{data}/frames/CAM1/RAW_IMAGES", f"{data}/frames/CAM2/RAW_IMAGES"],
+            "inf": [f"{data}/frames/CAM1/INF", f"{data}/frames/CAM2/INF"],
+            "repeated": [f"{data}/images/REPEATED/LEFT", f"{data}/images/REPEATED/RIGHT"],
+            "plate": [f"{data}/images/PLATE/LEFT", f"{data}/images/PLATE/RIGHT"],
+            "defective": [f"{data}/images/DEFECTIVE/LEFT", f"{data}/images/DEFECTIVE/RIGHT"],
+            "defect_raw": [f"{data}/images/RAW/LEFT", f"{data}/images/RAW/RIGHT"],
+            "magnet": [f"{data}/images/MAGNET/LEFT", f"{data}/images/MAGNET/RIGHT"],
+            "bolt_data": [f"{data}/bolt_data/LEFT", f"{data}/bolt_data/RIGHT"]})
+        self.assertEqual(doc["log"], {"backup_count": 5})
+        self.assertEqual(doc["cleanup"], {
+            "raw_image_hours": 20, "interval_seconds": 10, "repeated": {"days": 20, "items": 200},
+            "plate_days": 10, "defective": {"days": 10, "items": 200},
+            "disk_percent": {"delete": 75, "raw_delete": 85, "mail": 90, "inference_delete": 95},
+            "disk_report_time": "09:00"})
+        # disk_report_to is [] at Tadipatri -> the recipients; cc empty on purpose
+        self.assertEqual(doc["mail"], {"sender_address": "insightzz.reports@insightzz.com",
+                                       "to": ["redacted@example.com"], "cc": []})
+        self.assertEqual(doc["graph"], {"tenant_id": "t", "client_id": "c", "client_secret": GRAPH_SECRET})
+
+    def test_cleanup_program_loads_it_with_zero_warnings(self):     # F29 done when
+        self.render()
+        settings = self.cleanup_settings().load_settings(os.path.join(self.rendered, "cleanup.json"))
+        self.assertEqual(settings.warnings, [])
+        self.assertTrue(settings.mail.enabled)
+        self.assertEqual((settings.report_hour, settings.report_minute), (9, 0))
+        self.assertEqual(settings.raw_image_hours, 20)
+        self.assertEqual(settings.folders["bolt_data"][1], os.path.join(self.root, "data", "bolt_data", "RIGHT"))
+
+    def test_disk_report_to_and_time(self):
+        self.data["mail"]["disk_report_to"] = ["ops@example.com"]
+        self.data["cleanup"]["disk_report_time"] = "07:30"
+        self.write()
+        self.render()
+        doc = self.load("cleanup")
+        self.assertEqual(doc["mail"]["to"], ["ops@example.com"])
+        self.assertEqual(doc["cleanup"]["disk_report_time"], "07:30")
+        settings = self.cleanup_settings().load_settings(os.path.join(self.rendered, "cleanup.json"))
+        self.assertEqual((settings.report_hour, settings.report_minute, settings.warnings), (7, 30, []))
+
+    def test_smtp_site_gets_no_graph(self):                          # D-082 item 7
+        self.data["mail"]["sender"] = "smtp"
+        self.data["mail"]["smtp"] = {"password": "s3cret-smtp-Wq1"}
+        self.write()
+        self.render()
+        doc = self.load("cleanup")
+        self.assertIsNone(doc["graph"])
+        self.assertNotIn("s3cret-smtp", json.dumps(doc))
+        settings = self.cleanup_settings().load_settings(os.path.join(self.rendered, "cleanup.json"))
+        self.assertFalse(settings.mail.enabled)
+
+    def test_one_camera_site(self):
+        del self.data["capture"]["cameras"][1]
+        del self.data["inspection"]["sides"]["RIGHT"]
+        self.data["inspection"].pop("live_wheel_counter_side", None)
+        self.write()
+        self.render()
+        doc = self.load("cleanup")
+        self.assertEqual(doc["cameras"], [{"id": "CAM1", "side": "LEFT"}])
+        self.assertTrue(all(len(v) == 1 for k, v in doc["paths"].items() if isinstance(v, list)))
+
+    def test_only_cleanup_changes_when_cleanup_values_change(self):
+        self.render()
+        self.data["cleanup"]["plate_days"] = 7
+        self.write()
+        changes = self.render()
+        self.assertEqual(changes["cleanup"], "written")
+        self.assertEqual({w for w, s in changes.items() if s == "written"}, {"cleanup"})
 
 
 if __name__ == "__main__":
