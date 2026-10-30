@@ -156,15 +156,46 @@ def cleanup_config(cfg: SiteConfig) -> Dict[str, Any]:
     }
 
 
+def mail_config(cfg: SiteConfig) -> Dict[str, Any]:
+    """mail (F36, D-083): exactly the keys workers/mail/mail_worker.py reads. Optional values are
+    always written (null = off), so the program never falls back to a default with a warning.
+    graph only with sender graph, smtp only with sender smtp."""
+    p, m = cfg.paths, cfg.mail
+    graph = None
+    if m.sender == "graph" and cfg.graph is not None:
+        graph = {"tenant_id": cfg.graph.tenant_id, "client_id": cfg.graph.client_id,
+                 "client_secret": cfg.graph.client_secret}
+    smtp = None
+    if m.smtp is not None:
+        smtp = {"host": m.smtp.host, "port": m.smtp.port, "password": m.smtp.password}
+    flood = None
+    if m.flood is not None:
+        flood = {"max_per_window": m.flood.max_per_window, "window_hours": m.flood.window_hours,
+                 "internal_to": list(m.flood.internal_to)}
+    db = cfg.db
+    return {
+        "worker_id": "mail",
+        "site": {"id": cfg.site.id, "name": cfg.site.name},
+        "paths": {"root": p.root, "logs": p.logs, "state": os.path.join(p.data, "state")},
+        "log": {"backup_count": m.log.backup_count},
+        "db": {"host": db.host, "port": db.port, "name": db.name, "user": db.user, "password": db.password},
+        "mail": {"sender": m.sender, "sender_address": m.sender_address, "project_name": m.project_name,
+                 "to": list(m.recipients), "cc": list(m.cc), "smtp": smtp, "report_url": m.report_url,
+                 "max_alert_age_hours": m.max_alert_age_hours, "flood": flood},
+        "graph": graph,
+    }
+
+
 def worker_configs(cfg: SiteConfig) -> Dict[str, Dict[str, Any]]:
     """worker_id -> settings. Capture and inspection for the configured cameras only (a
-    one-camera site gets two of each kind less); cleanup always."""
+    one-camera site gets two of each kind less); cleanup and mail always."""
     configs = {}
     for camera in cfg.cameras:
         configs[CAMERA_WORKER[camera.id]] = capture_config(cfg, camera)
     for camera in cfg.cameras:
         configs[SIDE_WORKER[camera.side]] = inspection_config(cfg, camera)
     configs["cleanup"] = cleanup_config(cfg)
+    configs["mail"] = mail_config(cfg)
     return configs
 
 

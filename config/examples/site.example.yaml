@@ -118,6 +118,12 @@ mail:
   cc: []
   disk_report_to: []              # [] = the recipients above; daily disk report
   smtp: null                      # with sender smtp: {host: smtp.gmail.com, port: 587, password: "CHANGE_ME"}
+  report_url: "http://192.0.2.50:8000/defects"   # optional link line in the alert mail; leave out = no link
+  max_alert_age_hours: 24         # pending alerts older than this are never mailed; null = no limit (D-083)
+  flood:                          # optional flood breaker; leave out or null = off (D-083)
+    max_per_window: 8             # more alert mails than this in the window ...
+    window_hours: 5
+    internal_to: ["support@example.com"]   # ... and the next ones go only here
   log: {backup_count: 5}
 
 cleanup:                          # all optional; these are the defaults

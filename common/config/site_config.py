@@ -381,6 +381,15 @@ class SmtpSettings:
 
 
 @dataclass(frozen=True)
+class MailFlood:
+    """Flood breaker of the defect-alert mail (D-083): more than max_per_window alert mails in
+    window_hours -> the next ones go only to internal_to."""
+    max_per_window: int
+    window_hours: float
+    internal_to: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class MailConfig:
     sender: str          # graph | smtp (graph uses the shared top-level `graph` login)
     project_name: str
@@ -391,6 +400,9 @@ class MailConfig:
     disk_report_to: Tuple[str, ...]
     smtp: Optional[SmtpSettings]     # set when sender = smtp
     log: LogSettings
+    report_url: Optional[str] = None             # link line in the alert mail; None = left out (F36)
+    max_alert_age_hours: Optional[float] = 24.0  # older pending rows are never mailed; None = off (D-083)
+    flood: Optional[MailFlood] = None            # None = flood breaker off (D-083)
 
 
 @dataclass(frozen=True)
@@ -1070,9 +1082,36 @@ def _read_mail(top: _Section, paths: Paths) -> MailConfig:
         disk_report_to=disk_report_to or recipients,
         smtp=_read_smtp(s, sender),
         log=_read_log(s),
+        report_url=s.string("report_url", required=False),
+        max_alert_age_hours=_read_max_age(s),
+        flood=_read_flood(s, email_hint),
     )
     s.finish()
     return cfg
+
+
+def _read_max_age(s: _Section) -> Optional[float]:
+    """Absent = 24 h; explicit null = off (no age limit); else a number > 0."""
+    if "max_alert_age_hours" in s.data and s.data["max_alert_age_hours"] is None:
+        s.used.add("max_alert_age_hours")
+        return None
+    return s.number("max_alert_age_hours", required=False, default=24.0, low=0, low_exclusive=True, high=100000)
+
+
+def _read_flood(s: _Section, email_hint: str) -> Optional[MailFlood]:
+    """Absent or null = off (D-083). Given = all three keys required."""
+    if not s.present("flood"):
+        s.used.add("flood")
+        return None
+    f = s.section("flood")
+    internal = f.string_list("internal_to", item_pattern=_EMAIL_RE, item_hint=email_hint)
+    if internal is not None and not internal:
+        f.problem("internal_to", "needs at least one address")
+    flood = MailFlood(max_per_window=f.integer("max_per_window", low=1, high=100000),
+                      window_hours=f.number("window_hours", low=0, low_exclusive=True, high=100000),
+                      internal_to=internal)
+    f.finish()
+    return flood
 
 
 # ---- cleanup ----

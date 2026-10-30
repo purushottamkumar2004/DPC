@@ -590,6 +590,42 @@ class DiskReportTime(_TempDirTest):                                   # F29
         self.assertProblem(self.problems_for(data), r'^cleanup\.disk_report_time: use "HH:MM"')
 
 
+class MailF36(_TempDirTest):                                          # F36, D-083
+    def mail(self, **values):
+        data = self.config_data()
+        for key in ("report_url", "max_alert_age_hours", "flood"):
+            data["mail"].pop(key, None)
+        data["mail"].update(values)
+        return data
+
+    def test_defaults(self):
+        m = sc.load_site_config(self.write_yaml(self.mail())).mail
+        self.assertEqual((m.report_url, m.max_alert_age_hours, m.flood), (None, 24.0, None))
+
+    def test_values(self):
+        data = self.mail(report_url="http://192.0.2.50/defects", max_alert_age_hours=6,
+                         flood={"max_per_window": 8, "window_hours": 5, "internal_to": ["a@example.com"]})
+        m = sc.load_site_config(self.write_yaml(data)).mail
+        self.assertEqual((m.report_url, m.max_alert_age_hours), ("http://192.0.2.50/defects", 6.0))
+        self.assertEqual(m.flood, sc.MailFlood(8, 5.0, ("a@example.com",)))
+
+    def test_null_turns_off(self):
+        m = sc.load_site_config(self.write_yaml(self.mail(max_alert_age_hours=None, flood=None))).mail
+        self.assertEqual((m.max_alert_age_hours, m.flood), (None, None))
+
+    def test_bad_values(self):
+        data = self.mail(report_url="", max_alert_age_hours=0,
+                         flood={"max_per_window": 0, "window_hours": -1, "internal_to": [], "extra": 1})
+        problems = self.problems_for(data)
+        for pattern in (r"^mail\.report_url: must not be empty", r"^mail\.max_alert_age_hours: must be > 0",
+                        r"^mail\.flood\.max_per_window: must be between 1", r"^mail\.flood\.window_hours: must be > 0",
+                        r"^mail\.flood\.internal_to: needs at least one address", r"^mail\.flood\.extra: unknown key"):
+            self.assertProblem(problems, pattern)
+        problems = self.problems_for(self.mail(flood={"max_per_window": 8}))
+        self.assertIn("mail.flood.window_hours: missing", problems)
+        self.assertIn("mail.flood.internal_to: missing", problems)
+
+
 class Secrets(_TempDirTest):
     def assertNoSecret(self, text):
         for value in list(SECRETS.values()) + ["s3cret"]:
