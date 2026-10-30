@@ -48,7 +48,8 @@ class TwoCameraFile(unittest.TestCase):
 
     def test_worker_ids_from_d033_and_order(self):
         self.assertEqual([w.id for w in self.manager.start_order],
-                         ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right", "cleanup"])
+                         ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right", "cleanup",
+                          "mail"])
 
     def test_each_camera_has_its_own_live_file_and_no_xml(self):
         for n in (1, 2):
@@ -118,6 +119,28 @@ class CleanupWorkerF30(unittest.TestCase):
         self.assertEqual(w.health.type, "process")
         self.assertFalse(w.env_from_site, "cleanup reads cleanup.json, not the DPC_* env bridge")
         self.assertEqual((w.env, w.start_after, w.follows), ({}, [], None))
+
+
+class MailWorkerF37(unittest.TestCase):
+    """STATUS F37: the mail worker exactly as listed there (P14, D-083)."""
+
+    def test_mail(self):
+        manager = ConfigurationManager(SITE_FILE, SUPERVISOR_DIR)
+        manager.load()
+        w = {x.id: x for x in manager.workers}["mail"]
+        self.assertEqual((w.type, w.mode, w.restart_cost), ("mail", "service", "normal"))
+        self.assertEqual(w.command, "python3 mail_worker.py")
+        self.assertEqual(w.working_directory, os.path.join(os.path.expanduser("~"), "INSIGHTZZ/code/workers/mail"))
+        self.assertEqual((w.stop_signal, w.stop_timeout_seconds), ("SIGTERM", 15))
+        self.assertEqual(w.health.type, "process")
+        self.assertFalse(w.env_from_site, "mail reads mail.json, not the DPC_* env bridge")
+        self.assertEqual((w.env, w.start_after, w.follows), ({}, [], None))
+
+    def test_id_matches_the_programs_worker_id(self):
+        # DPC_WORKER_CONFIG is set only when rendered/<worker id>.json exists, and the program
+        # names its last_error.json after its own WORKER_ID: both must be "mail"
+        with open(os.path.join(os.path.dirname(SUPERVISOR_DIR), "workers", "mail", "mail_worker.py")) as f:
+            self.assertIn('WORKER_ID = "mail"', f.read())
 
 
 class SiteNumbersWithDummyCaptures(SupervisorTest):
