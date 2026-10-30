@@ -112,7 +112,8 @@ class Reload(SiteYamlTest):
         workers = [dummy(w, f"--dump-env {self.path('env_' + w + '.txt')}",
                          **({"restart_cost": "high"} if w.startswith("inspection") else {}))
                    for w in ("frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right")]
-        workers.append(dummy("mail", f"--dump-env {self.path('env_mail.txt')}"))
+        # a worker with no rendered file (mail has one since F36): the PLC light
+        workers.append(dummy("light", f"--dump-env {self.path('env_light.txt')}"))
         self.build(workers, monitoring, site_env=SiteEnv(self.write_site_yaml()))
         self.sup.start()
         self.run_until(lambda: all(w.status == WorkerStatus.RUNNING for w in self.sup.workers.values()),
@@ -140,7 +141,7 @@ class Reload(SiteYamlTest):
         for worker_id in ("frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right"):
             self.assertTrue(os.path.isfile(self.rendered(worker_id)))
             self.assertEqual(self.env_of(worker_id)["DPC_WORKER_CONFIG"], self.rendered(worker_id))
-        self.assertNotIn("DPC_WORKER_CONFIG", self.env_of("mail"), "no rendered file -> no variable")
+        self.assertNotIn("DPC_WORKER_CONFIG", self.env_of("light"), "no rendered file -> no variable")
         self.assert_no_secret_anywhere()
 
     def test_edit_cam2_exposure_then_reload_restarts_only_cam2(self):
@@ -302,7 +303,7 @@ class ReloadCommandLine(SiteYamlTest):
         self.write_site_yaml(edit=set_exposure("CAM2", 2400))
         result = self.cli("reload")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("1 written, 4 unchanged", result.stdout)        # 5 rendered files since F29 (cleanup.json)
+        self.assertIn("1 written, 5 unchanged", result.stdout)        # 6 rendered files: + cleanup.json (F29), mail.json (F36)
         self.assertIn("restarted: frame_capture_cam2", result.stdout)
         time.sleep(1.0)
         self.assertEqual(self.starts().count("frame_capture_cam1"), 1, "cam1 must not restart")
