@@ -31,7 +31,8 @@ _spec.loader.exec_module(cli)
 REFERENCE = os.path.join(REPO_ROOT, "docs", "sites", "tadipatri.site.reference.yaml")
 DB_PASSWORD = "s3cret-db-Rt55"
 GRAPH_SECRET = "s3cret-graph-Uy21"
-WORKERS = ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right", "cleanup"]
+WORKERS = ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right", "cleanup", "mail"]
+MAIL_WORKER = os.path.join(REPO_ROOT, "workers", "mail")
 CLEANUP_SETTINGS = os.path.join(REPO_ROOT, "workers", "cleanup")
 
 
@@ -147,8 +148,8 @@ class Tadipatri(Site):                                               # P4 done w
         self.render()
         for worker in WORKERS:
             text = json.dumps(self.load(worker))
-            if worker == "cleanup":
-                continue                                             # disk mail via Graph (F29, checked below)
+            if worker in ("cleanup", "mail"):
+                continue                                             # they mail via Graph (F29, F36: checked below)
             self.assertNotIn(GRAPH_SECRET, text)
             for section in ("graph", "mail", "cleanup", "transfer"):
                 self.assertNotIn(f'"{section}"', text)
@@ -166,14 +167,17 @@ class Tadipatri(Site):                                               # P4 done w
 class Changes(Site):
     def test_only_the_workers_whose_settings_changed(self):
         self.render()
-        self.data["mail"]["project_name"] = "Other"                  # nobody rendered reads mail
+        self.data["mail"]["report_dir"] = "data/reports2"            # no rendered file holds report_dir
         self.write()
         self.assertEqual(self.render(), {w: "unchanged" for w in WORKERS})
+        self.data["mail"]["project_name"] = "Other"                  # only the mail program reads it (F36)
+        self.write()
+        self.assertEqual({w for w, s in self.render().items() if s == "written"}, {"mail"})
         self.data["inspection"]["threshold"] = 0.6
         self.write()
         self.assertEqual(self.render(), {"frame_capture_cam1": "unchanged", "frame_capture_cam2": "unchanged",
                                          "inspection_left": "written", "inspection_right": "written",
-                                         "cleanup": "unchanged"})
+                                         "cleanup": "unchanged", "mail": "unchanged"})
         self.data["capture"]["cameras"][0]["exposure_us"] = 1800
         self.write()
         self.assertEqual(self.render()["frame_capture_cam1"], "written")
@@ -183,7 +187,7 @@ class Changes(Site):
         self.data["db"]["password"] = "s3cret-new"
         self.write()
         expected = {w: "written" for w in WORKERS}
-        expected["cleanup"] = "unchanged"                            # cleanup has no DB login
+        expected["cleanup"] = "unchanged"                            # cleanup has no DB login (mail has)
         self.assertEqual(self.render(), expected)
 
     def test_removed_camera_removes_its_files(self):
@@ -195,7 +199,7 @@ class Changes(Site):
         self.assertEqual(changes["frame_capture_cam2"], "removed")
         self.assertEqual(changes["inspection_right"], "removed")
         self.assertEqual(sorted(os.listdir(self.rendered)),
-                         ["cleanup.json", "frame_capture_cam1.json", "inspection_left.json"])
+                         ["cleanup.json", "frame_capture_cam1.json", "inspection_left.json", "mail.json"])
 
     def test_foreign_files_are_never_removed(self):
         self.render()
@@ -295,7 +299,7 @@ class P7Prep(Site):                                                  # D-072, D-
         self.write()
         self.assertEqual(self.render(), {"frame_capture_cam1": "unchanged", "frame_capture_cam2": "unchanged",
                                          "inspection_left": "unchanged", "inspection_right": "written",
-                                         "cleanup": "unchanged"})
+                                         "cleanup": "unchanged", "mail": "unchanged"})
 
     def test_capture_health_interval(self):                          # P4d
         self.render()
@@ -445,6 +449,101 @@ class CleanupFile(Site):                                             # F29, D-08
         changes = self.render()
         self.assertEqual(changes["cleanup"], "written")
         self.assertEqual({w for w, s in changes.items() if s == "written"}, {"cleanup"})
+
+
+class MailFile(Site):                                                # F36, D-083
+    KEYS = {"worker_id", "site", "paths", "log", "db", "mail", "graph"}
+    MAIL_KEYS = {"sender", "sender_address", "project_name", "to", "cc", "smtp", "report_url",
+                 "max_alert_age_hours", "flood"}
+
+    def mail_worker(self):
+        """workers/mail/mail_worker.py, used read-only to prove the file is what it reads."""
+        sys.path.insert(0, MAIL_WORKER)
+        try:
+            import mail_worker
+        finally:
+            sys.path.pop(0)
+        return mail_worker
+
+    def load_worker_settings(self):
+        with open(os.path.join(self.rendered, "mail.json"), encoding="utf-8") as f:
+            return self.mail_worker().build_settings(json.load(f))
+
+    def with_handoff_values(self):
+        """The Tadipatri reference with the F36 values the handoff adds to it."""
+        self.data["mail"]["report_url"] = "http://192.168.1.10:8000/defects"
+        self.data["mail"]["flood"] = {"max_per_window": 8, "window_hours": 5, "internal_to": ["support@example.com"]}
+        self.write()
+
+    def test_tadipatri_renders_mail_json(self):                      # F36 done when
+        self.with_handoff_values()
+        self.assertEqual(self.render()["mail"], "written")
+        path = os.path.join(self.rendered, "mail.json")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        doc = self.load("mail")
+        self.assertEqual(set(doc) - {"_generated"}, self.KEYS)
+        self.assertEqual(set(doc["mail"]), self.MAIL_KEYS)
+        self.assertEqual(doc["worker_id"], "mail")
+        self.assertEqual(doc["site"], {"id": "tadipatri", "name": self.data["site"]["name"]})
+        self.assertEqual(doc["paths"], {"root": self.root, "logs": os.path.join(self.root, "logs"),
+                                        "state": os.path.join(self.root, "data", "state")})
+        self.assertEqual(doc["db"], {"host": "localhost", "port": 3306, "name": self.data["db"]["name"],
+                                     "user": self.data["db"]["user"], "password": DB_PASSWORD})
+        mail = doc["mail"]
+        self.assertEqual((mail["sender"], mail["sender_address"], mail["project_name"]),
+                         ("graph", "insightzz.reports@insightzz.com", "Tadipatri_dpc"))
+        self.assertEqual((mail["to"], mail["cc"]), (["redacted@example.com"], ["redacted@example.com"]))
+        self.assertEqual((mail["smtp"], mail["report_url"], mail["max_alert_age_hours"]),
+                         (None, "http://192.168.1.10:8000/defects", 24.0))
+        self.assertEqual(mail["flood"], {"max_per_window": 8, "window_hours": 5.0,
+                                         "internal_to": ["support@example.com"]})
+        self.assertEqual(doc["graph"], {"tenant_id": "t", "client_id": "c", "client_secret": GRAPH_SECRET})
+
+    def test_mail_worker_loads_it_with_no_warning(self):             # F36 done when
+        self.with_handoff_values()
+        self.render()
+        s = self.load_worker_settings()
+        self.assertEqual(s.warnings, [])
+        self.assertEqual((s.sender, s.report_url, s.max_alert_age_hours),
+                         ("graph", "http://192.168.1.10:8000/defects", 24.0))
+        self.assertEqual((s.flood.max_per_window, s.flood.window_hours), (8, 5.0))
+        self.assertEqual(s.graph_client_secret, GRAPH_SECRET)
+
+    def test_reference_as_it_is_today_also_loads_without_warning(self):
+        """Without report_url and flood (written as null = off), still no warning."""
+        self.render()
+        doc = self.load("mail")
+        self.assertEqual((doc["mail"]["report_url"], doc["mail"]["flood"]), (None, None))
+        s = self.load_worker_settings()
+        self.assertEqual((s.warnings, s.report_url, s.flood), ([], None, None))
+
+    def test_max_age_off(self):
+        self.data["mail"]["max_alert_age_hours"] = None
+        self.write()
+        self.render()
+        self.assertIsNone(self.load("mail")["mail"]["max_alert_age_hours"])
+        s = self.load_worker_settings()
+        self.assertEqual((s.max_alert_age_hours, s.warnings), (None, []))
+
+    def test_smtp_site(self):
+        self.data["mail"]["sender"] = "smtp"
+        self.data["mail"]["smtp"] = {"host": "smtp.example.com", "port": 587, "password": "s3cret-smtp-Mn2"}
+        self.write()
+        self.render()
+        doc = self.load("mail")
+        self.assertIsNone(doc["graph"])
+        self.assertEqual(doc["mail"]["smtp"], {"host": "smtp.example.com", "port": 587, "password": "s3cret-smtp-Mn2"})
+        self.assertNotIn(GRAPH_SECRET, json.dumps(doc))
+        s = self.load_worker_settings()
+        self.assertEqual((s.sender, s.smtp_host, s.smtp_password, s.warnings),
+                         ("smtp", "smtp.example.com", "s3cret-smtp-Mn2", []))
+
+    def test_only_mail_changes_when_a_mail_value_changes(self):
+        self.render()
+        self.data["mail"]["max_alert_age_hours"] = 12
+        self.write()
+        changes = self.render()
+        self.assertEqual({w for w, s in changes.items() if s == "written"}, {"mail"})
 
 
 if __name__ == "__main__":
