@@ -45,17 +45,27 @@ def db_server():
                 password=os.environ.get("DPC_TEST_DB_PASSWORD", ""))
 
 
-def mail_json(root, **mail_overrides):
-    """A rendered mail.json as proposed for CONTRACTS 13."""
+# A fixed, complete DB block: settings and crash tests never depend on the DB environment
+# (STATUS F38). Only PollTests pass the real test server (db=real_db_block()).
+FIXED_DB = {"host": "localhost", "port": 3306, "name": TEST_DB, "user": "dpc_test",
+            "password": "fixed-db-password-for-tests"}
+
+
+def real_db_block():
     server = db_server()
+    return {"host": server["host"], "port": server["port"], "name": TEST_DB,
+            "user": server["user"], "password": server["password"]}
+
+
+def mail_json(root, db=None, **mail_overrides):
+    """A rendered mail.json as proposed for CONTRACTS 13."""
     data = {
         "_generated": {"from": "site.yaml", "sha256": "0" * 64, "at": "2026-10-30T10:00:00", "renderer": 1},
         "worker_id": "mail",
         "site": {"id": "testsite", "name": "Test DPC"},
         "paths": {"root": root, "logs": os.path.join(root, "logs"), "state": os.path.join(root, "data", "state")},
         "log": {"backup_count": 3},
-        "db": {"host": server["host"], "port": server["port"], "name": TEST_DB,
-               "user": server["user"], "password": server["password"]},
+        "db": dict(db or FIXED_DB),
         "mail": {"sender": "graph", "sender_address": "reports@example.com", "project_name": "Test_dpc",
                  "to": ["a@example.com", "b@example.com"], "cc": ["c@example.com"], "smtp": None,
                  "report_url": "https://example.com/report", "max_alert_age_hours": 24,
@@ -216,7 +226,7 @@ class PollTests(unittest.TestCase):
                 pass
         admin.close()
         self.addCleanup(self._drop_db)
-        self.s = M.build_settings(mail_json(self.root))
+        self.s = M.build_settings(mail_json(self.root, db=real_db_block()))
         self.conn = M.connect_db(self.s)
         self.cur = self.conn.cursor()
         self.addCleanup(self.conn.close)
