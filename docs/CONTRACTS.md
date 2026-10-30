@@ -114,6 +114,7 @@ Rules: INF file name `YYYY_MM_DD_HH_MM_SS_ffffff.jpg`; algorithm consumes the **
 **[PROPOSED]** every path derived from one `site_root`.
 
 ## 5. Database [EXISTING; seed reconciled with the live Tadipatri DB 2026-10-12] (D-043, D-045)
+- **Since D-083 (P14):** `is_alert_sent` is read and written by `workers/mail/mail_worker.py` (0 pending, 1 sent after confirmation, 2 ignored: duplicate, older than `mail.max_alert_age_hours`, or held by the flood breaker); the old senders are retired at P14-site. Sent journal: `data/state/mail/sent_ids.json` (written only by mail).
 - **Since P7 (D-076):** `wheel_counter_table` row ID 1 is written by the inspection side whose rendered file has `writes_live_wheel_counter: true` (Tadipatri RIGHT). `defects_table.defect_type` gains `Wheel_Skidding`, `WheelMissing`, `Batch_Wheels_Missing` (next to the bolt type); both sides insert rows (`defect_side` Left / Right).
 The executable source of truth is `db/schema.sql` + `db/fixed_rows.sql` + `db/site_rows.example.sql` + `db/migrations/` (D-043). This section says what each table and column means and who writes and reads it. Both change in the same commit; `db/test_seed.py` checks that every seeded table and column is named here. One DB per site (name in config); new sites get exactly the tables below, nothing else. Tables found on live sites but **not** seeded, and per-site differences, are listed in `db/README.md` ("Left out", "Site notes").
 
