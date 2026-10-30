@@ -79,6 +79,8 @@ mail:
   recipients: ["redacted@example.com"]   # real list (11 addresses, = Maihar's for now) only on the machine
   cc: ["redacted@example.com"]           # real list (10 addresses) only on the machine
   disk_report_to: []
+  # report_url: "<the site's report link>"     # F36; real value only on the machine
+  # flood: {max_per_window: 8, window_hours: 5, internal_to: ["<internal address>"]}   # F36, D-083
   log: {backup_count: 5}
 cleanup:
   disk_report_time: "09:00"     # default (F29)
