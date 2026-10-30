@@ -45,3 +45,6 @@ DB: name MAHIAR_DB     PLC: Modbus TCP ip 192.168.2.5 (confirmed)     WHEELS/REV
 QUIRKS: see CODE_AUDIT sections 2 and 4
 ```
 CLEANUP (legacy deleter config, old layout under /home/ddpc_maihar/INSIGHTZZ/CODE/...): raw images kept 24 h, interval 10 s, repeated 20 days / 200 items, plate 10 days, defective 10 days / 200 items, disk % delete 75 / raw delete 85 / mail 90 / INF delete 95
+
+SITE: baga   (details to collect)
+MAIL: runs a mail variant that is not in the repo (Graph + false-alarm flood breaker, hardcoded recipient, thresholds and report URL; reads `image_path` instead of `view_defect`); see STATUS F35. Its MAIL_SERVICE_CONFIG.xml (Graph secret, MySQL root password) was pasted in a chat (D-042 allows chats; the file itself must never be committed).
