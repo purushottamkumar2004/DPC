@@ -132,3 +132,18 @@ workers:
     stop_timeout_seconds: 15
     health:
       type: process
+
+  # ---- mail (P14, D-083): immediate defect alerts from defects_table ----
+  # id "mail" = rendered/mail.json (F36) = the program's own WORKER_ID. Settings only from
+  # DPC_WORKER_CONFIG; a DB or config error writes <root>/run/mail.last_error.json and exits 1
+  # (shown in worker_failure, F21). SIGTERM: exit 0.
+  - id: mail
+    type: mail
+    mode: service
+    restart_cost: normal
+    command: python3 mail_worker.py
+    working_directory: ~/INSIGHTZZ/code/workers/mail
+    stop_signal: SIGTERM
+    stop_timeout_seconds: 15
+    health:
+      type: process
