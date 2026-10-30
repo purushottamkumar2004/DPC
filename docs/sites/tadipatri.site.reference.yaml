@@ -81,6 +81,7 @@ mail:
   disk_report_to: []
   log: {backup_count: 5}
 cleanup:
+  disk_report_time: "09:00"     # default (F29)
   raw_image_hours: 20             # Tadipatri 20 h (Maihar 24 h)
   interval_seconds: 10
   repeated: {days: 20, items: 200}
