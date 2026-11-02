@@ -80,6 +80,23 @@ class Tracker:
     best_image_band_x: Band       # best image per wheel (D4, F25)
 
 
+CHECK_NAMES = ("bucket_clip", "skidding", "wheel_missing", "cycle_restart")
+
+
+@dataclass(frozen=True)
+class Checks:
+    """Which inspection checks run on this side (D-085). A check that is off is not built and
+    not run: no images, no defects, no mail from it."""
+    bucket_clip: bool = True
+    skidding: bool = True
+    wheel_missing: bool = True
+    cycle_restart: bool = True
+    from_default: bool = False     # True: the JSON has no `checks` block (rendered before F41)
+
+    def off(self) -> Tuple[str, ...]:
+        return tuple(name for name in CHECK_NAMES if not getattr(self, name))
+
+
 @dataclass(frozen=True)
 class Paths:
     root: str
@@ -142,6 +159,7 @@ class Settings:
     tracker: Tracker
     db: Db
     mqtt: Optional[Mqtt]           # None: no mqtt block (rendered before F25), heartbeat off
+    checks: Checks                 # D-085
 
     def summary(self) -> str:
         """One log line of what this process will do. Never contains a secret."""
@@ -149,7 +167,8 @@ class Settings:
                 f"model={self.model_name} threshold={self.threshold} total_wheels={self.total_wheel_count} "
                 f"expected_cycle_total={self.expected_cycle_total} live_counter={self.writes_live_wheel_counter} "
                 f"daily_report={self.daily_report_time.strftime('%H:%M')} "
-                f"heartbeat={'on' if self.mqtt else 'off'} config={self.config_path}")
+                f"heartbeat={'on' if self.mqtt else 'off'} checks_off={','.join(self.checks.off()) or 'none'} "
+                f"config={self.config_path}")
 
 
 # ----------------------------------------------------------------------
@@ -233,6 +252,28 @@ def _tracker(data) -> Tracker:
                    clip_confirm=clip, skidding=skid, wheel_missing=missing, best_image_band_x=band)
 
 
+def _checks(data) -> Checks:
+    """`checks` {bucket_clip, skidding, wheel_missing, cycle_restart} (D-085, CONTRACTS 13).
+    A file rendered before F41 has no block: every check on, and the program warns once.
+    A name missing inside the block means on (the D-085 default); an unknown name is an error
+    (a typo must not leave a check running that the site meant to switch off)."""
+    block = data.get("checks")
+    if block is None:
+        return Checks(from_default=True)
+    if not isinstance(block, dict):
+        raise SettingsError(f"'checks' must be a mapping of check name to true/false, got {block!r}")
+    unknown = sorted(set(block) - set(CHECK_NAMES))
+    if unknown:
+        raise SettingsError(f"'checks' has unknown name(s) {unknown}; known: {list(CHECK_NAMES)}")
+    values = {}
+    for name in CHECK_NAMES:
+        value = block.get(name, True)
+        if not isinstance(value, bool):
+            raise SettingsError(f"'checks.{name}' must be true or false, got {value!r}")
+        values[name] = value
+    return Checks(**values)
+
+
 def _mqtt(data) -> Optional[Mqtt]:
     """The heartbeat broker (F25). user/password null = no login. Without the block (a file
     rendered before F25) the program runs without a heartbeat and says so once."""
@@ -300,6 +341,7 @@ def load_settings(path: str) -> Settings:
         db=Db(host=_text(db, "host", "db"), port=_number(db, "port", "db", int, 1), name=_text(db, "name", "db"),
               user=_text(db, "user", "db"), password=str(_get(db, "password", "db"))),
         mqtt=_mqtt(data),
+        checks=_checks(data),
     )
 
 

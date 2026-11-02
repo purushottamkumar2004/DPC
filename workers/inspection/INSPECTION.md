@@ -60,11 +60,12 @@ flowchart TD
   1. Read the settings. Create every output folder of `paths` plus `<root>/run`, so `wheel_status_images` exists before F23 lands (D-075).
   2. Logger: `<paths.logs>/<worker_id>.log`, midnight rotation, `log.backup_count`, level INFO as before.
   3. Delete an old `last_error.json` of this worker: the file always describes the last exit.
-  4. Start the heartbeat.
-  5. Connect to the DB, retrying every second (as before; waiting counts as alive).
-  6. Load the model.
-  7. Delete the `INF` backlog (unchanged, L:2299-2304).
-  8. Start the loop. Nothing is inspected before the first plate.
+  4. Log one INFO line `Checks off: ...` (or `none (all checks on)`), D-085. A file without a `checks` block (rendered before F41) adds one WARNING and runs every check.
+  5. Start the heartbeat.
+  6. Connect to the DB, retrying every second (as before; waiting counts as alive).
+  7. Load the model.
+  8. Delete the `INF` backlog (unchanged, L:2299-2304).
+  9. Start the loop. Nothing is inspected before the first plate.
 - **Stop:** SIGTERM or SIGINT. The current frame is finished, then the program exits 0. During the DB wait the stop is immediate.
 - **Unexpected error** (D-073 D7), anywhere: the error is logged with its traceback, `last_error.json` is written, and the program exits 1. There is **no in-process restart** any more (old B8). The Supervisor restarts the program under `restart_cost: high`.
   - **Config errors.** A config that cannot be read also writes `last_error.json`. Root and worker id are then taken from the config path `<root>/config/rendered/<worker_id>.json`.
@@ -85,6 +86,7 @@ flowchart TD
 |---|---|
 | `worker_id`, `side`, `defect_side`, `camera_id` | log file, heartbeat topic, `last_error` name; `defect_side` = `defects_table.defect_side` (`Left` / `Right`); `side` is the prefix of magnet images |
 | `writes_live_wheel_counter` | D3: only this side writes `wheel_counter_table` |
+| `checks` {bucket_clip, skidding, wheel_missing, cycle_restart} | D-085: which checks run on this side (section 6) |
 | `paths.inf` | work queue |
 | `paths.raw` | frames moved out of `INF`; skidding evidence source; best-image paths |
 | `paths.defect_raw`, `paths.defective`, `paths.repeated` | defect images (section 8) |
@@ -128,6 +130,15 @@ Every value comes from the JSON; the last constant (the best-image band) became 
 - **Before the first plate:** frames are inferred, then moved to `RAW_IMAGES` without counting or checks.
 
 ## 6. Checks
+**Switches (D-085, F42).** Each check can be off per side through `checks` in the JSON (`site.yaml` `inspection.checks`, per-side override `inspection.sides.<SIDE>.checks`).
+- A check that is off is **not built and not run**: no images, no defect rows, no mails from it.
+- Its own side files stop too: `bolt_data` copies with `bucket_clip`; magnet-not-seen images with `skidding`.
+- Everything else is unchanged. Wheel counting, plate and cycle reset, the best image and the live wheel number always run. With `cycle_restart` off only the `Batch_Wheels_Missing` check stops, not the reset.
+- Unknown names or non-boolean values stop the program at start (a typo must not leave a check running).
+- A name missing from the block means on.
+- No block at all (file rendered before F41) means all on, with one WARNING.
+- Code is never edited on a site to switch a check off.
+
 - **Full bucket clip** (`check_bucket_clip`, L:598-764, unchanged).
   - Candidate: width > `bucket_clip_w`, inside `bucket_clip_window`, no `high_dusty_bucket_clip` within `tracker.high_dusty_suppress_px`.
   - Bolts: `nut_bolt` centre x between the clip's xmin and xmax.
@@ -211,7 +222,7 @@ The mail sender sends every unsent row of any type, so all of them are now maile
 - **New observation, kept:** a frame is deleted as invalid when it is less than 0.03 s old (L:503-526, `is_valid_image`). With the atomic hand-off (D-031) a fresh `INF` link can be that young, so a frame can be lost. It is rare at 4 fps. Fix: skip the frame instead of deleting it; developer decision.
 
 ## 11. Tests
-- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 32 tests.
+- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 39 tests.
   - Settings from the real renderer: Tadipatri per-side values; a missing key is named.
   - Wheel counter in both directions; plate tracker: one plate crossing = one new plate, on both sides (D-077).
   - D-077 through the real frame flow: a plate crossing the Left camera with a wheel in view gives one reset and no `Batch_Wheels_Missing`; the next plate gives one, with the right count. (With the old B5 rule the same test gives 4 resets and a false restart at wheel 1.)
@@ -222,6 +233,7 @@ The mail sender sends every unsent row of any type, so all of them are now maile
   - Cycle restart, defect store (new / duplicate / gate), daily report skip.
   - The frame flow with a fake detector (plate gating, moves, live counter on Right only).
   - `last_error.json` (scrubbed, config-error case, `where` in own code), heartbeat payload.
+  - Check switches (`test_checks.py`, D-085). One scripted Left scenario of 1,200 frames produces all four defect types through the real frame flow and `DefectStore`. With each check off: no rows and no images of that type, no `bolt_data` / magnet files where they belong to it, and **the other checks' rows identical** to the all-on run. Explicit all-on = default. Settings: missing block, missing name, unknown name, non-boolean; start log lines.
 - **`test_equivalence.py`:** the old functions of `LeftAlgorithm.py` / `RightAlgorithm.py` (Detectron2 stubbed) and the new classes get the same random detection sequences. Results are identical for:
   - wheel counter (3,000 frames, both directions); plate on Right against the old plate code; plate on Left against the old Left *wheel* rule fed with plates, which is what D-077 asks for (the old Left plate code is B5, deliberately different now);
   - bucket-clip inserts (6,000 frames per side; Right compared with its saved images, since its insert was commented out);
