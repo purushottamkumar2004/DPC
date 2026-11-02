@@ -73,6 +73,15 @@ def create_output_dirs(settings):
         os.makedirs(folder, exist_ok=True)
 
 
+def log_checks(checks):
+    """D-085: one INFO line naming the checks that are off; one WARNING when the rendered file
+    has no `checks` block yet (all checks run)."""
+    if checks.from_default:
+        logger.warning("Rendered config has no 'checks' block (rendered before F41): all checks on")
+    off = checks.off()
+    logger.info(f"Checks off: {', '.join(off)}" if off else "Checks off: none (all checks on)")
+
+
 def connect_db(settings, stats):
     """Retry until the DB answers (as L:2511-2525); a stop request ends the wait."""
     while not _stop_requested:
@@ -129,10 +138,12 @@ class Inspection:
         self.s, self.detector, self.store, self.stats = settings, detector, store, stats
         self.wheels = WheelCounter(settings.motion, settings.tracker.new_wheel_jump_px, logger)
         self.plates = PlateTracker(settings.motion, settings.tracker.new_plate_jump_px, logger)
-        self.bucket_clip = BucketClipCheck(settings, store, logger)
-        self.skidding = SkiddingCheck(settings, store, logger)
-        self.wheel_missing = WheelMissingCheck(settings, store, logger)
-        self.cycle_restart = CycleRestartCheck(settings, store, logger)
+        # D-085: a check that is switched off is not built (None) and not run.
+        on = settings.checks
+        self.bucket_clip = BucketClipCheck(settings, store, logger) if on.bucket_clip else None
+        self.skidding = SkiddingCheck(settings, store, logger) if on.skidding else None
+        self.wheel_missing = WheelMissingCheck(settings, store, logger) if on.wheel_missing else None
+        self.cycle_restart = CycleRestartCheck(settings, store, logger) if on.cycle_restart else None
         self.wheel_report = WheelReport(settings, logger)
         self.plate_found = False                # no inspection before the first plate
         self.wheel_counter = 0
@@ -170,15 +181,18 @@ class Inspection:
             self.store.write_live_wheel_count(self.wheel_counter)
             self.live_counter_written = self.wheel_counter
 
-        self.bucket_clip.run(by_class.get("nut_bolt", []), by_class.get("bucket_clip", []),
-                             by_class.get("high_dusty_bucket_clip", []), by_class.get("half_bucket_clip", []),
-                             by_class.get("half_high_dusty_bucket_clip", []), image, self.wheel_counter,
-                             repeated_list, frame_path)
+        if self.bucket_clip:
+            self.bucket_clip.run(by_class.get("nut_bolt", []), by_class.get("bucket_clip", []),
+                                 by_class.get("high_dusty_bucket_clip", []), by_class.get("half_bucket_clip", []),
+                                 by_class.get("half_high_dusty_bucket_clip", []), image, self.wheel_counter,
+                                 repeated_list, frame_path)
         # The current frame must be in RAW_IMAGES before the skidding evidence copy (L:2447).
         shutil.copy2(frame_path, os.path.join(self.s.paths.raw, os.path.basename(frame_path)))
-        self.skidding.run(wheels, by_class.get("wheel_magnet", []), by_class.get("wheel_bolt", []),
-                          clean, self.wheel_counter, repeated_list, frame_path)
-        self.wheel_missing.run(wheels, half_wheels, image, self.wheel_counter, repeated_list)
+        if self.skidding:
+            self.skidding.run(wheels, by_class.get("wheel_magnet", []), by_class.get("wheel_bolt", []),
+                              clean, self.wheel_counter, repeated_list, frame_path)
+        if self.wheel_missing:
+            self.wheel_missing.run(wheels, half_wheels, image, self.wheel_counter, repeated_list)
         self._move_to_raw(frame_path)
         self.wheel_report.run_daily()
 
@@ -192,8 +206,10 @@ class Inspection:
             logger.error(f"Failed to copy image {frame_path} to {self.s.paths.plate} | {e}")
         if not self.plates.is_new_plate(plates, os.path.basename(frame_path)):
             return wheels, half_wheels
-        # a copy: the cycle-restart box must not end up on this frame's other defect images
-        self.cycle_restart.run(self.wheels.count, image.copy(), repeated_list)
+        # a copy: the cycle-restart box must not end up on this frame's other defect images.
+        # The cycle itself (counter reset) always runs; only the defect check can be off (D-085).
+        if self.cycle_restart:
+            self.cycle_restart.run(self.wheels.count, image.copy(), repeated_list)
         if not self.plate_found:
             self.plate_found = True
             logger.info("Plate Found: Resetting state and clearing wheel lists for this frame.")
@@ -264,6 +280,7 @@ def main() -> int:
         signal.signal(signal.SIGINT, _request_stop)
         version = code_version(REPO_ROOT)
         logger.info(f"Started pid={os.getpid()} version={version} {settings.summary()}")
+        log_checks(settings.checks)
 
         stats = LoopStats()
         heartbeat = Heartbeat(settings, stats, version, logger)
