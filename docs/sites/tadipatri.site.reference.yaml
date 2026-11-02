@@ -65,8 +65,8 @@ plc:
   ip: 192.168.1.5                 # confirmed (Q20)
   port: 502
   timeout_s: 3
-  light_register: 4109            # inverted: 0 = ON, 1 = OFF
-  light_on_value: 0               # inverted light (D-064)
+  light_register: 4109            # 1 = ON, 0 = OFF (D-084)
+  light_on_value: 1               # not inverted (D-084); default 1
   cleaning_register: 4106         # 1 = ON, 0 = OFF
   conveyor_status_register: 4098
   cleaning_pulse_seconds: 10
