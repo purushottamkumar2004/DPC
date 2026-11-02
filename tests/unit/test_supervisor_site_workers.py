@@ -49,7 +49,7 @@ class TwoCameraFile(unittest.TestCase):
     def test_worker_ids_from_d033_and_order(self):
         self.assertEqual([w.id for w in self.manager.start_order],
                          ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right", "cleanup",
-                          "mail"])
+                          "mail", "plc"])
 
     def test_each_camera_has_its_own_live_file_and_no_xml(self):
         for n in (1, 2):
@@ -141,6 +141,33 @@ class MailWorkerF37(unittest.TestCase):
         # names its last_error.json after its own WORKER_ID: both must be "mail"
         with open(os.path.join(os.path.dirname(SUPERVISOR_DIR), "workers", "mail", "mail_worker.py")) as f:
             self.assertIn('WORKER_ID = "mail"', f.read())
+
+
+class PlcWorkerF40(unittest.TestCase):
+    """STATUS F40: the plc worker exactly as listed there (P16, D-084)."""
+
+    def test_plc(self):
+        manager = ConfigurationManager(SITE_FILE, SUPERVISOR_DIR)
+        manager.load()
+        w = {x.id: x for x in manager.workers}["plc"]
+        self.assertEqual((w.type, w.mode, w.restart_cost), ("plc", "service", "normal"))
+        self.assertEqual(w.command, "python3 plc_worker.py")
+        self.assertEqual(w.working_directory, os.path.join(os.path.expanduser("~"), "INSIGHTZZ/code/workers/plc"))
+        self.assertEqual((w.stop_signal, w.stop_timeout_seconds), ("SIGTERM", 20))
+        self.assertEqual(w.health.type, "process")
+        self.assertFalse(w.env_from_site)
+        self.assertEqual((w.env, w.start_after, w.follows), ({}, [], None))
+
+    def test_id_matches_the_programs_worker_id(self):
+        # rendered/<id>.json and <id>.last_error.json both need the program's own WORKER_ID
+        with open(os.path.join(os.path.dirname(SUPERVISOR_DIR), "workers", "plc", "plc_settings.py")) as f:
+            self.assertIn('WORKER_ID = "plc"', f.read())
+
+    def test_old_light_examples_are_gone(self):
+        with open(os.path.join(SUPERVISOR_DIR, "config", "workers.yaml")) as f:
+            text = f.read()
+        for gone in ("plc_light", "light_reassert", "light.py"):
+            self.assertNotIn(gone, text)
 
 
 class SiteNumbersWithDummyCaptures(SupervisorTest):

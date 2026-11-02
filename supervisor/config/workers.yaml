@@ -70,17 +70,9 @@ workers:
       startup_grace_seconds: 8
 
   # ---------------- real workers: shapes only, disabled (site entries: STATUS item 4) ----------------
-  - id: plc_light                # oneshot: switch the light on once, then exit 0 (D-019)
-    type: plc
-    enabled: false
-    mode: oneshot
-    command: python3 light.py
-    working_directory: ~/INSIGHTZZ/code/workers/plc
-
   - id: frame_capture_cam1       # one capture per camera (D-033)
     type: frame_capture
     enabled: false
-    start_after: [plc_light]
     command: python3 FrameCapture_Basler.py
     working_directory: ~/INSIGHTZZ/code/workers/frame_capture_basler
     stop_signal: SIGINT          # releases the camera on Ctrl+C
@@ -113,10 +105,8 @@ workers:
     command: python3 cleanup.py  # settings from rendered/cleanup.json (P9); no env_from_site
     working_directory: ~/INSIGHTZZ/code/workers/cleanup
 
-  - id: light_reassert           # example periodic job (a PLC reboot leaves the light off, D-024)
+  - id: plc                      # the only program that talks to the PLC: light, cleaning, conveyor (D-084)
     type: plc
     enabled: false
-    mode: periodic
-    interval_s: 60
-    command: python3 light.py
+    command: python3 plc_worker.py
     working_directory: ~/INSIGHTZZ/code/workers/plc
