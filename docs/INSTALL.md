@@ -47,7 +47,7 @@ sudo systemctl enable --now mysql mosquitto
 Use **one** Python for the Supervisor and every program, and note its path (`which python3`); step 8 needs it. Tadipatri uses the system `python3`.
 
 ```bash
-python3 -m pip install pypylon opencv-python-headless numpy pymysql PyYAML "paho-mqtt>=1.6" pymodbus
+python3 -m pip install pypylon opencv-python-headless numpy pymysql PyYAML "paho-mqtt>=1.6" pymodbus requests
 ```
 - **PyTorch and Detectron2** (inspection): install PyTorch for the machine's CUDA version (pytorch.org), then Detectron2 0.6 from source. Tadipatri has it in `~/detectron2-0.6`.
 
