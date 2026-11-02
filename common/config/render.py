@@ -112,6 +112,7 @@ def inspection_config(cfg: SiteConfig, camera) -> Dict[str, Any]:
         "bucket_clip_window": asdict(side_cfg.bucket_clip_window),
         "half_bucket_clip_window": asdict(side_cfg.half_bucket_clip_window),
         "tracker": asdict(side_cfg.tracker),
+        "checks": asdict(side_cfg.checks),           # D-085: per-side value already applied
         "db": _db(cfg),
         # heartbeat transport (D-076); user/password null when the broker has no login
         "mqtt": {"host": cfg.mqtt.host, "port": cfg.mqtt.port, "user": cfg.mqtt.user, "password": cfg.mqtt.password},

@@ -619,5 +619,46 @@ class PlcFile(Site):                                                 # F39, D-08
         self.assertEqual((s.mqtt.user, s.mqtt.password), ("dpc_broker", "s3cret-mqtt-Pl4"))
 
 
+class ChecksRender(Site):                                            # F41, D-085
+    def test_default_all_true_on_both_sides(self):
+        self.data["inspection"].pop("checks", None)
+        self.write()
+        self.render()
+        for worker in ("inspection_left", "inspection_right"):
+            self.assertEqual(self.load(worker)["checks"], {"bucket_clip": True, "skidding": True,
+                                                           "wheel_missing": True, "cycle_restart": True})
+
+    def test_tadipatri_wheel_missing_off_on_both_sides(self):        # F41 done when
+        self.data["inspection"]["checks"] = {"wheel_missing": False}   # the value proposed for the reference
+        self.write()
+        self.render()
+        for worker in ("inspection_left", "inspection_right"):
+            self.assertEqual(self.load(worker)["checks"], {"bucket_clip": True, "skidding": True,
+                                                           "wheel_missing": False, "cycle_restart": True})
+
+    def test_per_side_value_wins_and_only_that_side_changes(self):
+        self.data["inspection"]["checks"] = {"wheel_missing": False}
+        self.write()
+        self.render()
+        self.data["inspection"]["sides"]["RIGHT"]["checks"] = {"wheel_missing": True}
+        self.write()
+        changes = self.render()
+        self.assertEqual({w for w, s in changes.items() if s == "written"}, {"inspection_right"})
+        self.assertFalse(self.load("inspection_left")["checks"]["wheel_missing"])
+        self.assertTrue(self.load("inspection_right")["checks"]["wheel_missing"])
+
+    def test_inspection_program_still_reads_the_file(self):
+        sys.path.insert(0, os.path.join(REPO_ROOT, "workers", "inspection"))
+        try:
+            import settings as inspection_settings
+        finally:
+            sys.path.pop(0)
+        self.data["inspection"]["checks"] = {"wheel_missing": False}
+        self.write()
+        self.render()
+        for worker in ("inspection_left", "inspection_right"):
+            inspection_settings.load_settings(os.path.join(self.rendered, f"{worker}.json"))
+
+
 if __name__ == "__main__":
     unittest.main()

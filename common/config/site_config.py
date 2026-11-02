@@ -312,12 +312,26 @@ class Tracker:
 
 
 @dataclass(frozen=True)
+class Checks:
+    """Which inspection checks run (D-085). A check that is off is not run at all: no images,
+    no defects, no mail."""
+    bucket_clip: bool = True
+    skidding: bool = True
+    wheel_missing: bool = True
+    cycle_restart: bool = True
+
+
+CHECK_NAMES = ("bucket_clip", "skidding", "wheel_missing", "cycle_restart")
+
+
+@dataclass(frozen=True)
 class SideSettings:
     object_sizes: ObjectSizes
     motion: str                      # rtl | ltr: direction the belt moves in this camera's image
     bucket_clip_window: Window
     half_bucket_clip_window: Window
     tracker: Tracker
+    checks: Checks = Checks()        # this side's switches: the side's own value wins over inspection.checks
 
 
 @dataclass(frozen=True)
@@ -356,6 +370,7 @@ class InspectionConfig:
     auto_roi: AutoRoi
     live_wheel_counter_side: str        # the one side that writes wheel_counter_table (D-073 D3)
     wheel_report: WheelReport
+    checks: Checks = Checks()           # site-wide switches (D-085); per-side result in sides[<SIDE>].checks
 
 
 @dataclass(frozen=True)
@@ -926,7 +941,16 @@ def _read_tracker(parent: _Section, default: Dict[str, Any]) -> Tracker:
     return tracker
 
 
-def _read_side(s: _Section, side: str) -> SideSettings:
+def _read_checks(parent: _Section, base: Checks) -> Checks:
+    """`checks` {bucket_clip, skidding, wheel_missing, cycle_restart}: optional, each key optional;
+    a missing key keeps `base` (true for the site block, the site value for a side block)."""
+    c = parent.section("checks", required=False)
+    values = {name: c.boolean(name, required=False, default=getattr(base, name)) for name in CHECK_NAMES}
+    c.finish()
+    return Checks(**{k: (getattr(base, k) if v is None else v) for k, v in values.items()})
+
+
+def _read_side(s: _Section, side: str, site_checks: Checks = Checks()) -> SideSettings:
     """One side. Everything but object_sizes is optional; the default is THIS side's value in
     today's code (SIDE_DEFAULTS, D-073 D5)."""
     default = SIDE_DEFAULTS[side]
@@ -941,15 +965,16 @@ def _read_side(s: _Section, side: str) -> SideSettings:
         half_bucket_clip_window=_read_window(side_section, "half_bucket_clip_window",
                                              default["half_bucket_clip_window"]),
         tracker=_read_tracker(side_section, default["tracker"]),
+        checks=_read_checks(side_section, site_checks),
     )
     side_section.finish()
     return settings
 
 
-def _read_sides(parent: _Section, sides: List[str]) -> Dict[str, SideSettings]:
+def _read_sides(parent: _Section, sides: List[str], site_checks: Checks = Checks()) -> Dict[str, SideSettings]:
     """`inspection.sides`: exactly one entry per configured camera side."""
     s = parent.section("sides")
-    result = {side: _read_side(s, side) for side in sides}
+    result = {side: _read_side(s, side, site_checks) for side in sides}
     if not sides:      # no valid camera: those problems are already reported
         s.used.update(s.data)
     for key in (s.data if sides else ()):
@@ -1012,15 +1037,17 @@ def _read_inspection(top: _Section, paths: Paths, sides: List[str]) -> Inspectio
                       choices=tuple(CAMERA_SIDES.values()))
     if writer is not None and sides and writer not in sides:
         s.problem("live_wheel_counter_side", f"{writer} has no camera on this site")
+    site_checks = _read_checks(s, Checks())
     cfg = InspectionConfig(
         log=_read_log(s),
         model=_read_model_ref(s, paths),
         threshold=s.number("threshold", low=0, high=1, low_exclusive=True, high_exclusive=True),
         machine=_read_machine(s),
-        sides=_read_sides(s, sides),
+        sides=_read_sides(s, sides, site_checks),
         auto_roi=_read_auto_roi(s),
         live_wheel_counter_side=writer,
         wheel_report=_read_wheel_report(s),
+        checks=site_checks,
     )
     s.finish()
     return cfg

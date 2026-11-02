@@ -654,6 +654,48 @@ class PlcF39(_TempDirTest):                                           # F39, D-0
         self.assertEqual(self.problems_for(data), ["plc.auto_cleaning: must be true or false, got 1"])
 
 
+class ChecksF41(_TempDirTest):                                        # F41, D-085
+    def data_with(self, site=None, right=None):
+        data = self.config_data()
+        data["inspection"].pop("checks", None)
+        if site is not None:
+            data["inspection"]["checks"] = site
+        if right is not None:
+            data["inspection"]["sides"]["RIGHT"]["checks"] = right
+        return data
+
+    def test_all_on_by_default(self):
+        cfg = sc.load_site_config(self.write_yaml(self.data_with()))
+        self.assertEqual(cfg.inspection.checks, sc.Checks(True, True, True, True))
+        for side in ("LEFT", "RIGHT"):
+            self.assertEqual(cfg.inspection.sides[side].checks, sc.Checks())
+
+    def test_site_switch_applies_to_both_sides(self):
+        cfg = sc.load_site_config(self.write_yaml(self.data_with(site={"wheel_missing": False})))
+        for side in ("LEFT", "RIGHT"):
+            self.assertEqual(cfg.inspection.sides[side].checks, sc.Checks(wheel_missing=False))
+
+    def test_per_side_value_wins(self):
+        cfg = sc.load_site_config(self.write_yaml(self.data_with(
+            site={"wheel_missing": False, "skidding": True},
+            right={"wheel_missing": True, "skidding": False})))
+        self.assertEqual(cfg.inspection.sides["LEFT"].checks, sc.Checks(skidding=True, wheel_missing=False))
+        self.assertEqual(cfg.inspection.sides["RIGHT"].checks, sc.Checks(skidding=False, wheel_missing=True))
+        self.assertEqual(cfg.inspection.checks, sc.Checks(wheel_missing=False))
+
+    def test_one_side_only(self):
+        cfg = sc.load_site_config(self.write_yaml(self.data_with(right={"cycle_restart": False})))
+        self.assertTrue(cfg.inspection.sides["LEFT"].checks.cycle_restart)
+        self.assertFalse(cfg.inspection.sides["RIGHT"].checks.cycle_restart)
+
+    def test_bad_values(self):
+        problems = self.problems_for(self.data_with(site={"wheel_missing": "no", "speed": False},
+                                                    right={"bucket_clip": 0}))
+        self.assertIn("inspection.checks.wheel_missing: must be true or false, got 'no'", problems)
+        self.assertProblem(problems, r"^inspection\.checks\.speed: unknown key")
+        self.assertIn("inspection.sides.RIGHT.checks.bucket_clip: must be true or false, got 0", problems)
+
+
 class Secrets(_TempDirTest):
     def assertNoSecret(self, text):
         for value in list(SECRETS.values()) + ["s3cret"]:
