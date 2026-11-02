@@ -369,8 +369,12 @@ class PlcConfig:
     conveyor_status_register: int
     cleaning_pulse_seconds: float
     legacy_db_numbers: Optional[Dict[str, int]]   # {"write": n, "read": n}, legacy XML only
-    light_on_value: int          # value that switches the light ON: 1, or 0 where inverted (D-064)
+    light_on_value: int          # value that switches the light ON: 1 (Tadipatri too, D-084); 0 only where inverted
     log: LogSettings
+    light_check_seconds: float = 60.0        # read-verify the light, rewrite when it differs (D-084)
+    status_interval_seconds: float = 10.0    # conveyor status read + MQTT status
+    cleaning_cooldown_seconds: float = 600.0 # minimum gap between AUTOMATIC cleaning pulses
+    auto_cleaning: bool = False              # act on poor-view events; off until Q22 is decided
 
 
 @dataclass(frozen=True)
@@ -558,6 +562,15 @@ class _Section:
             self.problem(name, f"must be an integer, got {value!r}")
             return None
         return self._check_range(name, value, low, high, choices)
+
+    def boolean(self, name, required=True, default=None):
+        value = self._raw(name, required)
+        if value is _MISSING:
+            return default
+        if not isinstance(value, bool):
+            self.problem(name, f"must be true or false, got {value!r}")
+            return None
+        return value
 
     def number(self, name, required=True, default=None, low=None, high=None, low_exclusive=False,
                high_exclusive=False):
@@ -1036,9 +1049,16 @@ def _read_plc(top: _Section) -> PlcConfig:
         cleaning_pulse_seconds=s.number("cleaning_pulse_seconds", required=False, default=10.0,
                                         low=0, low_exclusive=True, high=600),
         legacy_db_numbers=legacy,
-        # Tadipatri's light register is inverted (0 = ON); writing 1 there would switch it off
+        # 1 = ON at Tadipatri too (D-084 corrects D-064); 0 only for a site whose light is inverted
         light_on_value=s.integer("light_on_value", required=False, default=1, choices=(0, 1)),
         log=_read_log(s),
+        light_check_seconds=s.number("light_check_seconds", required=False, default=60.0,
+                                     low=0, low_exclusive=True, high=86400),
+        status_interval_seconds=s.number("status_interval_seconds", required=False, default=10.0,
+                                         low=0, low_exclusive=True, high=86400),
+        cleaning_cooldown_seconds=s.number("cleaning_cooldown_seconds", required=False, default=600.0,
+                                           low=0, high=86400),
+        auto_cleaning=s.boolean("auto_cleaning", required=False, default=False),
     )
     s.finish()
     return cfg

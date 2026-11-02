@@ -31,7 +31,9 @@ _spec.loader.exec_module(cli)
 REFERENCE = os.path.join(REPO_ROOT, "docs", "sites", "tadipatri.site.reference.yaml")
 DB_PASSWORD = "s3cret-db-Rt55"
 GRAPH_SECRET = "s3cret-graph-Uy21"
-WORKERS = ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right", "cleanup", "mail"]
+WORKERS = ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right", "cleanup", "mail",
+           "plc"]
+PLC_WORKER = os.path.join(REPO_ROOT, "workers", "plc")
 MAIL_WORKER = os.path.join(REPO_ROOT, "workers", "mail")
 CLEANUP_SETTINGS = os.path.join(REPO_ROOT, "workers", "cleanup")
 
@@ -44,9 +46,7 @@ class Site(unittest.TestCase):
         self.root = os.path.join(self._tmp.name, "INSIGHTZZ")
         with open(REFERENCE, encoding="utf-8") as f:
             text = f.read()
-        text = (text.replace("      # ip: 192.168.1.102", "      ip: 192.168.1.102")
-                    .replace("      # ip: 192.168.1.103", "      ip: 192.168.1.103")
-                    .replace("  # light_on_value: 0", "  light_on_value: 0"))
+        # The reference already has the camera ips and light_on_value 1 (D-084).
         self.data = yaml.safe_load(text)
         self.data["paths"]["root"] = self.root
         self.data["db"]["password"] = DB_PASSWORD
@@ -177,7 +177,7 @@ class Changes(Site):
         self.write()
         self.assertEqual(self.render(), {"frame_capture_cam1": "unchanged", "frame_capture_cam2": "unchanged",
                                          "inspection_left": "written", "inspection_right": "written",
-                                         "cleanup": "unchanged", "mail": "unchanged"})
+                                         "cleanup": "unchanged", "mail": "unchanged", "plc": "unchanged"})
         self.data["capture"]["cameras"][0]["exposure_us"] = 1800
         self.write()
         self.assertEqual(self.render()["frame_capture_cam1"], "written")
@@ -199,7 +199,7 @@ class Changes(Site):
         self.assertEqual(changes["frame_capture_cam2"], "removed")
         self.assertEqual(changes["inspection_right"], "removed")
         self.assertEqual(sorted(os.listdir(self.rendered)),
-                         ["cleanup.json", "frame_capture_cam1.json", "inspection_left.json", "mail.json"])
+                         ["cleanup.json", "frame_capture_cam1.json", "inspection_left.json", "mail.json", "plc.json"])
 
     def test_foreign_files_are_never_removed(self):
         self.render()
@@ -299,7 +299,7 @@ class P7Prep(Site):                                                  # D-072, D-
         self.write()
         self.assertEqual(self.render(), {"frame_capture_cam1": "unchanged", "frame_capture_cam2": "unchanged",
                                          "inspection_left": "unchanged", "inspection_right": "written",
-                                         "cleanup": "unchanged", "mail": "unchanged"})
+                                         "cleanup": "unchanged", "mail": "unchanged", "plc": "unchanged"})
 
     def test_capture_health_interval(self):                          # P4d
         self.render()
@@ -544,6 +544,79 @@ class MailFile(Site):                                                # F36, D-08
         self.write()
         changes = self.render()
         self.assertEqual({w for w, s in changes.items() if s == "written"}, {"mail"})
+
+
+class PlcFile(Site):                                                 # F39, D-084
+    KEYS = {"worker_id", "paths", "log", "plc", "mqtt", "db"}
+    PLC_KEYS = {"type", "ip", "port", "timeout_s", "light_register", "light_on_value", "cleaning_register",
+                "conveyor_status_register", "cleaning_pulse_seconds", "light_check_seconds",
+                "status_interval_seconds", "cleaning_cooldown_seconds", "auto_cleaning"}
+
+    def plc_settings(self):
+        """workers/plc/plc_settings.py, used read-only to prove the file is what it reads."""
+        sys.path.insert(0, PLC_WORKER)
+        try:
+            import plc_settings
+        finally:
+            sys.path.pop(0)
+        return plc_settings
+
+    def load_worker_settings(self):
+        with open(os.path.join(self.rendered, "plc.json"), encoding="utf-8") as f:
+            return self.plc_settings().build_settings(json.load(f))
+
+    def test_tadipatri_renders_plc_json(self):                       # F39 done when
+        self.assertEqual(self.render()["plc"], "written")
+        path = os.path.join(self.rendered, "plc.json")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        doc = self.load("plc")
+        self.assertEqual(set(doc) - {"_generated"}, self.KEYS)
+        self.assertEqual(set(doc["plc"]), self.PLC_KEYS)                # no legacy_db_numbers
+        self.assertEqual(doc["worker_id"], "plc")
+        self.assertEqual(doc["paths"], {"root": self.root, "logs": os.path.join(self.root, "logs"),
+                                        "state": os.path.join(self.root, "data", "state")})
+        self.assertEqual(doc["plc"], {
+            "type": "modbus_tcp", "ip": "192.168.1.5", "port": 502, "timeout_s": 3.0,
+            "light_register": 4109, "light_on_value": 1,                # 1 = ON at Tadipatri (D-084)
+            "cleaning_register": 4106, "conveyor_status_register": 4098, "cleaning_pulse_seconds": 10.0,
+            "light_check_seconds": 60.0, "status_interval_seconds": 10.0,
+            "cleaning_cooldown_seconds": 600.0, "auto_cleaning": False})
+        self.assertEqual(doc["mqtt"], {"host": "localhost", "port": 1883, "user": None, "password": None})
+        self.assertEqual(doc["db"], {"host": "localhost", "port": 3306, "name": self.data["db"]["name"],
+                                     "user": self.data["db"]["user"], "password": DB_PASSWORD})
+        self.assertNotIn(GRAPH_SECRET, json.dumps(doc))
+
+    def test_plc_worker_loads_it_with_no_warning(self):              # F39 done when
+        self.render()
+        s = self.load_worker_settings()
+        self.assertEqual(s.warnings, [])
+        self.assertEqual((s.ip, s.light_register, s.light_on_value, s.cleaning_register, s.auto_cleaning),
+                         ("192.168.1.5", 4109, 1, 4106, False))
+        self.assertEqual((s.light_check_seconds, s.status_interval_seconds, s.cleaning_cooldown_seconds),
+                         (60.0, 10.0, 600.0))
+        self.assertIsNotNone(s.mqtt)
+        self.assertEqual(s.db.password, DB_PASSWORD)
+
+    def test_new_keys_set_in_site_yaml(self):
+        self.data["plc"].update(light_check_seconds=30, status_interval_seconds=5,
+                                cleaning_cooldown_seconds=0, auto_cleaning=True)
+        self.write()
+        changes = self.render()
+        self.assertEqual({w for w, s in changes.items() if s == "written"}, set(WORKERS))
+        self.render()
+        self.data["plc"]["light_check_seconds"] = 45
+        self.write()
+        self.assertEqual({w for w, s in self.render().items() if s == "written"}, {"plc"})
+        s = self.load_worker_settings()
+        self.assertEqual((s.light_check_seconds, s.status_interval_seconds, s.cleaning_cooldown_seconds,
+                          s.auto_cleaning, s.warnings), (45.0, 5.0, 0.0, True, []))
+
+    def test_mqtt_login_reaches_the_plc(self):
+        self.data["mqtt"].update(user="dpc_broker", password="s3cret-mqtt-Pl4")
+        self.write()
+        self.render()
+        s = self.load_worker_settings()
+        self.assertEqual((s.mqtt.user, s.mqtt.password), ("dpc_broker", "s3cret-mqtt-Pl4"))
 
 
 if __name__ == "__main__":

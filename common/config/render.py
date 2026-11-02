@@ -186,9 +186,32 @@ def mail_config(cfg: SiteConfig) -> Dict[str, Any]:
     }
 
 
+def plc_config(cfg: SiteConfig) -> Dict[str, Any]:
+    """plc (F39, D-084): the CONTRACTS 13 `plc` key set, all keys always written so
+    workers/plc/plc_settings.py never falls back to a default. legacy_db_numbers is left out:
+    it is for the legacy algorithm XML only."""
+    p, plc, db = cfg.paths, cfg.plc, cfg.db
+    return {
+        "worker_id": "plc",
+        "paths": {"root": p.root, "logs": p.logs, "state": os.path.join(p.data, "state")},
+        "log": {"backup_count": plc.log.backup_count},
+        "plc": {"type": plc.type, "ip": plc.ip, "port": plc.port, "timeout_s": plc.timeout_s,
+                "light_register": plc.light_register, "light_on_value": plc.light_on_value,
+                "cleaning_register": plc.cleaning_register,
+                "conveyor_status_register": plc.conveyor_status_register,
+                "cleaning_pulse_seconds": plc.cleaning_pulse_seconds,
+                "light_check_seconds": plc.light_check_seconds,
+                "status_interval_seconds": plc.status_interval_seconds,
+                "cleaning_cooldown_seconds": plc.cleaning_cooldown_seconds,
+                "auto_cleaning": plc.auto_cleaning},
+        "mqtt": {"host": cfg.mqtt.host, "port": cfg.mqtt.port, "user": cfg.mqtt.user, "password": cfg.mqtt.password},
+        "db": {"host": db.host, "port": db.port, "name": db.name, "user": db.user, "password": db.password},
+    }
+
+
 def worker_configs(cfg: SiteConfig) -> Dict[str, Dict[str, Any]]:
     """worker_id -> settings. Capture and inspection for the configured cameras only (a
-    one-camera site gets two of each kind less); cleanup and mail always."""
+    one-camera site gets two of each kind less); cleanup, mail and plc always."""
     configs = {}
     for camera in cfg.cameras:
         configs[CAMERA_WORKER[camera.id]] = capture_config(cfg, camera)
@@ -196,6 +219,7 @@ def worker_configs(cfg: SiteConfig) -> Dict[str, Dict[str, Any]]:
         configs[SIDE_WORKER[camera.side]] = inspection_config(cfg, camera)
     configs["cleanup"] = cleanup_config(cfg)
     configs["mail"] = mail_config(cfg)
+    configs["plc"] = plc_config(cfg)
     return configs
 
 
