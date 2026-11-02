@@ -97,8 +97,8 @@ dpc/worker/left_algorithm/event    (supervisor -> all)
 {"worker_id":"left_algorithm","event":"worker_restarted","retry":1,"pid":18302,"timestamp":"..."}
 {"worker_id":"left_algorithm","event":"worker_failed","reason":"... (gave up after 3 retries)","timestamp":"..."}
 
-dpc/worker/plc_service/health      (worker -> supervisor, only for health.type: heartbeat)
-{"worker_id":"plc_service","healthy":true}
+dpc/worker/inspection_left/health  (worker -> supervisor, only for health.type: heartbeat / require_heartbeat)
+{"worker_id":"inspection_left","healthy":true}
 
 dpc/worker/left_algorithm/command  (anyone -> supervisor)
 {"command":"restart","reason":"no_frames"}      # start | stop | restart | status

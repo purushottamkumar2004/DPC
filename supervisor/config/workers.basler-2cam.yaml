@@ -147,3 +147,20 @@ workers:
     stop_timeout_seconds: 15
     health:
       type: process
+
+  # ---- plc (P16, D-084): the only program that talks to the PLC ----
+  # Light ON at start and after every reconnect, checked every light_check_seconds; cleaning
+  # pulse on dpc/plc/command; conveyor status. An unreachable PLC is logged, never a crash.
+  # id "plc" = rendered/plc.json (F39) = WORKER_ID in plc_settings.py. A config error writes
+  # <root>/run/plc.last_error.json and exits 1 (F21). SIGTERM ends an open cleaning pulse
+  # (writes 0) and exits 0, hence 20 s.
+  - id: plc
+    type: plc
+    mode: service
+    restart_cost: normal
+    command: python3 plc_worker.py
+    working_directory: ~/INSIGHTZZ/code/workers/plc
+    stop_signal: SIGTERM
+    stop_timeout_seconds: 20
+    health:
+      type: process
