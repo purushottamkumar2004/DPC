@@ -102,7 +102,11 @@ plc:
   port: 502
   timeout_s: 3
   light_register: 4109
-  light_on_value: 1               # value that switches the light ON; 0 where the register is inverted (D-064)
+  light_on_value: 1               # value that switches the light ON (1 at Tadipatri too, D-084); 0 only if inverted
+  light_check_seconds: 60         # read the light this often, rewrite only when it differs (D-084)
+  status_interval_seconds: 10     # conveyor status read + MQTT status
+  cleaning_cooldown_seconds: 600  # minimum gap between automatic cleaning pulses
+  auto_cleaning: false            # act on poor-view events; keep false until Q22 is decided
   cleaning_register: 4106
   conveyor_status_register: 4098
   cleaning_pulse_seconds: 10

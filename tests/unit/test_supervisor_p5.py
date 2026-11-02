@@ -303,7 +303,7 @@ class ReloadCommandLine(SiteYamlTest):
         self.write_site_yaml(edit=set_exposure("CAM2", 2400))
         result = self.cli("reload")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("1 written, 5 unchanged", result.stdout)        # 6 rendered files: + cleanup.json (F29), mail.json (F36)
+        self.assertIn("1 written, 6 unchanged", result.stdout)        # 7 rendered files: + cleanup (F29), mail (F36), plc (F39)
         self.assertIn("restarted: frame_capture_cam2", result.stdout)
         time.sleep(1.0)
         self.assertEqual(self.starts().count("frame_capture_cam1"), 1, "cam1 must not restart")

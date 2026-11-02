@@ -453,16 +453,13 @@ class D064Keys(_TempDirTest):                                         # P4 / 6g
             cam["ip"] = "192.168.1.102"
         self.assertProblem(self.problems_for(data), r"^capture\.cameras: ip '192\.168\.1\.102' is used by more than one")
 
-    def test_tadipatri_reference_with_6g_keys(self):
+    def test_tadipatri_reference_6g_keys(self):
         with open(os.path.join(REPO_ROOT, "docs", "sites", "tadipatri.site.reference.yaml"), encoding="utf-8") as f:
-            text = f.read()
-        text = (text.replace("# ip: 192.168.1.102", "ip: 192.168.1.102").replace("# ip: 192.168.1.103", "ip: 192.168.1.103")
-                    .replace("# light_on_value: 0", "light_on_value: 0").replace('"<secret>"', '"x"'))
-        data = yaml.safe_load(text)
+            data = yaml.safe_load(f.read().replace('"<secret>"', '"x"'))
         data["paths"]["root"] = self.root
         cfg = sc.load_site_config(self.write_yaml(data))
         self.assertEqual([c.ip for c in cfg.cameras], ["192.168.1.102", "192.168.1.103"])
-        self.assertEqual(cfg.plc.light_on_value, 0)
+        self.assertEqual(cfg.plc.light_on_value, 1)                  # not inverted (D-084 corrects D-064)
 
 
 class P7Prep(_TempDirTest):                                           # D-072, D-073
@@ -624,6 +621,37 @@ class MailF36(_TempDirTest):                                          # F36, D-0
         problems = self.problems_for(self.mail(flood={"max_per_window": 8}))
         self.assertIn("mail.flood.window_hours: missing", problems)
         self.assertIn("mail.flood.internal_to: missing", problems)
+
+
+class PlcF39(_TempDirTest):                                           # F39, D-084
+    def test_defaults(self):
+        data = self.config_data()
+        for key in ("light_check_seconds", "status_interval_seconds", "cleaning_cooldown_seconds", "auto_cleaning"):
+            data["plc"].pop(key, None)
+        plc = sc.load_site_config(self.write_yaml(data)).plc
+        self.assertEqual((plc.light_check_seconds, plc.status_interval_seconds, plc.cleaning_cooldown_seconds,
+                          plc.auto_cleaning, plc.light_on_value), (60.0, 10.0, 600.0, False, 1))
+
+    def test_values(self):
+        data = self.config_data()
+        data["plc"].update(light_check_seconds=30, status_interval_seconds=2.5, cleaning_cooldown_seconds=0,
+                           auto_cleaning=True)
+        plc = sc.load_site_config(self.write_yaml(data)).plc
+        self.assertEqual((plc.light_check_seconds, plc.status_interval_seconds, plc.cleaning_cooldown_seconds,
+                          plc.auto_cleaning), (30.0, 2.5, 0.0, True))
+
+    def test_bad_values(self):
+        data = self.config_data()
+        data["plc"].update(light_check_seconds=0, status_interval_seconds=-1, cleaning_cooldown_seconds=-5,
+                           auto_cleaning="yes please")
+        problems = self.problems_for(data)
+        for pattern in (r"^plc\.light_check_seconds: must be > 0", r"^plc\.status_interval_seconds: must be > 0",
+                        r"^plc\.cleaning_cooldown_seconds: must be >= 0",
+                        r"^plc\.auto_cleaning: must be true or false"):
+            self.assertProblem(problems, pattern)
+        data["plc"].update(light_check_seconds=60, status_interval_seconds=10, cleaning_cooldown_seconds=600,
+                           auto_cleaning=1)
+        self.assertEqual(self.problems_for(data), ["plc.auto_cleaning: must be true or false, got 1"])
 
 
 class Secrets(_TempDirTest):
