@@ -73,6 +73,12 @@ inspection:
     expected_cycle_total: 190     # wheels per revolution for the cycle-restart check; default = total_wheel_count
     # wheel-stand counts are learned by inspection, not set here (D-073 D8)
   live_wheel_counter_side: RIGHT  # the one side that writes the live wheel number for the UI (D-073 D3)
+  checks:                         # switch a check off without touching code (D-085); all default true
+    bucket_clip: true
+    skidding: true
+    wheel_missing: true
+    cycle_restart: true
+  # One side only: inspection.sides.<SIDE>.checks, e.g. RIGHT: {..., checks: {wheel_missing: false}}
   wheel_report: {daily_time: "17:58"}   # daily best image per wheel, both sides (D-073 D4); quoted
   sides:                          # one per configured camera side; object_sizes in pixels, EDIT for the site's model
     LEFT:  {object_sizes: {wheel_w: 530, wheel_h: 495, bucket_clip_w: 300, chain_w: 880, half_bucket_clip_w: 150}}
