@@ -37,7 +37,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from common.config.model_package import ModelPackageError, read_current, read_pinned, verify_package  # noqa: E402
+from common.config.model_package import (  # noqa: E402
+    ModelPackageError, models_in_use, read_current, read_pinned, verify_package,
+)
 from common.config.site_config import (  # noqa: E402
     FRAME_SUBDIRS, IMAGE_KINDS, SiteConfig, SiteConfigError, default_config_path, load_site_config,
 )
@@ -281,32 +283,54 @@ def check_mqtt(cfg: SiteConfig) -> Result:
     return Result(PASS, "mqtt", f"broker {where} reachable (TCP; login not tested)")
 
 
-def check_model(cfg: SiteConfig) -> Result:
-    """The version inspection would run: data/models/<name>/current (D-060). Shows the running
-    version and whether it is pinned. Not installed = WARN (captures run without it); a broken
-    pointer or package = FAIL; pinned to another version than current = WARN."""
-    model = cfg.inspection.model
+_RANK = {PASS: 0, WARN: 1, FAIL: 2}
+
+
+def _check_one_model(model) -> tuple:
+    """(status, text, package or None) for one model name: data/models/<name>/current (D-060)."""
     try:
         current = read_current(model.root)
         pinned = read_pinned(model.root)
     except ModelPackageError as exc:
-        return Result(FAIL, "model", f"{model.name}: {os.path.basename(exc.source)} {exc.problems[0]}")
+        return FAIL, f"{model.name}: {os.path.basename(exc.source)} {exc.problems[0]}", None
     if current is None:
-        return Result(WARN, "model", f"{model.name}: no version installed (no current pointer); "
-                                     f"package one with scripts/make_model_package.py")
+        return WARN, (f"{model.name}: no version installed (no current pointer); "
+                      f"package one with scripts/make_model_package.py"), None
     label = f"{model.name}/{current}"
     if not os.path.isdir(os.path.join(model.root, current)):
-        return Result(FAIL, "model", f"{label}: current points to a missing version folder")
+        return FAIL, f"{label}: current points to a missing version folder", None
     try:
         package = verify_package(os.path.join(model.root, current), name=model.name)
     except ModelPackageError as exc:
-        return Result(FAIL, "model", f"{label}: " + "; ".join(exc.problems))
-    detail = f"running {label} (verified, {len(package.classes)} classes)"
+        return FAIL, f"{label}: " + "; ".join(exc.problems), None
+    text = f"running {label} (verified, {len(package.classes)} classes)"
     if pinned is None:
-        return Result(PASS, "model", f"{detail}; not pinned")
+        return PASS, f"{text}; not pinned", package
     if pinned != current:
-        return Result(WARN, "model", f"{detail}; pinned to {pinned}, which is not the running version")
-    return Result(PASS, "model", f"{detail}; pinned")
+        return WARN, f"{text}; pinned to {pinned}, which is not the running version", package
+    return PASS, f"{text}; pinned", package
+
+
+def check_model(cfg: SiteConfig) -> Result:
+    """Every model in use (D-086: a side may run its own model): each one's running version
+    (`current`) and whether it is pinned. Not installed = WARN (captures run without it); a broken
+    pointer or package = FAIL; pinned to another version = WARN; two models whose class lists
+    differ = WARN (the inspection logic is shared, D-069). One model: the line reads as before."""
+    in_use = models_in_use(cfg)
+    status, parts, packages = PASS, [], {}
+    for name, sides in in_use.items():
+        model = cfg.inspection.sides[sides[0]].model
+        one_status, text, package = _check_one_model(model)
+        if len(in_use) > 1:
+            text = f"{'+'.join(sides)}: {text}"
+        parts.append(text)
+        status = one_status if _RANK[one_status] > _RANK[status] else status
+        if package is not None:
+            packages[name] = package
+    if len(packages) > 1 and len({tuple(p.classes) for p in packages.values()}) > 1:
+        parts.append("class lists differ between " + " and ".join(packages) + " (D-086 expects the same classes)")
+        status = WARN if status == PASS else status
+    return Result(status, "model", " | ".join(parts))
 
 
 # ======================================================================

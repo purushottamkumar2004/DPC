@@ -332,6 +332,7 @@ class SideSettings:
     half_bucket_clip_window: Window
     tracker: Tracker
     checks: Checks = Checks()        # this side's switches: the side's own value wins over inspection.checks
+    model: Optional["ModelRef"] = None   # this side's model: sides.<SIDE>.model, else inspection.model (D-086)
 
 
 @dataclass(frozen=True)
@@ -368,6 +369,7 @@ class InspectionConfig:
     machine: MachineConfig
     sides: Dict[str, SideSettings]      # LEFT / RIGHT, one per configured camera side
     auto_roi: AutoRoi
+    # model = the site default; the model a side runs is sides[<SIDE>].model (D-086)
     live_wheel_counter_side: str        # the one side that writes wheel_counter_table (D-073 D3)
     wheel_report: WheelReport
     checks: Checks = Checks()           # site-wide switches (D-085); per-side result in sides[<SIDE>].checks
@@ -950,7 +952,16 @@ def _read_checks(parent: _Section, base: Checks) -> Checks:
     return Checks(**{k: (getattr(base, k) if v is None else v) for k, v in values.items()})
 
 
-def _read_side(s: _Section, side: str, site_checks: Checks = Checks()) -> SideSettings:
+def _read_side_model(side_section: _Section, paths: Optional[Paths], site_model: Optional[ModelRef]) -> Optional[ModelRef]:
+    """sides.<SIDE>.model {name}: optional; overrides inspection.model for this side (D-086)."""
+    if not side_section.present("model") or paths is None:
+        side_section.used.add("model")
+        return site_model
+    return _read_model_ref(side_section, paths)
+
+
+def _read_side(s: _Section, side: str, site_checks: Checks = Checks(), paths: Optional[Paths] = None,
+               site_model: Optional[ModelRef] = None) -> SideSettings:
     """One side. Everything but object_sizes is optional; the default is THIS side's value in
     today's code (SIDE_DEFAULTS, D-073 D5)."""
     default = SIDE_DEFAULTS[side]
@@ -966,15 +977,17 @@ def _read_side(s: _Section, side: str, site_checks: Checks = Checks()) -> SideSe
                                              default["half_bucket_clip_window"]),
         tracker=_read_tracker(side_section, default["tracker"]),
         checks=_read_checks(side_section, site_checks),
+        model=_read_side_model(side_section, paths, site_model),
     )
     side_section.finish()
     return settings
 
 
-def _read_sides(parent: _Section, sides: List[str], site_checks: Checks = Checks()) -> Dict[str, SideSettings]:
+def _read_sides(parent: _Section, sides: List[str], site_checks: Checks = Checks(), paths: Optional[Paths] = None,
+                site_model: Optional[ModelRef] = None) -> Dict[str, SideSettings]:
     """`inspection.sides`: exactly one entry per configured camera side."""
     s = parent.section("sides")
-    result = {side: _read_side(s, side, site_checks) for side in sides}
+    result = {side: _read_side(s, side, site_checks, paths, site_model) for side in sides}
     if not sides:      # no valid camera: those problems are already reported
         s.used.update(s.data)
     for key in (s.data if sides else ()):
@@ -1002,8 +1015,8 @@ MOVED_TO_SUPERVISOR = ("moved to the Supervisor (D-060): the running version is 
                        "data/models/<name>/current, managed with the Supervisor's model commands")
 
 
-def _read_model_ref(parent: _Section, paths: Paths) -> ModelRef:
-    s = parent.section("model")
+def _read_model_ref(parent: _Section, paths: Paths, required: bool = True) -> ModelRef:
+    s = parent.section("model", required=required)
     name = s.string("name", pattern=_MODEL_PART_RE,
                     pattern_hint="use letters, digits, '.', '_' or '-' (it is a folder name)")
     if "version" in s.data:
@@ -1038,12 +1051,13 @@ def _read_inspection(top: _Section, paths: Paths, sides: List[str]) -> Inspectio
     if writer is not None and sides and writer not in sides:
         s.problem("live_wheel_counter_side", f"{writer} has no camera on this site")
     site_checks = _read_checks(s, Checks())
+    site_model = _read_model_ref(s, paths)
     cfg = InspectionConfig(
         log=_read_log(s),
-        model=_read_model_ref(s, paths),
+        model=site_model,
         threshold=s.number("threshold", low=0, high=1, low_exclusive=True, high_exclusive=True),
         machine=_read_machine(s),
-        sides=_read_sides(s, sides, site_checks),
+        sides=_read_sides(s, sides, site_checks, paths, site_model),
         auto_roi=_read_auto_roi(s),
         live_wheel_counter_side=writer,
         wheel_report=_read_wheel_report(s),

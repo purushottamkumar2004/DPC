@@ -100,7 +100,7 @@ def inspection_config(cfg: SiteConfig, camera) -> Dict[str, Any]:
                   "bolt_data": os.path.join(p.data, "bolt_data", side),
                   "wheel_status_images": os.path.join(p.data, "wheel_status", "IMAGES", side)},   # D-073 D4
         "log": {"backup_count": insp.log.backup_count},
-        "model": {"name": insp.model.name, "models_dir": insp.model.root},
+        "model": {"name": side_cfg.model.name, "models_dir": side_cfg.model.root},   # this side's (D-086)
         "threshold": insp.threshold,
         "machine": machine,
         "object_sizes": {"wheel_w": sizes.wheel_w, "wheel_h": sizes.wheel_h, "bucket_clip_w": sizes.bucket_clip_w,

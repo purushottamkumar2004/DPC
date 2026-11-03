@@ -389,6 +389,51 @@ class ModelCheck(Site):                                              # 6d (D-060
         self.assertIn("pinned", results["model"].detail)
 
 
+class PerSideModelCheck(Site):                                       # F46, D-086
+    def right_model(self, classes_doc=None, install=True):
+        self.data["inspection"]["sides"]["RIGHT"]["model"] = {"name": "example_model_right"}
+        self.write_config()
+        if install:
+            kwargs = {"classes_doc": classes_doc} if classes_doc is not None else {}
+            make_package(self.models_root, "example_model_right", "2026.11.1", **kwargs)
+
+    def test_both_models_listed(self):                               # F46 done when
+        self.right_model()
+        results, code = self.run_all()
+        detail = results["model"].detail
+        self.assertEqual(results["model"].status, dc.PASS, detail)
+        self.assertIn("LEFT: running example_model/2026.10.1", detail)
+        self.assertIn("RIGHT: running example_model_right/2026.11.1", detail)
+        self.assertEqual(code, dc.EXIT_PASS)
+
+    def test_one_model_reads_as_before(self):
+        results, _ = self.run_all()
+        self.assertTrue(results["model"].detail.startswith("running example_model/2026.10.1"))
+
+    def test_class_lists_differ_is_a_warning(self):
+        self.right_model(classes_doc={"classes": ["wheel", "plate"], "label_map": {}})
+        results, code = self.run_all()
+        self.assertEqual(results["model"].status, dc.WARN)
+        self.assertIn("class lists differ between example_model and example_model_right", results["model"].detail)
+        self.assertEqual(code, dc.EXIT_WARN)
+
+    def test_side_model_not_installed(self):
+        self.right_model(install=False)
+        results, _ = self.run_all()
+        self.assertEqual(results["model"].status, dc.WARN)
+        self.assertIn("RIGHT: example_model_right: no version installed", results["model"].detail)
+
+    def test_worst_status_wins(self):
+        self.right_model()
+        with open(os.path.join(self.models_root, "example_model_right", "2026.11.1", "model_final.pth"), "ab") as f:
+            f.write(b"x")
+        results, code = self.run_all()
+        self.assertEqual(results["model"].status, dc.FAIL)
+        self.assertIn("LEFT: running example_model/2026.10.1", results["model"].detail)
+        self.assertIn("RIGHT: example_model_right/2026.11.1: model_final.pth: checksum does not match", results["model"].detail)
+        self.assertEqual(code, dc.EXIT_FAIL)
+
+
 class NeverPrintsASecret(Site):                                      # done when (d)
     def test_no_secret_in_any_output(self):
         outputs = []

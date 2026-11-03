@@ -87,6 +87,8 @@ inspection:
   # set only what you change. Example for LEFT with its default values:
   #   LEFT:
   #     object_sizes: {...}
+  #     model: {name: example_model_left}   # optional own model for this side (D-086); same classes;
+  #                                         # default: inspection.model. Convention <base>_left / <base>_right
   #     motion: rtl                 # rtl | ltr (RIGHT default: ltr)
   #     bucket_clip_window: {xmin: 50, xmax: 1990, ymin: 750, ymax: 1085}
   #     half_bucket_clip_window: {xmin: 100, xmax: 1850, ymin: 470, ymax: 750}

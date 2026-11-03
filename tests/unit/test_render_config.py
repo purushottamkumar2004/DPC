@@ -660,5 +660,19 @@ class ChecksRender(Site):                                            # F41, D-08
             inspection_settings.load_settings(os.path.join(self.rendered, f"{worker}.json"))
 
 
+class PerSideModelRender(Site):                                      # F46, D-086
+    def test_per_side_model_renders_into_only_that_side(self):     # F46 done when
+        self.render()
+        self.data["inspection"]["sides"]["RIGHT"]["model"] = {"name": "dpc_maskrcnn_right"}
+        self.write()
+        changes = self.render()
+        self.assertEqual({w for w, s in changes.items() if s == "written"}, {"inspection_right"})
+        models = os.path.join(self.root, "data", "models")
+        self.assertEqual(self.load("inspection_left")["model"],
+                         {"name": "dpc_maskrcnn", "models_dir": os.path.join(models, "dpc_maskrcnn")})
+        self.assertEqual(self.load("inspection_right")["model"],
+                         {"name": "dpc_maskrcnn_right", "models_dir": os.path.join(models, "dpc_maskrcnn_right")})
+
+
 if __name__ == "__main__":
     unittest.main()
