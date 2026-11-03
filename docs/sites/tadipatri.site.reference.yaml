@@ -59,6 +59,7 @@ inspection:
   sides:
     LEFT:  {object_sizes: {wheel_w: 530, wheel_h: 495, bucket_clip_w: 300, chain_w: 880, half_bucket_clip_w: 150}}
     RIGHT: {object_sizes: {wheel_w: 530, wheel_h: 495, bucket_clip_w: 300, chain_w: 880, half_bucket_clip_w: 150}}
+  # checks: {wheel_missing: false}   # D-085: set on the Tadipatri machine (kept as a comment here: the inspection tests use this file with all checks on)
   auto_roi: {mode: observe, learn_images: 30}
 plc:
   type: modbus_tcp
