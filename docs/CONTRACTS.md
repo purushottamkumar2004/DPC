@@ -99,6 +99,7 @@ data/wheel_status/{LEFT, RIGHT, IMAGES/{LEFT, RIGHT}, PDFS} (IMAGES/<SIDE> used 
 - Only FrameCapture writes `_tmp` and `live` and creates files in `INF` and `UI`.
 - The algorithm consumes the **oldest** `INF` file and moves it (a rename on the same filesystem) to `RAW_IMAGES`; defect images are saved before the DB row.
 - `UI/` is a mailbox: its consumer deletes the file after reading; FrameCapture refills it only when empty.
+- `live/IMG_1.jpg` is **read-only for everyone except FrameCapture** (it is the Supervisor's capture health signal, `file_activity`). A display that deletes what it reads must read `UI/IMG_1.jpg`, never `live/` (found 2026-11-03: the old PyQt UI deleted `live/IMG_1.jpg` every second, so the Supervisor restarted the captures and their inspections, STATUS F45).
 - Readers open these files read-only and never modify them in place (hard links share data). Rename or delete is safe.
 - `_tmp`, `INF`, `UI`, `live` (and `ui_live`) must be on one filesystem; the layout script checks this.
 - CAM1 -> LEFT, CAM2 -> RIGHT.
