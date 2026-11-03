@@ -24,7 +24,7 @@ QUIRKS: <..>; both cameras share one Ethernet port on the server: if that port i
 SITE: tadipatri   HOST: dpc-tadipatri (HP Z2 Tower G9)   ROOT: /home/dpc_tadipatri/INSIGHTZZ   RELEASE: (none yet)
 REFERENCE site.yaml (all real non-secret values, validated by the loader): docs/sites/tadipatri.site.reference.yaml
 UI: the old PyQt desktop UI (DPC_Ui, UI_CONFIG.xml) still runs on the machine; it must read data/frames/CAMn/UI/IMG_1.jpg, never live/ (F45); migration P17.
-MODELS: one model for both sides today (dpc_maskrcnn); a per-side model is possible since D-086 if a camera angle needs its own training.
+MODELS: one model for both sides today (dpc_maskrcnn, current 2026.10.12; 2026.10.12b is an identical test copy from P11-site); a per-side model is possible since D-086 if a camera angle needs its own training.
 CHECKS (D-085): wheel_missing OFF at Tadipatri (false alarms) via `inspection.checks: {wheel_missing: false}` in the machine's site.yaml.
 PER-SIDE DIFFERENCES (rendered 2026-10-28; same code both sides, D-069; everything else equal):
   motion LEFT rtl / RIGHT ltr (camera view); bucket_clip_window LEFT 50,1990,750,1085 / RIGHT 10,1270,550,780 (xmin,xmax,ymin,ymax; camera geometry); half_bucket_clip_window y LEFT 470-750 / RIGHT 480-730 (camera geometry); tracker.clip_confirm max_gap_ms / max_dist_px LEFT 300/200 / RIGHT 500/500 and tracker.skidding.time_gap_reset_ms LEFT 500 / RIGHT 1000 (deliberate per-camera tuning, D-080: the cameras sit at different distances); writes_live_wheel_counter LEFT false / RIGHT true (D-073 D3)
