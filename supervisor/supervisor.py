@@ -10,6 +10,10 @@ Usage
   python3 supervisor.py check-config        validate workers.yaml (and site.yaml) and exit
   python3 supervisor.py reload [--confirm]  render site.yaml again; restart only the workers whose
                                             rendered config changed (--confirm: restart_cost high too)
+  python3 supervisor.py model status [--json]                  per model: sides, current, previous, pinned, installed
+  python3 supervisor.py model switch <name> <version> [--confirm]   verify, self-test, move current, restart its sides
+  python3 supervisor.py model rollback <name> [--confirm]      back to the previous version (kept on disk)
+  python3 supervisor.py model pin <name> <version> | model unpin <name>
   python3 supervisor.py status              show worker status (via MQTT)
   python3 supervisor.py start   <worker_id> control a running supervisor (via MQTT)
   python3 supervisor.py stop    <worker_id>
@@ -17,9 +21,12 @@ Usage
 """
 
 import argparse
+import json
 import logging
 import os
 import queue
+import shlex
+import shutil
 import signal
 import sys
 import time
@@ -30,6 +37,7 @@ sys.path.insert(0, BASE_DIR)
 
 from communication.mqtt_client import MqttClient, now_iso      # noqa: E402
 from core.config import ConfigError, ConfigurationManager, parse_quiet_window  # noqa: E402
+from core.models import DEFAULT_SELFTEST, ModelCommandError, ModelManager   # noqa: E402
 from core.monitor import Monitor                                # noqa: E402
 from core.last_error import LastErrorReader                     # noqa: E402
 from core.process_manager import ProcessManager, Worker, WorkerStatus  # noqa: E402
@@ -266,8 +274,14 @@ class Supervisor:
         self._reload_requested = True
 
     def _serve_reload_request(self):
-        request = self.reload_channel.take_request() if self.reload_channel else {"id": None, "confirm": False}
-        report = self.reload(confirm=request["confirm"])
+        request = self.reload_channel.take_request() if self.reload_channel else {
+            "id": None, "confirm": False, "action": "reload", "workers": [], "reason": ""}
+        if request["action"] == "restart_workers":           # P11: a model switch moved `current`
+            report = {"ok": True, "error": None,
+                      **self.restart_for_new_config(request["workers"], request["confirm"],
+                                                    request["reason"] or "new config")}
+        else:
+            report = self.reload(confirm=request["confirm"])
         if self.reload_channel:
             self.reload_channel.write_result({"id": request["id"], **report})
 
@@ -288,20 +302,7 @@ class Supervisor:
         to_restart = set(result.ids("written"))
         if confirm:
             to_restart |= {w.id for w in self.workers.values() if w.config_pending}
-        quiet = self._in_quiet_window()
-        for worker_id in sorted(to_restart, key=self._start_position):
-            worker = self.workers.get(worker_id)
-            if worker is None:
-                report["not_supervised"].append(worker_id)
-            elif not self.process_manager.is_running(worker):
-                report["not_running"].append(worker_id)        # reads the new file at its next start
-            elif worker.config.restart_cost == "high" and not (confirm or quiet):
-                worker.config_pending = True
-                worker.message = "new config waiting for a quiet moment (or: supervisor.py reload --confirm)"
-                report["pending"].append(worker_id)
-            else:
-                self._run_command(worker, "restart", "config reload")
-                report["restarted"].append(worker_id)
+        report.update(self.restart_for_new_config(sorted(to_restart), confirm, "config reload"))
         for worker_id in report["removed"]:
             if worker_id in self.workers:
                 log.warning("[%s] its rendered config was removed; it keeps its old settings until it is "
@@ -310,6 +311,29 @@ class Supervisor:
         log.info("Reload done: %s; restarted: %s; waiting: %s", _change_summary(result.changes) or "no files",
                  ", ".join(report["restarted"]) or "-", ", ".join(report["pending"]) or "-")
         self._publish_supervisor_event("config_reloaded", **{k: v for k, v in report.items() if k != "error"})
+        return report
+
+    def restart_for_new_config(self, worker_ids, confirm: bool, reason: str) -> dict:
+        """Restart workers whose config changed (rendered file, or a model version, P11), each once.
+        restart_cost: high waits for the quiet window or confirm (D-070): it is marked
+        config_pending and restarted later. A worker that is not running reads the new config
+        at its next start; reload and model switches never start a stopped worker."""
+        report = {"restarted": [], "pending": [], "not_running": [], "not_supervised": []}
+        quiet = self._in_quiet_window()
+        for worker_id in sorted(dict.fromkeys(worker_ids), key=self._start_position):
+            worker = self.workers.get(worker_id)
+            if worker is None:
+                report["not_supervised"].append(worker_id)
+            elif not self.process_manager.is_running(worker):
+                report["not_running"].append(worker_id)
+            elif worker.config.restart_cost == "high" and not (confirm or quiet):
+                worker.config_pending = True
+                # reload --confirm restarts every config_pending worker, also one pending after a model switch
+                worker.message = f"{reason}: restart waiting for a quiet moment (or: supervisor.py reload --confirm)"
+                report["pending"].append(worker_id)
+            else:
+                self._run_command(worker, "restart", reason)
+                report["restarted"].append(worker_id)
         return report
 
     def _start_position(self, worker_id: str) -> int:
@@ -565,7 +589,159 @@ def cmd_status(config, site_env):
     return 0
 
 
+# ======================================================================
+# model commands (P11; D-056, D-060, D-061, D-086; CONTRACTS 12)
+# ======================================================================
+MODEL_ARGS = {"status": 0, "switch": 2, "rollback": 1, "pin": 2, "unpin": 1}
+
+
+def cmd_model(argv) -> int:
+    """`supervisor.py model ...`. The checks, the self-test and moving `current` happen here;
+    restarting the inspection sides is asked of the running Supervisor (reload channel), which
+    applies the restart_cost: high rules. Exit 0 done, 1 refused (nothing changed), 2 config error."""
+    p = argparse.ArgumentParser(prog="supervisor.py model", description="Model versions, per model name")
+    p.add_argument("command", choices=list(MODEL_ARGS))
+    p.add_argument("args", nargs="*", help="switch/pin: <name> <version>; rollback/unpin: <name>")
+    p.add_argument("--confirm", action="store_true",
+                   help="restart the inspection sides now (they lose their wheel/plate state)")
+    p.add_argument("--json", action="store_true", help="status as JSON")
+    p.add_argument("-c", "--config", default=None)
+    p.add_argument("--site-config", default=None)
+    p.add_argument("--selftest-script", default=DEFAULT_SELFTEST, help=argparse.SUPPRESS)  # tests
+    args = p.parse_args(argv)
+    if len(args.args) != MODEL_ARGS[args.command]:
+        p.error(f"'model {args.command}' needs {MODEL_ARGS[args.command]} argument(s)")
+
+    site_env = SiteEnv(args.site_config)
+    config, problem = _load_workers_file(args.config, site_env)
+    if problem:
+        print(f"Configuration error: {problem}")
+        return 2
+    try:
+        manager = ModelManager(site_env.load(), config.settings.runtime_root, args.selftest_script,
+                               _inspection_python(config))
+    except SiteEnvError as e:
+        print(f"Site config error: {e}")
+        return 2
+
+    if args.command == "status":
+        return _print_model_status(manager, config, args.json)
+
+    name = args.args[0]
+    try:
+        with manager.lock():
+            if args.command == "switch":
+                print(f"Checking {name} {args.args[1]}: package, then the self-test (this can take a minute)...")
+                result = manager.switch(name, args.args[1])
+            elif args.command == "rollback":
+                result = manager.rollback(name)
+            elif args.command == "pin":
+                result = manager.pin(name, args.args[1])
+            else:
+                result = manager.unpin(name)
+    except ModelCommandError as e:
+        print(f"Refused, nothing changed: {e}")
+        if args.command in ("switch", "rollback"):
+            _publish_model_event(config, site_env, "model_switch_failed", model=name, action=args.command,
+                                 to=args.args[1] if args.command == "switch" else None, reason=str(e))
+        return 1
+
+    if args.command in ("pin", "unpin"):
+        what = f"pinned to {result['version']}" if args.command == "pin" else f"unpinned (was {result['version']})"
+        print(f"{name} {what}")
+        if args.command == "pin" and result["current"] != result["version"]:
+            print(f"  note: current is {result['current']}; a pinned model is never switched automatically")
+        _publish_model_event(config, site_env, f"model_{args.command}ned", **result)
+        return 0
+
+    print(f"{name}: current is now {result['to']} (was {result['from'] or 'none'}); used by "
+          f"{', '.join(result['sides'])}")
+    restart = _restart_for_model(config, result, args.confirm)
+    event = "model_switched" if args.command == "switch" else "model_rolled_back"
+    result.pop("selftest", None)
+    _publish_model_event(config, site_env, event, **result, **restart)
+    return 0
+
+
+def _load_workers_file(path, site_env):
+    if path is None:
+        path, problem = find_workers_file(site_env)
+        if problem:
+            return None, problem
+    config = ConfigurationManager(path, BASE_DIR)
+    try:
+        config.load()
+    except ConfigError as e:
+        return None, str(e)
+    return config, None
+
+
+def _inspection_python(config) -> str:
+    """The Python the inspection workers run with (first word of their command, found on PATH),
+    so the self-test loads Detectron2 exactly as inspection does. Else this Python."""
+    for worker in config.workers:
+        if worker.id.startswith("inspection_"):
+            first = shlex.split(worker.command)[0]
+            if os.path.basename(first).startswith("python"):
+                return shutil.which(first) or sys.executable
+    return sys.executable
+
+
+def _restart_for_model(config, result, confirm) -> dict:
+    """Ask the running Supervisor to restart the sides that run this model (once each)."""
+    try:
+        report = ReloadChannel(config.settings.runtime_root).request(
+            confirm, action="restart_workers", workers=result["workers"],
+            reason=f"model {result['model']} {result['to']}")
+    except ReloadError as e:
+        print(f"  Supervisor not reached ({e}): the inspection sides use {result['to']} when they start")
+        return {"restarted": [], "pending": [], "not_running": list(result["workers"])}
+    labels = (("restarted", "restarted"),
+              ("pending", "waiting for the quiet window (or: supervisor.py reload --confirm)"),
+              ("not_running", "not running now (they load the new version when they start)"),
+              ("not_supervised", "not in workers.yaml"))
+    for key, label in labels:
+        if report.get(key):
+            print(f"  {label}: {', '.join(report[key])}")
+    return {k: report.get(k, []) for k in ("restarted", "pending", "not_running")}
+
+
+def _print_model_status(manager, config, as_json) -> int:
+    rows = manager.status()
+    if as_json:
+        print(json.dumps({"auto_update": config.settings.models.auto_update, "models": rows}, indent=1))
+        return 0
+    print(f"auto_update: {config.settings.models.auto_update}")
+    for row in rows:
+        installed = ", ".join(f"{v['version']}{'' if v['ready'] else ' (not ready)'}" for v in row["installed"])
+        print(f"{row['model']}  (sides {', '.join(row['sides'])}: {', '.join(row['workers'])})")
+        print(f"  current: {row['current'] or '-'}   previous: {row['previous'] or '-'}   "
+              f"pinned: {row['pinned'] or '-'}")
+        print(f"  installed: {installed or '-'}")
+        for problem in row.get("problems", []):
+            print(f"  problem: {problem}")
+    if not rows:
+        print("no model in use (inspection.model in site.yaml)")
+    return 0
+
+
+def _publish_model_event(config, site_env, event, **data):
+    """dpc/supervisor/event (CONTRACTS 2), best effort: the change is done even if the broker is down."""
+    if not config.settings.mqtt.enabled:
+        return
+    client = _cli_mqtt(config, site_env)
+    client.start()
+    if not client.wait_connected(3):
+        print(f"  (MQTT broker not reached: event {event} not published)")
+        return
+    client.publish(client.topic("supervisor", "event"), {"event": event, "timestamp": now_iso(), **data})
+    time.sleep(0.5)
+    client.stop()
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "model":
+        return cmd_model(sys.argv[2:])
     parser = argparse.ArgumentParser(description="DPC Supervisor")
     parser.add_argument("action", choices=["run", "check-config", "reload", "status", "start", "stop", "restart"])
     parser.add_argument("worker_id", nargs="?", help="needed for start/stop/restart")

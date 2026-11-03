@@ -13,6 +13,10 @@ monitoring:
   status_publish_interval_seconds: 30
 
 # Default restart policy (each worker can override it with its own "restart:" block)
+models:                          # P11 (D-060): model versions, per model name
+  auto_update: off               # off | download | install (P12 transfer); a pinned model never switches automatically
+  check_interval_hours: 6
+
 restart_policy:
   enabled: true
   max_retries: 3
