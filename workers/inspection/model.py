@@ -25,6 +25,12 @@ LEGACY_LABEL_MAP = {
 }
 
 
+def map_label(label_map, class_name: str) -> str:
+    """Model class name -> the name the checks use: the package label_map, then the legacy map."""
+    mapped = label_map.get(class_name, class_name)
+    return LEGACY_LABEL_MAP.get(mapped, mapped)
+
+
 def load_package(models_dir: str, name: str):
     """The verified package `current` points to. Raises ModelPackageError."""
     version = read_current(models_dir)
@@ -70,5 +76,4 @@ class Detector:
 
     def label(self, class_name: str) -> str:
         """Model class name -> the name the checks use."""
-        mapped = self.label_map.get(class_name, class_name)
-        return LEGACY_LABEL_MAP.get(mapped, mapped)
+        return map_label(self.label_map, class_name)
