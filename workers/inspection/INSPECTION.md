@@ -22,6 +22,7 @@ The logic is that of `LeftAlgorithm.py`, the reference (D-069). Changes are only
 | `heartbeat.py` | MQTT heartbeat (D-034) |
 | `last_error.py` | `<root>/run/<worker_id>.last_error.json` (D-073 D7) |
 | `helpers.py` | geometry, image boxes, dated folders, frame-name times |
+| `model_selftest.py` | model self-test before a switch (F47, section 12); read-only, not part of the running program |
 | `tests/` | unit tests and the old-vs-new equivalence test (no GPU needed) |
 
 ## 2. Flow
@@ -222,7 +223,7 @@ The mail sender sends every unsent row of any type, so all of them are now maile
 - **New observation, kept:** a frame is deleted as invalid when it is less than 0.03 s old (L:503-526, `is_valid_image`). With the atomic hand-off (D-031) a fresh `INF` link can be that young, so a frame can be lost. It is rare at 4 fps. Fix: skip the frame instead of deleting it; developer decision.
 
 ## 11. Tests
-- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 39 tests.
+- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 50 tests.
   - Settings from the real renderer: Tadipatri per-side values; a missing key is named.
   - Wheel counter in both directions; plate tracker: one plate crossing = one new plate, on both sides (D-077).
   - D-077 through the real frame flow: a plate crossing the Left camera with a wheel in view gives one reset and no `Batch_Wheels_Missing`; the next plate gives one, with the right count. (With the old B5 rule the same test gives 4 resets and a false restart at wheel 1.)
@@ -249,3 +250,22 @@ The mail sender sends every unsent row of any type, so all of them are now maile
   - SIGTERM: exit 0, no `last_error.json`.
   - `defects_table` gone mid-run: exit 1, `last_error.json` with `ProgrammingError` at `defects.py:62 in insert`, no password in it.
   - DB down at start: the program waits and retries (does not exit).
+
+## 12. Model self-test (F47, for P11 model switching)
+`python3 workers/inspection/model_selftest.py --model <name> --version <v> --frames <folder> [--count 5] [--threshold 0.5] [--models-dir <dir>] [--json]`
+
+The Supervisor runs it before moving `current` (D-056, D-060). Per model name, so per side when the sides use different models (D-086).
+- **Package:** loads `<models_dir>/<name>/<version>/`, default `<root>/data/models` with `<root>` from the code location (CONTRACTS 4.1). Every file's sha256, and the name and version, are checked by `common/config/model_package.verify_package`. A corrupt package fails before the model is loaded.
+- **Inference:** runs the same `model.Detector` as inspection (same 0.5 filter, same label mapping, `model.map_label`) on the newest N `.jpg` frames of the folder, by name = capture time. Prints one line per frame, e.g. `2026_11_03_10_00_06_000000.jpg: bucket_clip=1, nut_bolt=2, wheel=1`, or `no detections` / `unreadable, skipped`.
+- **Exit 0:** the package loads and at least one `wheel` is found (`half_wheel` does not count). Last line `SELFTEST PASS: <name> <version>, <n> frame(s), <k> 'wheel' detection(s)`.
+- **Exit 1** with `SELFTEST FAIL: <reason>`, for any of:
+  - package not usable (missing version, checksum mismatch, name/version mismatch);
+  - frames folder missing or without `.jpg`;
+  - every frame unreadable;
+  - model does not load (Detectron2, CUDA);
+  - inference error;
+  - no `wheel`.
+- **`--json`** adds one JSON line `{model, version, frames, totals, pass, reason}` for the Supervisor.
+- **Read-only:** no DB access (pymysql is never imported), no file is moved, deleted or written, and `current` / `pinned` are never touched.
+- **GPU:** it uses the GPU while it runs, next to live inspection. Fine for 5 frames; the Supervisor runs it at a quiet moment anyway, like the switch.
+- **Tests:** `tests/test_model_selftest.py`, with a real package check and a fake predictor. Covers pass with counts, newest-N selection, no wheel, label map, corrupt package, missing version or frames, load error, unreadable frames, read-only snapshot of frames and models, and the CLI exit codes / `--json` / no pymysql in a fresh process.
