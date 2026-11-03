@@ -696,6 +696,32 @@ class ChecksF41(_TempDirTest):                                        # F41, D-0
         self.assertIn("inspection.sides.RIGHT.checks.bucket_clip: must be true or false, got 0", problems)
 
 
+class PerSideModel(_TempDirTest):                                     # F46, D-086
+    def test_default_is_the_site_model(self):
+        cfg = sc.load_site_config(self.write_yaml(self.config_data()))
+        for side in ("LEFT", "RIGHT"):
+            self.assertEqual(cfg.inspection.sides[side].model, cfg.inspection.model)
+
+    def test_side_override(self):
+        data = self.config_data()
+        data["inspection"]["sides"]["RIGHT"]["model"] = {"name": "example_model_right"}
+        cfg = sc.load_site_config(self.write_yaml(data))
+        self.assertEqual(cfg.inspection.sides["LEFT"].model.name, "example_model")
+        right = cfg.inspection.sides["RIGHT"].model
+        self.assertEqual(right.name, "example_model_right")
+        self.assertEqual(right.root, os.path.join(self.root, "data", "models", "example_model_right"))
+        self.assertEqual(cfg.inspection.model.name, "example_model")        # the site default is unchanged
+
+    def test_side_model_rules(self):
+        data = self.config_data()
+        data["inspection"]["sides"]["LEFT"]["model"] = {"name": "a/b", "version": "1"}
+        data["inspection"]["sides"]["RIGHT"]["model"] = {}
+        problems = self.problems_for(data)
+        self.assertProblem(problems, r"^inspection\.sides\.LEFT\.model\.name: use letters")
+        self.assertProblem(problems, r"^inspection\.sides\.LEFT\.model\.version: moved to the Supervisor \(D-060\)")
+        self.assertIn("inspection.sides.RIGHT.model.name: missing", problems)
+
+
 class Secrets(_TempDirTest):
     def assertNoSecret(self, text):
         for value in list(SECRETS.values()) + ["s3cret"]:

@@ -18,8 +18,10 @@ Public API
     read_current(model_root) -> Optional[str]      version `current` points to, None if not set
     read_pinned(model_root) -> Optional[str]       pinned version, None if not pinned
     set_current(model_root, version)               atomic switch of `current` (for the Supervisor)
-    running_version(config) -> Optional[str]       the version `current` points to (D-060)
-    load_model_package(config) -> ModelPackage     verified package `current` points to
+    running_version(config, side=None) -> Optional[str]   the version `current` points to (D-060)
+    load_model_package(config, side=None) -> ModelPackage verified package `current` points to
+    models_in_use(config) -> {name: [sides]}       every model a side runs (D-086)
+    (side = "LEFT"/"RIGHT" picks that side's model, D-086; None = the site default inspection.model)
     ModelPackageError (.problems)
 
 Why so strict: a half-copied or corrupted weights file still loads in Detectron2 and gives
@@ -291,16 +293,30 @@ def set_current(model_root: str, version: str) -> None:
 # From a loaded site.yaml
 # ======================================================================
 
-def running_version(config) -> Optional[str]:
+def _model_of(config, side: Optional[str] = None):
+    if side is None:
+        return config.inspection.model
+    return config.inspection.sides[side].model or config.inspection.model
+
+
+def models_in_use(config) -> Dict[str, List[str]]:
+    """model name -> the sides that run it, in camera order (D-086). One entry on a site with one model."""
+    result: Dict[str, List[str]] = {}
+    for cam in config.cameras:
+        result.setdefault(_model_of(config, cam.side).name, []).append(cam.side)
+    return result
+
+
+def running_version(config, side: Optional[str] = None) -> Optional[str]:
     """The version `current` points to; None when no version is installed yet (D-060:
     site.yaml names only the model, the Supervisor manages the version)."""
-    return read_current(config.inspection.model.root)
+    return read_current(_model_of(config, side).root)
 
 
-def load_model_package(config) -> ModelPackage:
-    """The verified package `current` points to. Raises ModelPackageError, also when no
-    version is installed yet."""
-    model = config.inspection.model
+def load_model_package(config, side: Optional[str] = None) -> ModelPackage:
+    """The verified package `current` points to (for `side`'s model, D-086). Raises
+    ModelPackageError, also when no version is installed yet."""
+    model = _model_of(config, side)
     version = read_current(model.root)
     if version is None:
         raise ModelPackageError(model.root, [f"no {CURRENT_POINTER} pointer: no version of {model.name} "

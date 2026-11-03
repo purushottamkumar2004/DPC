@@ -221,5 +221,32 @@ class FromSiteConfig(_Models):                                       # 6d: curre
         self.assertEqual(ctx.exception.problems, ["version folder not found"])
 
 
+class PerSideModels(FromSiteConfig):                                 # F46, D-086
+    def config_two_models(self):
+        cfg, models = self.config()
+        path = cfg.source_path
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        data["inspection"]["sides"]["RIGHT"]["model"] = {"name": NAME + "_right"}
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f)
+        return sc.load_site_config(path), models
+
+    def test_models_in_use(self):
+        cfg, _ = self.config()
+        self.assertEqual(mp.models_in_use(cfg), {NAME: ["LEFT", "RIGHT"]})
+        cfg, _ = self.config_two_models()
+        self.assertEqual(mp.models_in_use(cfg), {NAME: ["LEFT"], NAME + "_right": ["RIGHT"]})
+
+    def test_load_per_side(self):
+        cfg, models = self.config_two_models()
+        make_package(models, NAME, VERSION)
+        make_package(models, NAME + "_right", "2026.11.1")
+        self.assertEqual(mp.load_model_package(cfg, "LEFT").name, NAME)
+        self.assertEqual(mp.load_model_package(cfg, "RIGHT").name, NAME + "_right")
+        self.assertEqual(mp.running_version(cfg, "RIGHT"), "2026.11.1")
+        self.assertEqual(mp.load_model_package(cfg).name, NAME)          # no side = the site default
+
+
 if __name__ == "__main__":
     unittest.main()
