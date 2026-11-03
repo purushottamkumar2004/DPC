@@ -198,3 +198,40 @@ The Supervisor's own MQTT client (`announce_presence=True`) sets the last-will "
 when it stops. CLI clients (`status`, `start`, `stop`, `restart`) have no last-will and never publish
 this topic, so `supervisor.py status` no longer marks a running Supervisor offline, and a CLI call
 while it is down does not mark it online. A stale "offline" is corrected within one status interval.
+
+## Models (P11; D-056, D-060, D-061, D-086)
+
+Per model **name** (a site may run its own model per side). State in `<root>/data/models/<name>/`:
+`current` (symlink to the running version), `pinned` and `previous` (one line: a version name); only the
+Supervisor's `model` commands write them (first install: `scripts/make_model_package.py`, D-061).
+
+```
+python3 supervisor.py model status [--json]                  sides, current, previous, pinned, installed (ready or not)
+python3 supervisor.py model switch <name> <version> [--confirm]
+python3 supervisor.py model rollback <name> [--confirm]       back to `previous`; both versions stay on disk
+python3 supervisor.py model pin <name> <version>              never switched automatically until unpin
+python3 supervisor.py model unpin <name>
+```
+
+`switch` runs in the command's own process, so the Supervisor keeps watching the workers meanwhile:
+1. refuses (and changes nothing) when the model is not used on this site, the version name is invalid,
+   the model is pinned to another version, or the version is already current;
+2. `verify_package` (manifest, every sha256, classes): a broken package is refused **before** any GPU
+   work or restart;
+3. the self-test (`workers/inspection/model_selftest.py --json`, F47) with the inspection workers' Python,
+   on the RAW_IMAGES of the first side of that model that has frames, with `inspection.threshold`;
+   exit 1 = refused, with its reason;
+4. `previous` := old current, `current` := new (atomic);
+5. asks the running Supervisor (reload channel, works without MQTT) to restart **only the inspection sides
+   that use this model**, once: now with `--confirm` or inside `monitoring.reload_quiet_window`, else they
+   are `config_pending` until then (`supervisor.py reload --confirm` restarts them). Without a running
+   Supervisor the sides load the new version when they start.
+
+`rollback` = the same without the self-test (that version ran here before). A pinned model refuses
+`switch` and `rollback` to another version. One model command at a time (`<root>/run/model.lock`).
+Events on `dpc/supervisor/event`: `model_switched`, `model_rolled_back` {model, from, to, sides, workers,
+restarted, pending, not_running}, `model_switch_failed` {model, action, to, reason}, `model_pinned`
+{model, version, previous_pin, current}, `model_unpinned` {model, version}. Published best effort: the
+change is done even when the broker is down.
+`workers.yaml` `models: {auto_update: off|download|install, check_interval_hours: 6}`: only `off` is acted
+on today; the transfer service (P12) uses the others, never for a pinned model.

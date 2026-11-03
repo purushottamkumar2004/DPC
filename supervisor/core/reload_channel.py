@@ -63,8 +63,13 @@ class ReloadChannel:
             os.remove(path)
         except OSError:
             pass
+        workers = data.get("workers")
         return {"id": data.get("id") if isinstance(data.get("id"), str) else None,
-                "confirm": data.get("confirm") is True}
+                "confirm": data.get("confirm") is True,
+                # P11: "restart_workers" = restart these workers for a new config (model switch)
+                "action": "restart_workers" if data.get("action") == "restart_workers" else "reload",
+                "workers": [w for w in workers if isinstance(w, str)] if isinstance(workers, list) else [],
+                "reason": str(data.get("reason") or "")[:100]}
 
     def write_result(self, result: dict):
         _write_private(self._path(RESULT_FILE), json.dumps(result, indent=1))
@@ -82,12 +87,15 @@ class ReloadChannel:
         is_supervisor = any(part.endswith(b"supervisor.py") for part in cmdline) and b"run" in cmdline
         return pid if is_supervisor else None
 
-    def request(self, confirm: bool, timeout_s: float = 120.0) -> dict:
+    def request(self, confirm: bool, timeout_s: float = 120.0, action: str = "reload",
+                workers=None, reason: str = "") -> dict:
         pid = self.running_pid()
         if pid is None:
             raise ReloadError(f"the Supervisor is not running (no live pid in {self._path(PID_FILE)})")
         request_id = uuid.uuid4().hex
-        _write_private(self._path(REQUEST_FILE), json.dumps({"id": request_id, "confirm": bool(confirm)}))
+        _write_private(self._path(REQUEST_FILE), json.dumps({"id": request_id, "confirm": bool(confirm),
+                                                             "action": action, "workers": list(workers or []),
+                                                             "reason": reason}))
         try:
             os.kill(pid, signal.SIGHUP)
         except OSError as exc:

@@ -27,6 +27,10 @@ monitoring:
   # reload_quiet_window: "02:00-03:00"   # restart_cost: high workers pick up a new config here;
   #                                      # without it: supervisor.py reload --confirm
 
+models:                          # P11 (D-060): model versions, per model name
+  auto_update: off               # off | download | install (P12 transfer); a pinned model never switches automatically
+  check_interval_hours: 6
+
 restart_policy:                  # defaults; the captures set their own below
   max_retries: 3
   retry_delay_seconds: 5

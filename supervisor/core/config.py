@@ -98,11 +98,21 @@ class MqttSettings:
 
 
 @dataclass
+class ModelsSettings:
+    """P11 (D-060): how model versions may change without a person. Only `off` is acted on today;
+    the transfer service (P12) will use `download` (fetch + verify, a person switches) and
+    `install` (switch automatically). A pinned model is never switched automatically."""
+    auto_update: str = "off"           # off | download | install
+    check_interval_hours: float = 6.0
+
+
+@dataclass
 class Settings:
     monitoring: MonitoringSettings
     mqtt: MqttSettings
     runtime_root: str
     log_dir: str
+    models: ModelsSettings = field(default_factory=ModelsSettings)     # P11; optional section
 
 
 # ----------------------------------------------------------------------
@@ -165,6 +175,7 @@ class ConfigurationManager:
         self.settings = Settings(
             monitoring=_build(MonitoringSettings, raw.get("monitoring"), "monitoring"),
             mqtt=_build(MqttSettings, raw.get("mqtt"), "mqtt"),
+            models=_build(ModelsSettings, raw.get("models"), "models"),
             runtime_root=self._abs((raw.get("runtime") or {}).get("root", "runtime")),
             log_dir=self._abs(raw.get("log_dir", "logs")),
         )
@@ -174,6 +185,7 @@ class ConfigurationManager:
 
         self._check_monitoring(self.settings.monitoring)
         self._check_mqtt(raw.get("mqtt") or {})
+        self._check_models(self.settings.models)
 
         self.workers = []
         all_ids = set()                 # enabled AND disabled: a start_after may name a disabled one
@@ -199,6 +211,15 @@ class ConfigurationManager:
         if m.reload_quiet_window is not None and parse_quiet_window(m.reload_quiet_window) is None:
             raise ConfigError(f"monitoring.reload_quiet_window must look like \"02:00-03:30\", "
                               f"got {m.reload_quiet_window!r}")
+
+    VALID_AUTO_UPDATE = ("off", "download", "install")
+
+    def _check_models(self, m: ModelsSettings):
+        if m.auto_update is False:
+            m.auto_update = "off"      # YAML reads a bare `off` as false; `off` is the documented value
+        if m.auto_update not in self.VALID_AUTO_UPDATE:
+            raise ConfigError(f"models.auto_update must be one of {self.VALID_AUTO_UPDATE}, got {m.auto_update!r}")
+        _require_positive_number(m.check_interval_hours, "models.check_interval_hours")
 
     @staticmethod
     def _check_mqtt(raw_mqtt: dict):
