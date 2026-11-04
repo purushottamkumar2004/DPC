@@ -25,7 +25,8 @@ SITE: tadipatri   HOST: dpc-tadipatri (HP Z2 Tower G9)   ROOT: /home/dpc_tadipat
 REFERENCE site.yaml (all real non-secret values, validated by the loader): docs/sites/tadipatri.site.reference.yaml
 UI: the old PyQt desktop UI (DPC_Ui, UI_CONFIG.xml) still runs on the machine; it must read data/frames/CAMn/UI/IMG_1.jpg, never live/ (F45); migration P17.
 MODELS (since 2026-11-04, D-086/D-089): LEFT dpc_maskrcnn_left 2026.10.29, RIGHT dpc_maskrcnn_right 2026.10.29 (12 classes each, same names, different order; no high_dusty_bucket_clip). Previous shared model dpc_maskrcnn 2026.10.12 (+ test copy 2026.10.12b) kept on disk; a per-side model is possible since D-086 if a camera angle needs its own training.
-CHECKS (D-085): wheel_missing OFF at Tadipatri (false alarms) via `inspection.checks: {wheel_missing: false}` in the machine's site.yaml.
+CHECKS (D-085): all four checks ON since 2026-11-04 18:19 (with the per-side models); wheel_missing had been off 2026-11-03/04 because of false alarms.
+MAIL: alarm mails OFF since 2026-11-04 (mail worker stopped, `enabled: false` in the machine's workers.yaml); defects are still recorded in defects_table. When switched back on, rows older than 24 h are never mailed (D-083). The cleanup's disk mail stays on.
 PER-SIDE DIFFERENCES (rendered 2026-10-28; same code both sides, D-069; everything else equal):
   motion LEFT rtl / RIGHT ltr (camera view); bucket_clip_window LEFT 50,1990,750,1085 / RIGHT 10,1270,550,780 (xmin,xmax,ymin,ymax; camera geometry); half_bucket_clip_window y LEFT 470-750 / RIGHT 480-730 (camera geometry); tracker.clip_confirm max_gap_ms / max_dist_px LEFT 300/200 / RIGHT 500/500 and tracker.skidding.time_gap_reset_ms LEFT 500 / RIGHT 1000 (deliberate per-camera tuning, D-080: the cameras sit at different distances); writes_live_wheel_counter LEFT false / RIGHT true (D-073 D3)
 DISK: one 938 GB NVMe mounted at /, services run as the login user dpc_tadipatri (D-030)

@@ -33,6 +33,8 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-22 (full clean
 
 **Tadipatri 2026-10-30:** all 6 programs run under the Supervisor (2 captures, 2 inspections, cleanup, mail). Watch the disk: it grew to 65.7 % while no cleanup ran; the new cleanup deletes raw images only above 85 % and older than `cleanup.raw_image_hours` (20 h). If usage keeps climbing towards 90 %, lower `raw_image_hours` in `site.yaml` and reload.
 
+**Tadipatri 2026-11-04 evening:** per-side models running (P18); all four inspection checks ON; alarm mails OFF (mail worker stopped by the developer, to be kept off in workers.yaml); watch the defects in the DB/UI before switching mail back on.
+
 ## Pending, in order (do one at a time)
 | # | Owner | What | Done when |
 |---|---|---|---|
