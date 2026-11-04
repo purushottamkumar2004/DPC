@@ -193,6 +193,19 @@ sudo systemctl restart dpc-supervisor              # ALWAYS after a pull that ch
 ```
 Read the handoffs since the last update for an `Install impact:` line (for example "re-run install_service.sh").
 
+## Updating a model (D-086, D-087, D-088)
+Every new training gives two files: the weights `.pth` and its training dataset `.json`. The network config is shared (`models/configs/`).
+1. Copy both files to the site (later the transfer service does this, P12).
+2. Package them as a **new version** of the model name that side uses (a new name only for a new model):
+   `python3 scripts/make_model_package.py --name <model name> --version <yyyy.mm.dd> --weights <.pth> --classes-from-coco <training .json>`
+   (`current` does not move for an existing name.)
+3. `python3 supervisor/supervisor.py model status`: the new version is listed as installed.
+4. `python3 supervisor/supervisor.py model switch <model name> <version> --confirm` (while the chain moves): the self-test runs on that side's frames; only the sides using that model restart.
+5. Watch the defects and mails for a while. If something is wrong: `python3 supervisor/supervisor.py model rollback <model name> --confirm`.
+6. To freeze a model (no automatic updates later): `model pin <model name> <version>`; `model unpin <model name>` to release.
+7. Remove old versions you no longer need (about 500 MB each): `rm -rf ~/INSIGHTZZ/data/models/<model name>/<old version>` (never the `current` or `previous` one).
+A side changes model **name** only by editing `inspection.sides.<SIDE>.model` in `site.yaml` and `reload --confirm`.
+
 ## Changes to a running site
 - **A setting:** edit `site.yaml`, then `sudo systemctl reload dpc-supervisor` (only the affected programs restart).
 - **`workers.yaml`:** needs `sudo systemctl restart dpc-supervisor` (reload does not re-read it).
