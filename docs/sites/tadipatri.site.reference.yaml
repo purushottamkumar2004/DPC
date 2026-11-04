@@ -29,6 +29,8 @@ graph:                            # shared by mail and transfer (D-055)
   client_secret: "<secret>"
 capture:
   log: {backup_count: 5}
+  # NOTE 2026-11-04: on the machine the two serials are swapped (CAM1 = 24874775, CAM2 = 24824427, see SITES);
+  # the values below are kept because unit tests read this file (F52).
   cameras:
     - id: CAM1
       side: LEFT
