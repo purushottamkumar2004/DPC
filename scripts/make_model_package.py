@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""Package an existing model as a model package (STATUS 6b, CONTRACTS 12, D-056, D-060).
+"""Package a trained model as a model package (STATUS 6b, F49, CONTRACTS 12, D-056, D-060, D-088).
 
-Builds <models-dir>/<name>/<version>/ with:
+Builds <models-dir>/<name>/<version>/ on the site with:
     <weights>.pth          copied from --weights
-    <config>.yaml          copied from --detectron-yaml
+    <config>.yaml          the shared config models/configs/mask_rcnn_R101_FPN_3x.yaml (or
+                           --detectron-yaml) with MODEL.ROI_HEADS.NUM_CLASSES = the class count
     classes.json           {"classes": [...], "label_map": {...}}
     manifest.json          name, version, trained_at, sha256 of every file (written last)
     ready                  marker: verified after building
 and points <name>/current at it (first install only; afterwards the Supervisor moves `current`).
 
-Three ways to run it:
-  1. New package from loose files (Tadipatri's present model, classes from the legacy XML):
-       make_model_package.py --name dpc_maskrcnn --version 2026.10.1 \
-           --weights /path/to/model_final.pth --detectron-yaml /path/to/mask_rcnn.yaml \
-           --classes-from-xml /path/to/leftConfig.xml --legacy-label-map [--export-to-repo]
-  2. A version already in git (D-065): only the weights are needed; their sha256 must match
-     the repo manifest, everything else comes from the repo folder:
+Normal way (D-088): the weights and the training dataset JSON of that model, both loaded on the site:
+    make_model_package.py --name dpc_maskrcnn --version 2026.11.10 \
+        --weights /path/to/model_final.pth --classes-from-coco /path/to/train.json [--legacy-label-map]
+The class order is the COCO `categories` sorted by id. Other class sources (--classes,
+--classes-file, --classes-from-xml) still work but are not the normal way.
+
+Also:
+  - a version kept in git under models/<name>/<version>/ (D-065, history only since D-088):
        make_model_package.py --from-repo models/dpc_maskrcnn/2026.10.12 --weights /path/to/model_final.pth
-  3. Export an installed package's small files to git (never the weights):
-       make_model_package.py --name dpc_maskrcnn --version 2026.10.12 --export-to-repo
+  - --export-to-repo is retired (D-088): new versions are not stored in git.
 
 Class order matters: index i of the model output is class i, so the list is kept exactly as
 given. Source files are only read and copied, never changed. Nothing is written unless every
@@ -40,6 +41,10 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from common.config import model_package as mp  # noqa: E402
+
+import yaml  # noqa: E402
+
+SHARED_DETECTRON_YAML = os.path.join(REPO_ROOT, "models", "configs", "mask_rcnn_R101_FPN_3x.yaml")   # D-088
 
 DEFAULT_MODELS_DIR = "~/INSIGHTZZ/data/models"
 
@@ -81,6 +86,39 @@ def classes_from_xml(path: str) -> List[str]:
     return list(value) if isinstance(value, (list, tuple)) else []
 
 
+def classes_from_coco(path: str) -> List[str]:
+    """The class list of a training dataset in COCO format: `categories` sorted by `id` (D-088).
+    Refuses a file without categories, ids that are not unique integers, and missing or
+    duplicate names: any of those would shift every class index silently."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        raise PackagingError(f"--classes-from-coco: cannot read {path} ({type(exc).__name__})") from None
+    categories = data.get("categories") if isinstance(data, dict) else None
+    if not isinstance(categories, list) or not categories:
+        raise PackagingError(f"--classes-from-coco: {path} has no `categories` list")
+    problems, ids, names = [], set(), set()
+    for i, cat in enumerate(categories):
+        cat_id = cat.get("id") if isinstance(cat, dict) else None
+        name = cat.get("name") if isinstance(cat, dict) else None
+        if isinstance(cat_id, bool) or not isinstance(cat_id, int):
+            problems.append(f"categories[{i}]: id must be an integer")
+        elif cat_id in ids:
+            problems.append(f"categories[{i}]: id {cat_id} appears more than once")
+        else:
+            ids.add(cat_id)
+        if not isinstance(name, str) or not name.strip():
+            problems.append(f"categories[{i}]: name missing")
+        elif name in names:
+            problems.append(f"categories[{i}]: name {name!r} appears more than once")
+        else:
+            names.add(name)
+    if problems:
+        raise PackagingError("--classes-from-coco: " + "; ".join(problems))
+    return [cat["name"] for cat in sorted(categories, key=lambda c: c["id"])]
+
+
 def classes_from_file(path: str) -> List[str]:
     """A JSON list of names, or a classes.json object with a "classes" list."""
     try:
@@ -103,9 +141,11 @@ def parse_label_map(text: str) -> Dict[str, str]:
 
 
 def collect_classes(args) -> List[str]:
-    sources = [s for s in (args.classes, args.classes_file, args.classes_from_xml) if s]
+    sources = [s for s in (args.classes_from_coco, args.classes, args.classes_file, args.classes_from_xml) if s]
     if len(sources) != 1:
-        raise PackagingError("give exactly one of --classes, --classes-file, --classes-from-xml")
+        raise PackagingError("give exactly one of --classes-from-coco, --classes, --classes-file, --classes-from-xml")
+    if args.classes_from_coco:
+        return classes_from_coco(args.classes_from_coco)
     if args.classes:
         return [c.strip() for c in args.classes.split(",") if c.strip()]
     if args.classes_file:
@@ -151,6 +191,32 @@ def check_inputs(args, classes: List[str], label_map: Dict[str, str]) -> None:
         raise PackagingError("\n".join(problems))
 
 
+def config_with_num_classes(text: str, num_classes: int) -> str:
+    """The Detectron config text with MODEL.ROI_HEADS.NUM_CLASSES set (only that key: other
+    heads such as RETINANET keep theirs). Line edit, so comments and layout stay; checked by
+    parsing the result."""
+    out, in_model, in_roi, done = [], False, False, False
+    for line in text.splitlines(keepends=True):
+        if line[:1] not in (" ", "\t", "\n", "#", ""):
+            in_model, in_roi = line.startswith("MODEL:"), False
+        elif in_model and line.startswith("  ") and line[2:3] not in (" ", "#", "\n", "-"):
+            in_roi = line.startswith("  ROI_HEADS:")
+        if in_roi and not done and line.startswith("    NUM_CLASSES:"):
+            line = f"    NUM_CLASSES: {num_classes}\n"
+            done = True
+        out.append(line)
+    result = "".join(out)
+    try:
+        parsed = yaml.safe_load(result)
+        ok = done and parsed["MODEL"]["ROI_HEADS"]["NUM_CLASSES"] == num_classes
+    except (yaml.YAMLError, KeyError, TypeError):
+        ok = False
+    if not ok:
+        raise PackagingError("the Detectron config has no MODEL: ROI_HEADS: NUM_CLASSES: line to set "
+                             "(use a self-contained config, e.g. models/configs/mask_rcnn_R101_FPN_3x.yaml)")
+    return result
+
+
 def base_config_warning(path: str) -> Optional[str]:
     """Detectron configs can include another file with _BASE_; that file is not packaged."""
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -166,7 +232,7 @@ def base_config_warning(path: str) -> Optional[str]:
 
 def _assemble(models_dir: str, name: str, version: str, copies: List[Tuple[str, str]],
               classes_doc: Optional[Dict] = None, manifest: Optional[Dict] = None, trained_at: str = "",
-              packaged_from: Optional[Dict[str, str]] = None) -> str:
+              packaged_from: Optional[Dict[str, str]] = None, texts: Optional[Dict[str, str]] = None) -> str:
     """Copy and write everything in a temp folder next to the target, then rename it into place.
     copies: (source, name in the package). manifest None = write a new one with fresh sha256s;
     given = copy it as it is (from the repo, already checked)."""
@@ -181,6 +247,9 @@ def _assemble(models_dir: str, name: str, version: str, copies: List[Tuple[str, 
     try:
         for source, dest in copies:
             shutil.copyfile(source, os.path.join(temp, dest))                  # read-only on the source
+        for file_name, text in (texts or {}).items():
+            with open(os.path.join(temp, file_name), "w", encoding="utf-8") as f:
+                f.write(text)
         if classes_doc is not None:
             with open(os.path.join(temp, mp.CLASSES_FILE), "w", encoding="utf-8") as f:
                 json.dump(classes_doc, f, indent=2)
@@ -201,16 +270,19 @@ def _assemble(models_dir: str, name: str, version: str, copies: List[Tuple[str, 
 
 def build_package(models_dir: str, name: str, version: str, weights: str, detectron_yaml: str,
                   classes: List[str], label_map: Dict[str, str], trained_at: str) -> str:
-    """A new package from loose files."""
+    """A new package: the weights, the config with NUM_CLASSES = the class count, classes.json."""
+    with open(detectron_yaml, "r", encoding="utf-8") as f:
+        config_text = config_with_num_classes(f.read(), len(classes))
     return _assemble(models_dir, name, version,
-                     copies=[(weights, os.path.basename(weights)), (detectron_yaml, os.path.basename(detectron_yaml))],
+                     copies=[(weights, os.path.basename(weights))],
+                     texts={os.path.basename(detectron_yaml): config_text},
                      classes_doc={"classes": classes, "label_map": label_map}, trained_at=trained_at,
                      packaged_from={"weights": os.path.abspath(weights),
                                     "detectron_yaml": os.path.abspath(detectron_yaml)})
 
 
 # ======================================================================
-# Git (D-065): models/<name>/<version>/ holds manifest.json, classes.json and the yaml
+# Git (D-065, history only since D-088): install a version kept under models/<name>/<version>/
 # ======================================================================
 
 def _weights_name(manifest: "mp.Manifest") -> str:
@@ -256,29 +328,6 @@ def build_from_repo(models_dir: str, repo_version_dir: str, weights: str) -> str
     return _assemble(models_dir, manifest.name, manifest.version, copies, manifest=manifest_doc)
 
 
-def export_to_repo(package_dir: str, repo_models_dir: str) -> str:
-    """Copy manifest.json, classes.json and the Detectron yaml of a verified package into
-    <repo>/models/<name>/<version>/. Never the weights (D-065)."""
-    package = mp.verify_package(package_dir)
-    manifest = mp.read_manifest(package_dir)
-    target = os.path.join(repo_models_dir, package.name, package.version)
-    if os.path.lexists(target):
-        raise PackagingError(f"{target} already exists in the repo; a version is never overwritten")
-    names = [mp.MANIFEST_FILE] + [n for n in manifest.files if not n.lower().endswith(mp.WEIGHTS_EXTENSIONS)]
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    temp = os.path.join(os.path.dirname(target), f".{package.version}.export-{os.getpid()}")
-    shutil.rmtree(temp, ignore_errors=True)
-    os.makedirs(temp)
-    try:
-        for name in names:
-            shutil.copyfile(os.path.join(package_dir, name), os.path.join(temp, name))
-        os.rename(temp, target)
-    except BaseException:
-        shutil.rmtree(temp, ignore_errors=True)
-        raise
-    return target
-
-
 def _set_current_first_install(models_dir: str, name: str, version: str, no_current: bool) -> None:
     model_root = os.path.join(models_dir, name)
     if no_current:
@@ -289,21 +338,24 @@ def _set_current_first_install(models_dir: str, name: str, version: str, no_curr
     if pinned is not None or current is not None:
         # After the first install the Supervisor owns `current` (D-060, D-061).
         print(f"  current not changed: it is already set ({current}{', pinned' if pinned else ''}); "
-              f"switch with the Supervisor (model switch {version})")
+              f"switch with the Supervisor (supervisor.py model switch {name} {version})")
         return
     mp.set_current(model_root, version)
     print(f"  current -> {version}")
 
 
 def _mode(args) -> str:
-    """from_repo | export_only | build, with the flags each mode does not take refused."""
-    loose = [f for f, v in (("--detectron-yaml", args.detectron_yaml), ("--classes", args.classes),
+    """from_repo | build, with the flags each mode does not take refused."""
+    if args.export_to_repo:
+        raise PackagingError("--export-to-repo is retired (D-088): new versions are not stored in git; "
+                             "the shared config is models/configs/mask_rcnn_R101_FPN_3x.yaml")
+    loose = [f for f, v in (("--detectron-yaml", args.detectron_yaml), ("--classes-from-coco", args.classes_from_coco),
+                            ("--classes", args.classes),
                             ("--classes-file", args.classes_file), ("--classes-from-xml", args.classes_from_xml),
                             ("--label-map", args.label_map), ("--legacy-label-map", args.legacy_label_map),
                             ("--trained-at", args.trained_at)) if v]
     if args.from_repo:
-        extra = loose + [f for f, v in (("--name", args.name), ("--version", args.version),
-                                        ("--export-to-repo", args.export_to_repo)) if v]
+        extra = loose + [f for f, v in (("--name", args.name), ("--version", args.version)) if v]
         if extra:
             raise PackagingError(f"--from-repo takes only --weights (and --models-dir, --no-current); "
                                  f"remove {', '.join(extra)}")
@@ -312,21 +364,20 @@ def _mode(args) -> str:
         return "from_repo"
     if not args.name or not args.version:
         raise PackagingError("give --name and --version (or --from-repo)")
-    if args.export_to_repo and not args.weights and not loose:
-        return "export_only"
-    missing = [f for f, v in (("--weights", args.weights), ("--detectron-yaml", args.detectron_yaml)) if not v]
-    if missing:
-        raise PackagingError(f"a new package needs {', '.join(missing)}")
+    if not args.weights:
+        raise PackagingError("a new package needs --weights")
     return "build"
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="make_model_package.py",
-                                     description="Package a model (CONTRACTS 12, D-065).")
+                                     description="Package a model (CONTRACTS 12, D-088).")
     parser.add_argument("--name", help="model name, as in site.yaml inspection.model.name")
     parser.add_argument("--version", help="version folder name, e.g. 2026.10.1")
     parser.add_argument("--weights", help="the .pth weights file (copied, never changed)")
-    parser.add_argument("--detectron-yaml", help="the self-contained Detectron config .yaml (copied)")
+    parser.add_argument("--detectron-yaml", help="override the shared config models/configs/mask_rcnn_R101_FPN_3x.yaml "
+                                                 "(self-contained; NUM_CLASSES is set from the classes)")
+    parser.add_argument("--classes-from-coco", help="training dataset JSON (COCO): categories sorted by id (normal way)")
     parser.add_argument("--classes", help="class names in model output order, comma separated")
     parser.add_argument("--classes-file", help="JSON list of class names (or a classes.json)")
     parser.add_argument("--classes-from-xml", help="legacy leftConfig.xml/rightConfig.xml: uses <ALL_CLASS_NAMES>")
@@ -335,22 +386,14 @@ def main(argv=None) -> int:
                         help="add today's changeLabelName() mapping (entries for classes the model has)")
     parser.add_argument("--trained-at", help="training date (default: date of the weights file)")
     parser.add_argument("--from-repo", help="models/<name>/<version> folder in git: install it with --weights")
-    parser.add_argument("--export-to-repo", action="store_true",
-                        help="copy manifest.json, classes.json and the yaml to <repo>/models/<name>/<version>/")
-    parser.add_argument("--repo-models-dir", default=os.path.join(REPO_ROOT, "models"),
-                        help="models folder of the code checkout (default: models/ of this repo)")
+    parser.add_argument("--export-to-repo", action="store_true", help=argparse.SUPPRESS)   # retired (D-088)
     parser.add_argument("--models-dir", default=DEFAULT_MODELS_DIR, help=f"default {DEFAULT_MODELS_DIR}")
     parser.add_argument("--no-current", action="store_true", help="do not point current at the new version")
     args = parser.parse_args(argv)
     models_dir = os.path.abspath(os.path.expanduser(args.models_dir))
-    repo_models_dir = os.path.abspath(os.path.expanduser(args.repo_models_dir))
 
     try:
         mode = _mode(args)
-        if mode == "export_only":
-            target = export_to_repo(os.path.join(models_dir, args.name, args.version), repo_models_dir)
-            print(f"Exported {args.name}/{args.version} to {target} (manifest, classes, yaml; no weights)")
-            return 0
         if mode == "from_repo":
             target = build_from_repo(models_dir, args.from_repo, args.weights)
             package = mp.verify_package(target)
@@ -360,6 +403,7 @@ def main(argv=None) -> int:
             _set_current_first_install(models_dir, package.name, package.version, args.no_current)
             return 0
 
+        args.detectron_yaml = args.detectron_yaml or SHARED_DETECTRON_YAML     # D-088: shared by default
         classes = collect_classes(args)
         label_map, skipped = collect_label_map(args, classes)
         check_inputs(args, classes, label_map)
@@ -379,14 +423,9 @@ def main(argv=None) -> int:
         print(f"  legacy label map entries skipped (no such class in this model): {', '.join(skipped)}")
     if warning:
         print(f"  WARNING {warning}")
+    print(f"  config {os.path.basename(args.detectron_yaml)} with NUM_CLASSES {len(package.classes)}"
+          + (" (shared, D-088)" if os.path.abspath(args.detectron_yaml) == SHARED_DETECTRON_YAML else ""))
     _set_current_first_install(models_dir, args.name, args.version, args.no_current)
-    if args.export_to_repo:
-        try:
-            exported = export_to_repo(target, repo_models_dir)
-        except (PackagingError, mp.ModelPackageError) as exc:
-            print(f"FAILED export: {exc}")
-            return 1
-        print(f"  exported to {exported} (manifest, classes, yaml; no weights): commit it")
     return 0
 
 

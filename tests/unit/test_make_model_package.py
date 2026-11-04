@@ -1,4 +1,4 @@
-"""Tests for scripts/make_model_package.py (STATUS 6b).
+"""Tests for scripts/make_model_package.py (STATUS 6b, F48, F49).
 
 Run from the repo root:
     python3 -m unittest tests.unit.test_make_model_package -v
@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -21,6 +22,20 @@ mk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mk)
 
 from common.config import model_package as mp  # noqa: E402
+
+import yaml  # noqa: E402
+
+# A self-contained Detectron config in miniature: ROI_HEADS.NUM_CLASSES is the key the tool sets,
+# RETINANET.NUM_CLASSES must stay as it is.
+TEST_CONFIG = (b"MODEL:\n  MASK_ON: true\n  RETINANET:\n    NUM_CLASSES: 80\n"
+               b"  ROI_HEADS:\n    NAME: StandardROIHeads\n    NUM_CLASSES: 3\n    SCORE_THRESH_TEST: 0.5\n"
+               b"OUTPUT_DIR: ./output\n")
+
+
+def num_classes_of(path):
+    with open(path, encoding="utf-8") as f:
+        model = yaml.safe_load(f)["MODEL"]
+    return model["ROI_HEADS"]["NUM_CLASSES"], model.get("RETINANET", {}).get("NUM_CLASSES")
 
 # Same shape as workers/inspection/leftConfig.example.xml (<ALL_CLASS_NAMES> deep in the tree).
 LEGACY_XML = """<DDPC><A/><B/><C/><D><x/><x/><x/><x/><x/>
@@ -43,7 +58,7 @@ class _Base(unittest.TestCase):
         self.weights = os.path.join(self.src, "model_final.pth")
         self.yaml = os.path.join(self.src, "mask_rcnn_R_50_FPN_3x.yaml")
         self.xml = os.path.join(self.src, "leftConfig.xml")
-        for path, data in ((self.weights, b"w" * 5000), (self.yaml, b"MODEL:\n  MASK_ON: True\n"),
+        for path, data in ((self.weights, b"w" * 5000), (self.yaml, TEST_CONFIG),
                            (self.xml, LEGACY_XML.encode())):
             with open(path, "wb") as f:
                 f.write(data)
@@ -169,7 +184,7 @@ class Package(_Base):
         self.assertEqual(code, 0)
         self.assertEqual(mp.read_current(os.path.join(self.models, "dpc_maskrcnn")), "2026.10.1")
         self.assertIn("current not changed: it is already set (2026.10.1)", out)
-        self.assertIn("model switch 2026.11.1", out)
+        self.assertIn("supervisor.py model switch dpc_maskrcnn 2026.11.1", out)
 
     def test_no_current_flag(self):
         code, out = self.run_tool("--classes", "wheel", "--no-current")
@@ -178,14 +193,14 @@ class Package(_Base):
 
     def test_base_config_warning(self):
         with open(self.yaml, "w") as f:
-            f.write("_BASE_: ../Base-RCNN-FPN.yaml\nMODEL: {}\n")
+            f.write("_BASE_: ../Base-RCNN-FPN.yaml\nMODEL:\n  ROI_HEADS:\n    NUM_CLASSES: 3\n")
         self.before[self.yaml] = (digest(self.yaml), os.stat(self.yaml).st_mtime_ns)
         code, out = self.run_tool("--classes", "wheel")
         self.assertEqual(code, 0)
         self.assertIn("WARNING mask_rcnn_R_50_FPN_3x.yaml uses _BASE_", out)
 
 
-class Repo(_Base):                                                 # P4 / 6h (D-065)
+class Repo(_Base):                                                 # D-065 history; --export retired (D-088)
     def setUp(self):
         super().setUp()
         self.repo_models = os.path.join(self.dir, "repo", "models")
@@ -193,46 +208,37 @@ class Repo(_Base):                                                 # P4 / 6h (D-
     def run_cli(self, *args):
         out = io.StringIO()
         with redirect_stdout(out):
-            code = mk.main(list(args) + ["--repo-models-dir", self.repo_models])
+            code = mk.main(list(args))
         return code, out.getvalue()
 
-    def export_new(self):
-        code, out = self.run_tool("--classes-from-xml", self.xml, "--legacy-label-map",
-                                  "--export-to-repo", "--repo-models-dir", self.repo_models)
+    def repo_version(self):
+        """A version kept in git the D-065 way (manifest, classes.json, yaml; never the weights)."""
+        code, out = self.run_tool("--classes-from-xml", self.xml, "--legacy-label-map")
         self.assertEqual(code, 0, out)
-        return os.path.join(self.repo_models, "dpc_maskrcnn", "2026.10.1")
+        installed = os.path.join(self.models, "dpc_maskrcnn", "2026.10.1")
+        repo_dir = os.path.join(self.repo_models, "dpc_maskrcnn", "2026.10.1")
+        os.makedirs(repo_dir)
+        for name in os.listdir(installed):
+            if not name.endswith(".pth") and name != "ready":
+                shutil.copyfile(os.path.join(installed, name), os.path.join(repo_dir, name))
+        return repo_dir
 
-    def test_export_writes_small_files_never_weights(self):
-        repo_dir = self.export_new()
-        self.assertEqual(sorted(os.listdir(repo_dir)),
-                         ["classes.json", "manifest.json", "mask_rcnn_R_50_FPN_3x.yaml"])
-        with open(os.path.join(repo_dir, "manifest.json")) as f:
-            self.assertEqual(json.load(f)["files"]["model_final.pth"], digest(self.weights))   # sha kept
-        self.assertSourcesUntouched()
-
-    def test_export_only_an_installed_package(self):
-        self.run_tool("--classes", "wheel")
-        code, out = self.run_cli("--name", "dpc_maskrcnn", "--version", "2026.10.1", "--export-to-repo",
-                                 "--models-dir", self.models)
-        self.assertEqual(code, 0, out)
-        self.assertIn("no weights", out)
-        code, out = self.run_cli("--name", "dpc_maskrcnn", "--version", "2026.10.1", "--export-to-repo",
-                                 "--models-dir", self.models)
+    def test_export_to_repo_is_retired(self):                        # D-088
+        code, out = self.run_tool("--classes", "wheel", "--export-to-repo")
         self.assertEqual(code, 1)
-        self.assertIn("already exists in the repo", out)
+        self.assertIn("--export-to-repo is retired (D-088)", out)
+        self.assertFalse(os.path.exists(os.path.join(self.models, "dpc_maskrcnn", "2026.10.1")))
 
-    def test_export_refuses_a_broken_package(self):
-        self.run_tool("--classes", "wheel")
-        with open(os.path.join(self.models, "dpc_maskrcnn", "2026.10.1", "model_final.pth"), "ab") as f:
-            f.write(b"x")
-        code, out = self.run_cli("--name", "dpc_maskrcnn", "--version", "2026.10.1", "--export-to-repo",
-                                 "--models-dir", self.models)
-        self.assertEqual(code, 1)
-        self.assertIn("checksum does not match", out)
-        self.assertFalse(os.path.exists(os.path.join(self.repo_models, "dpc_maskrcnn")))
+    def test_the_tadipatri_version_in_git_still_installs(self):
+        """models/dpc_maskrcnn/2026.10.12 stays as history; its manifest still verifies against its files."""
+        repo_dir = os.path.join(REPO_ROOT, "models", "dpc_maskrcnn", "2026.10.12")
+        manifest = mp.read_manifest(repo_dir)
+        for name, sha in manifest.files.items():
+            if not name.endswith(".pth"):
+                self.assertEqual(digest(os.path.join(repo_dir, name)), sha, name)
 
     def test_from_repo_installs_with_only_the_weights(self):
-        repo_dir = self.export_new()
+        repo_dir = self.repo_version()
         other_site = os.path.join(self.dir, "SITE2", "data", "models")
         code, out = self.run_cli("--from-repo", repo_dir, "--weights", self.weights, "--models-dir", other_site)
         self.assertEqual(code, 0, out)
@@ -246,7 +252,7 @@ class Repo(_Base):                                                 # P4 / 6h (D-
         self.assertSourcesUntouched()
 
     def test_from_repo_refuses_other_weights(self):
-        repo_dir = self.export_new()
+        repo_dir = self.repo_version()
         wrong = os.path.join(self.dir, "other.pth")
         with open(wrong, "wb") as f:
             f.write(b"different weights")
@@ -257,7 +263,7 @@ class Repo(_Base):                                                 # P4 / 6h (D-
         self.assertFalse(os.path.exists(os.path.join(other_site, "dpc_maskrcnn", "2026.10.1")))
 
     def test_from_repo_refuses_a_changed_repo_file(self):
-        repo_dir = self.export_new()
+        repo_dir = self.repo_version()
         with open(os.path.join(repo_dir, "classes.json"), "a") as f:
             f.write(" ")
         code, out = self.run_cli("--from-repo", repo_dir, "--weights", self.weights,
@@ -266,7 +272,7 @@ class Repo(_Base):                                                 # P4 / 6h (D-
         self.assertIn("classes.json in the repo does not match its manifest sha256", out)
 
     def test_from_repo_takes_no_other_inputs(self):
-        repo_dir = self.export_new()
+        repo_dir = self.repo_version()
         code, out = self.run_cli("--from-repo", repo_dir, "--weights", self.weights, "--classes", "wheel",
                                  "--version", "9")
         self.assertEqual(code, 1)
@@ -275,13 +281,112 @@ class Repo(_Base):                                                 # P4 / 6h (D-
         self.assertIn("--from-repo needs --weights", out)
 
     def test_from_repo_folder_must_match_manifest(self):
-        repo_dir = self.export_new()
+        repo_dir = self.repo_version()
         moved = os.path.join(self.repo_models, "dpc_maskrcnn", "9.9.9")
         os.rename(repo_dir, moved)
         code, out = self.run_cli("--from-repo", moved, "--weights", self.weights,
                                  "--models-dir", os.path.join(self.dir, "SITE2"))
         self.assertEqual(code, 1)
         self.assertIn("manifest says dpc_maskrcnn/2026.10.1, the folder is dpc_maskrcnn/9.9.9", out)
+
+
+class CocoAndSharedConfig(_Base):                                    # F49, D-088
+    def write_coco(self, categories):
+        path = os.path.join(self.src, "train.json")
+        with open(path, "w") as f:
+            json.dump({"images": [], "annotations": [], "categories": categories}, f)
+        self.before[path] = (digest(path), os.stat(path).st_mtime_ns)
+        return path
+
+    def run_default_config(self, *extra, version="2026.11.10"):
+        """No --detectron-yaml: the shared config in git is used."""
+        args = ["--name", "dpc_maskrcnn", "--version", version, "--weights", self.weights,
+                "--models-dir", self.models] + list(extra)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = mk.main(args)
+        return code, out.getvalue()
+
+    def test_shuffled_ids_give_the_right_order(self):                # F49 done when
+        coco = self.write_coco([{"id": 3, "name": "plate"}, {"id": 1, "name": "wheel"},
+                                {"id": 7, "name": "nut_bolt"}, {"id": 2, "name": "bucket_clip"}])
+        code, out = self.run_tool("--classes-from-coco", coco)
+        self.assertEqual(code, 0, out)
+        package = mp.verify_package(os.path.join(self.models, "dpc_maskrcnn", "2026.10.1"))
+        self.assertEqual(package.classes, ("wheel", "bucket_clip", "plate", "nut_bolt"))
+        self.assertSourcesUntouched()
+
+    def test_package_yaml_has_num_classes_equal_to_the_class_count(self):   # F49 done when
+        coco = self.write_coco([{"id": i, "name": f"class_{i}"} for i in range(1, 8)])
+        self.run_tool("--classes-from-coco", coco)
+        package = mp.verify_package(os.path.join(self.models, "dpc_maskrcnn", "2026.10.1"))
+        self.assertEqual(num_classes_of(package.detectron_yaml), (7, 80))   # RETINANET untouched
+        self.assertEqual(num_classes_of(self.yaml), (3, 80))                # the source is not changed
+        self.assertSourcesUntouched()
+
+    def test_default_config_is_the_shared_one(self):                 # F49 done when
+        coco = self.write_coco([{"id": 1, "name": "wheel"}, {"id": 2, "name": "plate"}])
+        code, out = self.run_default_config("--classes-from-coco", coco)
+        self.assertEqual(code, 0, out)
+        self.assertIn("mask_rcnn_R101_FPN_3x.yaml with NUM_CLASSES 2 (shared, D-088)", out)
+        package = mp.verify_package(os.path.join(self.models, "dpc_maskrcnn", "2026.11.10"))
+        self.assertEqual(os.path.basename(package.detectron_yaml), "mask_rcnn_R101_FPN_3x.yaml")
+        self.assertEqual(num_classes_of(package.detectron_yaml), (2, 80))
+        with open(mk.SHARED_DETECTRON_YAML, encoding="utf-8") as a, open(package.detectron_yaml, encoding="utf-8") as b:
+            shared, packaged = a.read().splitlines(), b.read().splitlines()
+        diff = [(x, y) for x, y in zip(shared, packaged) if x != y]
+        self.assertEqual(len(shared), len(packaged))
+        self.assertEqual(len(diff), 1)                               # only the NUM_CLASSES line
+        self.assertEqual(diff[0][1].strip(), "NUM_CLASSES: 2")
+
+    def test_shared_config_in_git(self):
+        self.assertEqual(num_classes_of(mk.SHARED_DETECTRON_YAML), (0, 80))
+        with open(mk.SHARED_DETECTRON_YAML, encoding="utf-8") as f:
+            self.assertNotIn("_BASE_", yaml.safe_load(f))            # self-contained: no base file
+
+    def test_label_map_as_today(self):
+        coco = self.write_coco([{"id": 1, "name": "wheel"}, {"id": 2, "name": "dusty_chain_base"}])
+        code, out = self.run_tool("--classes-from-coco", coco, "--legacy-label-map", "--label-map", "wheel=wheel")
+        self.assertEqual(code, 0, out)
+        package = mp.verify_package(os.path.join(self.models, "dpc_maskrcnn", "2026.10.1"))
+        self.assertEqual(package.label_map, {"dusty_chain_base": "bucket_clip", "wheel": "wheel"})
+
+    def test_bad_coco_files_are_refused(self):
+        cases = [
+            ([{"id": 1, "name": "wheel"}, {"id": 2, "name": "wheel"}], "name 'wheel' appears more than once"),
+            ([{"id": 1, "name": "wheel"}, {"id": 1, "name": "plate"}], "id 1 appears more than once"),
+            ([{"id": 1, "name": "wheel"}, {"id": 2}], "categories[1]: name missing"),
+            ([{"id": 1, "name": ""}], "categories[0]: name missing"),
+            ([{"id": "1", "name": "wheel"}], "categories[0]: id must be an integer"),
+            ([], "has no `categories` list"),
+        ]
+        for categories, message in cases:
+            code, out = self.run_tool("--classes-from-coco", self.write_coco(categories))
+            self.assertEqual(code, 1, categories)
+            self.assertIn(message, out)
+            self.assertFalse(os.path.exists(os.path.join(self.models, "dpc_maskrcnn", "2026.10.1")))
+        code, out = self.run_tool("--classes-from-coco", os.path.join(self.src, "missing.json"))
+        self.assertIn("cannot read", out)
+
+    def test_config_without_roi_heads_is_refused(self):
+        with open(self.yaml, "wb") as f:
+            f.write(b"_BASE_: Base-RCNN-FPN.yaml\nMODEL:\n  MASK_ON: true\n")
+        self.before[self.yaml] = (digest(self.yaml), os.stat(self.yaml).st_mtime_ns)
+        code, out = self.run_tool("--classes", "wheel")
+        self.assertEqual(code, 1)
+        self.assertIn("no MODEL: ROI_HEADS: NUM_CLASSES: line to set", out)
+
+    def test_one_class_source_only(self):
+        coco = self.write_coco([{"id": 1, "name": "wheel"}])
+        code, out = self.run_tool("--classes-from-coco", coco, "--classes", "wheel")
+        self.assertEqual(code, 1)
+        self.assertIn("give exactly one of --classes-from-coco", out)
+
+    def test_switch_hint_names_the_model(self):                      # F48
+        self.run_tool("--classes", "wheel")
+        code, out = self.run_tool("--classes", "wheel", version="2026.11.1")
+        self.assertEqual(code, 0)
+        self.assertIn("supervisor.py model switch dpc_maskrcnn 2026.11.1", out)
 
 
 if __name__ == "__main__":
