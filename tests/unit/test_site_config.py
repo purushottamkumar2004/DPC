@@ -119,6 +119,8 @@ class ExampleLoads(_TempDirTest):
         data["paths"]["root"] = self.root
         # CONTRACTS 7.1 still shows wheel_stand_required_counts, withdrawn by D-073 D8 (doc fix in the handoff)
         data["inspection"]["machine"].pop("wheel_stand_required_counts", None)
+        # ... and auto_roi.learn_images, retired by D-093 (a warning; doc fix in the F53 handoff)
+        data["inspection"].get("auto_roi", {}).pop("learn_images", None)
         cfg = sc.load_site_config(self.write_yaml(data))
         self.assertEqual(cfg.inspection.model.name, "dpc_maskrcnn")
         self.assertEqual(cfg.transfer.models_folder, "DPC/models")
@@ -142,7 +144,7 @@ class ExampleLoads(_TempDirTest):
             del data["mail"][key]
         cfg = sc.load_site_config(self.write_yaml(data))
         self.assertIsNone(cfg.transfer)
-        self.assertEqual((cfg.inspection.auto_roi.mode, cfg.inspection.auto_roi.learn_images), ("observe", 30))
+        self.assertEqual((cfg.inspection.auto_roi.mode, cfg.inspection.auto_roi.margin_px), ("observe", 100))
         self.assertEqual(cfg.cleanup.interval_seconds, 10)
         self.assertEqual(cfg.cleanup.disk_percent["delete"], 75)
         self.assertEqual(cfg.mail.disk_report_to, cfg.mail.recipients)
@@ -720,6 +722,53 @@ class PerSideModel(_TempDirTest):                                     # F46, D-0
         self.assertProblem(problems, r"^inspection\.sides\.LEFT\.model\.name: use letters")
         self.assertProblem(problems, r"^inspection\.sides\.LEFT\.model\.version: moved to the Supervisor \(D-060\)")
         self.assertIn("inspection.sides.RIGHT.model.name: missing", problems)
+
+
+class AutoRoiF53(_TempDirTest):                                       # F53, D-093
+    def roi(self, **values):
+        data = self.config_data()
+        data["inspection"]["auto_roi"] = dict(values)
+        return data
+
+    def test_defaults(self):
+        roi = sc.load_site_config(self.write_yaml(self.roi())).inspection.auto_roi
+        self.assertEqual(roi.mode, "observe")
+        for key, (default, kind, _low, _high) in sc.AUTO_ROI_KEYS.items():
+            self.assertEqual(getattr(roi, key), default, key)
+            self.assertIsInstance(getattr(roi, key), kind, key)
+
+    def test_same_table_as_the_inspection_program(self):
+        """The loader's ranges are the inspection program's, so a value accepted here never stops it."""
+        sys.path.insert(0, os.path.join(REPO_ROOT, "workers", "inspection"))
+        try:
+            import settings as inspection_settings
+        finally:
+            sys.path.pop(0)
+        self.assertEqual(sc.AUTO_ROI_KEYS, inspection_settings.AUTO_ROI_KEYS)
+
+    def test_values_and_ranges(self):
+        roi = sc.load_site_config(self.write_yaml(self.roi(mode="filter", margin_px=150, drift_ratio=0.5,
+                                                           top_percentile=2))).inspection.auto_roi
+        self.assertEqual((roi.mode, roi.margin_px, roi.drift_ratio, roi.top_percentile), ("filter", 150, 0.5, 2.0))
+        problems = self.problems_for(self.roi(margin_px=2001, static_share=0.0, grid_steps=1.5, learn_max_frames=99,
+                                              drift_ratio=True, speed=1))
+        for pattern in (r"^inspection\.auto_roi\.margin_px: must be between 0 and 2000",
+                        r"^inspection\.auto_roi\.static_share: must be >= 0\.01",
+                        r"^inspection\.auto_roi\.grid_steps: must be an integer",
+                        r"^inspection\.auto_roi\.learn_max_frames: must be between 100 and 1000000",
+                        r"^inspection\.auto_roi\.drift_ratio: must be a number",
+                        r"^inspection\.auto_roi\.speed: unknown key"):
+            self.assertProblem(problems, pattern)
+
+    def test_top_below_bottom(self):
+        problems = self.problems_for(self.roi(top_percentile=50, bottom_percentile=50))
+        self.assertIn("inspection.auto_roi.top_percentile: must be below bottom_percentile (50.0)", problems)
+
+    def test_learn_images_is_retired_with_a_warning(self):
+        cfg = sc.load_site_config(self.write_yaml(self.roi(mode="observe", learn_images=30)))
+        self.assertIn("inspection.auto_roi.learn_images is retired (D-093) and does nothing; remove it", cfg.warnings)
+        cfg = sc.load_site_config(self.write_yaml(self.roi(mode="observe")))
+        self.assertFalse(any("learn_images" in w for w in cfg.warnings))
 
 
 class Secrets(_TempDirTest):
