@@ -97,6 +97,50 @@ class Checks:
         return tuple(name for name in CHECK_NAMES if not getattr(self, name))
 
 
+ROI_MODES = ("off", "observe", "filter")
+# D-090/D-091/D-092 auto-ROI values: (default, kind, low, high). Until CONFIG renders them (P13
+# handoff), a missing key takes its default and the program warns once, naming the keys.
+AUTO_ROI_KEYS = {
+    "margin_px": (100, int, 0, 2000),
+    "static_px": (3, int, 0, 100),
+    "static_share": (0.2, float, 0.01, 1.0),
+    "min_per_point": (30, int, 1, 100000),
+    "grid_steps": (10, int, 2, 100),
+    "top_percentile": (1.0, float, 0.0, 50.0),
+    "bottom_percentile": (99.0, float, 50.0, 100.0),
+    "mad_factor": (3.0, float, 0.5, 100.0),
+    "min_wheel_step_px": (5, int, 0, 2000),
+    "learn_max_frames": (8000, int, 100, 1000000),
+    "outside_keep": (500, int, 1, 100000),
+    "outside_crop_pad_px": (30, int, 0, 500),
+    "outside_max_per_minute": (60, int, 0, 100000),
+    "drift_window": (200, int, 10, 100000),
+    "drift_ratio": (0.2, float, 0.0, 1.0),
+}
+
+
+@dataclass(frozen=True)
+class AutoRoi:
+    """Auto region of interest (D-090, D-091, D-092; INSPECTION.md 13)."""
+    mode: str = "observe"
+    margin_px: int = 100
+    static_px: int = 3
+    static_share: float = 0.2
+    min_per_point: int = 30
+    grid_steps: int = 10
+    top_percentile: float = 1.0
+    bottom_percentile: float = 99.0
+    mad_factor: float = 3.0
+    min_wheel_step_px: int = 5
+    learn_max_frames: int = 8000
+    outside_keep: int = 500
+    outside_crop_pad_px: int = 30
+    outside_max_per_minute: int = 60
+    drift_window: int = 200
+    drift_ratio: float = 0.2
+    defaulted: Tuple[str, ...] = ()   # keys missing from the JSON (rendered before P13 keys)
+
+
 @dataclass(frozen=True)
 class Paths:
     root: str
@@ -160,6 +204,7 @@ class Settings:
     db: Db
     mqtt: Optional[Mqtt]           # None: no mqtt block (rendered before F25), heartbeat off
     checks: Checks                 # D-085
+    auto_roi: AutoRoi              # D-092
 
     def summary(self) -> str:
         """One log line of what this process will do. Never contains a secret."""
@@ -167,7 +212,7 @@ class Settings:
                 f"model={self.model_name} threshold={self.threshold} total_wheels={self.total_wheel_count} "
                 f"expected_cycle_total={self.expected_cycle_total} live_counter={self.writes_live_wheel_counter} "
                 f"daily_report={self.daily_report_time.strftime('%H:%M')} "
-                f"heartbeat={'on' if self.mqtt else 'off'} checks_off={','.join(self.checks.off()) or 'none'} "
+                f"heartbeat={'on' if self.mqtt else 'off'} auto_roi={self.auto_roi.mode} checks_off={','.join(self.checks.off()) or 'none'} "
                 f"config={self.config_path}")
 
 
@@ -274,6 +319,31 @@ def _checks(data) -> Checks:
     return Checks(**values)
 
 
+def _auto_roi(data) -> AutoRoi:
+    """`auto_roi` {mode, margin_px, ...}. `learn_images` (D-090) is no longer used (D-092)."""
+    block = data.get("auto_roi") or {}
+    if not isinstance(block, dict):
+        raise SettingsError(f"'auto_roi' must be a mapping, got {block!r}")
+    mode = block.get("mode", "observe")
+    if mode not in ROI_MODES:
+        raise SettingsError(f"'auto_roi.mode' must be one of {ROI_MODES}, got {mode!r}")
+    values, defaulted = {}, []
+    for key, (default, kind, low, high) in AUTO_ROI_KEYS.items():
+        if key not in block:
+            values[key] = default
+            defaulted.append(key)
+            continue
+        value = block[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or \
+                (kind is int and value != int(value)) or not low <= value <= high:
+            raise SettingsError(f"'auto_roi.{key}' must be a {'whole ' if kind is int else ''}number "
+                                f"from {low} to {high}, got {value!r}")
+        values[key] = kind(value)
+    if values["top_percentile"] >= values["bottom_percentile"]:
+        raise SettingsError("'auto_roi.top_percentile' must be below 'auto_roi.bottom_percentile'")
+    return AutoRoi(mode=mode, defaulted=tuple(defaulted), **values)
+
+
 def _mqtt(data) -> Optional[Mqtt]:
     """The heartbeat broker (F25). user/password null = no login. Without the block (a file
     rendered before F25) the program runs without a heartbeat and says so once."""
@@ -342,6 +412,7 @@ def load_settings(path: str) -> Settings:
               user=_text(db, "user", "db"), password=str(_get(db, "password", "db"))),
         mqtt=_mqtt(data),
         checks=_checks(data),
+        auto_roi=_auto_roi(data),
     )
 
 

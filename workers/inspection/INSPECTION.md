@@ -23,6 +23,8 @@ The logic is that of `LeftAlgorithm.py`, the reference (D-069). Changes are only
 | `last_error.py` | `<root>/run/<worker_id>.last_error.json` (D-073 D7) |
 | `helpers.py` | geometry, image boxes, dated folders, frame-name times |
 | `model_selftest.py` | model self-test before a switch (F47, section 12); read-only, not part of the running program |
+| `auto_roi.py` | auto region of interest: learning on request, path check, observe / filter, out-of-bound list, drift (P13, section 13) |
+| `roi_offline.py` | learns the ROI from saved frames into a chosen folder (P13, section 13); not part of the running program |
 | `tests/` | unit tests and the old-vs-new equivalence test (no GPU needed) |
 
 ## 2. Flow
@@ -88,6 +90,7 @@ flowchart TD
 | `worker_id`, `side`, `defect_side`, `camera_id` | log file, heartbeat topic, `last_error` name; `defect_side` = `defects_table.defect_side` (`Left` / `Right`); `side` is the prefix of magnet images |
 | `writes_live_wheel_counter` | D3: only this side writes `wheel_counter_table` |
 | `checks` {bucket_clip, skidding, wheel_missing, cycle_restart} | D-085: which checks run on this side (section 6) |
+| `auto_roi` {mode, margin_px, static_px, ...} | P13 auto-ROI (section 13); keys not yet rendered take their defaults with one WARNING |
 | `paths.inf` | work queue |
 | `paths.raw` | frames moved out of `INF`; skidding evidence source; best-image paths |
 | `paths.defect_raw`, `paths.defective`, `paths.repeated` | defect images (section 8) |
@@ -108,7 +111,7 @@ flowchart TD
 | `db` | DB connection |
 | `mqtt` | heartbeat broker (F25) |
 
-Not used: `object_sizes.wheel_w`, `wheel_h`, `chain_w` (as before), `auto_roi` (D-054, not built), `plc` (inspection never talks to the PLC).
+Not used: `object_sizes.wheel_w`, `wheel_h`, `chain_w` (as before), `auto_roi.learn_images` (D-090, replaced by one cycle in D-092), `plc` (inspection never talks to the PLC).
 
 Every value comes from the JSON; the last constant (the best-image band) became `tracker.best_image_band_x` in F25.
 
@@ -223,7 +226,7 @@ The mail sender sends every unsent row of any type, so all of them are now maile
 - **New observation, kept:** a frame is deleted as invalid when it is less than 0.03 s old (L:503-526, `is_valid_image`). With the atomic hand-off (D-031) a fresh `INF` link can be that young, so a frame can be lost. It is rare at 4 fps. Fix: skip the frame instead of deleting it; developer decision.
 
 ## 11. Tests
-- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 50 tests.
+- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 66 tests.
   - Settings from the real renderer: Tadipatri per-side values; a missing key is named.
   - Wheel counter in both directions; plate tracker: one plate crossing = one new plate, on both sides (D-077).
   - D-077 through the real frame flow: a plate crossing the Left camera with a wheel in view gives one reset and no `Batch_Wheels_Missing`; the next plate gives one, with the right count. (With the old B5 rule the same test gives 4 resets and a false restart at wheel 1.)
@@ -269,3 +272,64 @@ The Supervisor runs it before moving `current` (D-056, D-060). Per model name, s
 - **Read-only:** no DB access (pymysql is never imported), no file is moved, deleted or written, and `current` / `pinned` are never touched.
 - **GPU:** it uses the GPU while it runs, next to live inspection. Fine for 5 frames; the Supervisor runs it at a quiet moment anyway, like the switch.
 - **Tests:** `tests/test_model_selftest.py`, with a real package check and a fake predictor. Covers pass with counts, newest-N selection, no wheel, label map, corrupt package, missing version or frames, load error, unreadable frames, read-only snapshot of frames and models, and the CLI exit codes / `--json` / no pymysql in a fresh process.
+
+## 13. Auto region of interest (P13; D-054, D-090, D-091, D-092)
+On the conveyor every object of a class travels along a fixed path: at a given x it is always at about the same y. The region of a class is that path y(x) with a band around it, learned per side. `auto_roi.py` runs **inside the running inspection**: it uses the detections inspection already made, so no extra model run and no change to the checks.
+
+**Learning, only on request (D-092 item 1).**
+1. A person (later the UI) creates `<root>/run/inspection_<side>.roi_learn`; the content doesn't matter.
+2. From the next plate to the following plate (one cycle), every detection of a frame in which **the conveyor moved** is kept. Moved means the wheel edge the side's counter follows (`rtl` leftmost `xmin`, `ltr` rightmost `xmax`) advanced by at least `min_wheel_step_px`, or a new wheel took over. Frames without a wheel, or with a wheel that didn't move, are not used; there is no per-object tracking.
+3. At the second plate, per class:
+   - **Stationary repeats are dropped:** a box location that recurs within `static_px` in more than `static_share` of the used frames (reflection, stain, mark).
+   - **Robust line:** a Theil-Sen line of the box centres (y over x); boxes with residual > `mad_factor` × MAD are dropped.
+   - **Grid:** `grid_steps` + 1 points over the frame width (11 at 1920 px: 0, 192, … 1920). Per point, the boxes whose centre is within ± half a step give `y_min` = `top_percentile` of the top edges − `margin_px` and `y_max` = `bottom_percentile` of the bottom edges + `margin_px`. On a slanted path the band therefore also covers the slope across the 192 px window (slope × 96 px each side).
+   - **Gaps:** a point with fewer than `min_per_point` boxes takes its values from the neighbours.
+   - **`x_range`:** 1st–99th percentile of the centres ± `margin_px`.
+   - **Not learned:** a class without any point with enough boxes is stored as not learned and is **never filtered**. `plate` is the usual one, seen once per cycle.
+4. Files in `<root>/data/state/inspection_<side>/`, written atomically:
+   - `roi.json`. A previous one is first copied to `roi.prev.json`, so `roi.json` is never missing.
+   - `roi_preview.jpg`: the bands on a real frame of the cycle, with a legend.
+   - The request file is then deleted, and event `roi_learned` (or `roi_learn_failed`) is published.
+5. No second plate within `learn_max_frames`: given up, WARNING, `roi_learn_failed`, request deleted, nothing written.
+6. Learning lives only in memory: after a restart the request file is still there, so learning starts again at the next plate. **Nothing ever relearns automatically.**
+7. Learning works in every mode.
+
+**`roi.json`:**
+```
+{schema_version: 1, side,
+ learned_from: {camera_id, model {name, version}, frames_seen, frames_used, frame_size [w, h], started, time},
+ settings: {margin_px, static_px, static_share, min_per_point, grid_steps, top_percentile, bottom_percentile, mad_factor, min_wheel_step_px},
+ classes: {<class>: {learned: true, x_range [a, b], points [[x, y_min, y_max], ...], boxes, dropped_static, dropped_outliers, line {slope, intercept}, used_boxes, measured_points}
+           | {learned: false, reason, boxes, dropped_static}}}
+```
+- Read at start and right after learning.
+- An unreadable file, or a different frame size, is logged and ignored: nothing is checked, never a crash.
+- A model change doesn't invalidate it (D-090); `learned_from` is information only.
+
+**Using it (`auto_roi.mode`).** A detection is inside its class path when its centre x is inside `x_range` and, at that x, its box top ≥ `y_min` and bottom ≤ `y_max` (linear between points). Distance outside = the largest overshoot in px.
+- **`off`:** nothing is checked.
+- **`observe` (default):** every detection of a learned class is checked, **nothing is removed**: defects are identical to `off` (tested). Cost per detection: a few comparisons.
+- **`filter`:** off-path detections are removed right after grouping, **before everything that uses detections** (plate, wheel counter, best image, all checks). Switched on by a person in `site.yaml` after looking at the preview and the out-of-bound list (D-054, D-092 item 4).
+- Without `roi.json`, every mode behaves like `off`.
+
+**Out-of-bound checker for the UI (D-092 item 3), in `observe` and `filter`.**
+- `roi_outside.jsonl`: one line per off-path detection, `{time, frame, class, box, score, distance_px, mode, crop}`, with a crop image (box + `outside_crop_pad_px`) in `roi_outside/`.
+  - Kept to the last `outside_keep` entries; trimmed at 120 %, crops of trimmed entries deleted.
+  - At most `outside_max_per_minute` entries are written per minute. Beyond that, detections are still counted (`not_listed_rate_limit`), so a bad ROI can never slow inspection.
+- `roi_status.json`: rewritten every 100 frames and at stop. Holds mode, ROI (time, learned and not-learned classes), learning state, per class `inside` / `outside` counts, recent outside ratio and drift flag, and the list size.
+- **Drift:** per class, the last `drift_window` detections in moving frames. Above `drift_ratio` outside: one WARNING and event `roi_drift` {side, class, ratio, window}; reported again only after it was back below. Never acted on.
+- Events go on `dpc/worker/inspection_<side>/event` (CONTRACTS 2) through the heartbeat's MQTT client (best effort).
+- Any error in the ROI part is logged and skipped for that frame; inspection continues.
+
+**Offline:** `python3 workers/inspection/roi_offline.py --side LEFT --frames <saved frames> --out <folder> [--version <v>] [--whole] [--limit N]` runs the model on saved frames and the same calculation (first plate to next plate, or `--whole`), and writes `roi.json` + `roi_preview.jpg` to `--out` only. It is read-only for the site and uses the GPU, so run it at a quiet time.
+
+**Keys** (`inspection.auto_roi`; missing ones take these defaults with one WARNING until CONFIG renders them):
+`mode` observe, `margin_px` 100, `static_px` 3, `static_share` 0.2, `min_per_point` 30, `grid_steps` 10, `top_percentile` 1, `bottom_percentile` 99, `mad_factor` 3, `min_wheel_step_px` 5, `learn_max_frames` 8000, `outside_keep` 500, `outside_crop_pad_px` 30, `outside_max_per_minute` 60, `drift_window` 200, `drift_ratio` 0.2. `learn_images` is no longer used.
+
+**Tests** (`tests/test_auto_roi.py`, 16):
+- **Calculation:** slanted path points against the true line (window rule included); a fixed false detection plus rare off-line boxes removed; too few boxes = not learned and never filtered; a sparse grid point interpolated; movement judged in both directions (stop, move, new wheel).
+- **Learning:** request → files → request deleted → `roi.prev.json` on relearn; no request = nothing; stopped-belt and no-wheel frames ignored; give-up without a second plate.
+- **Using:** filter drops an off-path box and leaves unlearned classes alone; the observe list fills, is trimmed and has matching crops; status counts; rate limit; drift reported once; `off`, unreadable file and other frame size ignored.
+- **Observe = identical defects** through the full frame flow (1,200-frame scenario with learning on request and injected off-path bolts), and those bolts appear in the out-of-bound list.
+- **The offline tool** learns exactly what live learning learns.
+- **Settings:** defaults and errors.
