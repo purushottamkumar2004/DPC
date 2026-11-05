@@ -108,6 +108,18 @@ class Heartbeat:
             except Exception as e:            # broker trouble must never stop inspection
                 self.log.debug(f"heartbeat publish failed: {e}")
 
+    def publish_event(self, name, payload):
+        """One event on dpc/worker/<id>/event (CONTRACTS 2), best effort: no broker = not sent."""
+        if self.client is None:
+            return
+        import datetime
+        message = dict(payload, event=name, worker_id=self.s.worker_id,
+                       timestamp=datetime.datetime.now().isoformat(timespec="seconds"))
+        try:
+            self.client.publish(f"dpc/worker/{self.s.worker_id}/event", json.dumps(message), qos=1)
+        except Exception as e:
+            self.log.debug(f"event {name} not published: {e}")
+
     def stop(self):
         self._stop.set()
         if self.client is not None:

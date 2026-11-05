@@ -32,6 +32,7 @@ sys.path.insert(0, REPO_ROOT)                           # for common.config (mod
 import cv2      # noqa: E402
 import pymysql  # noqa: E402
 
+from auto_roi import AutoRoi                            # noqa: E402
 from check_bucket_clip import BucketClipCheck          # noqa: E402
 from check_cycle_restart import CycleRestartCheck      # noqa: E402
 from check_skidding import SkiddingCheck               # noqa: E402
@@ -134,8 +135,12 @@ def group_by_class(detections, label):
 class Inspection:
     """All per-run state: lost on a restart (INSPECTION.md 9)."""
 
-    def __init__(self, settings, detector, store, stats):
+    def __init__(self, settings, detector, store, stats, events=None):
         self.s, self.detector, self.store, self.stats = settings, detector, store, stats
+        package = getattr(detector, "package", None)
+        # P13 auto-ROI: learns on request, checks (observe) or removes (filter) off-path detections
+        self.roi = AutoRoi(settings, logger, events, getattr(package, "name", settings.model_name),
+                           getattr(package, "version", ""))
         self.wheels = WheelCounter(settings.motion, settings.tracker.new_wheel_jump_px, logger)
         self.plates = PlateTracker(settings.motion, settings.tracker.new_plate_jump_px, logger)
         # D-085: a check that is switched off is not built (None) and not run.
@@ -157,6 +162,9 @@ class Inspection:
             return
         clean = image.copy()                     # skidding gets a frame without boxes
         by_class = group_by_class(self.detector.detect(image), self.detector.label)
+        # Before anything uses the detections: learning sees them all; filter mode removes the
+        # off-path ones from here on (D-092). observe/off leave by_class unchanged.
+        by_class = self.roi.process(by_class, clean, frame_path)
         repeated_list = []                       # repeated-defects lookup disabled (L:2340-2341)
 
         for det in by_class.get("wheel_stand", []):
@@ -206,6 +214,7 @@ class Inspection:
             logger.error(f"Failed to copy image {frame_path} to {self.s.paths.plate} | {e}")
         if not self.plates.is_new_plate(plates, os.path.basename(frame_path)):
             return wheels, half_wheels
+        self.roi.on_new_plate()                  # auto-ROI learning window: plate to plate
         # a copy: the cycle-restart box must not end up on this frame's other defect images.
         # The cycle itself (counter reset) always runs; only the defect check can be off (D-085).
         if self.cycle_restart:
@@ -294,7 +303,12 @@ def main() -> int:
         detector = Detector(load_package(settings.models_dir, settings.model_name), settings.threshold, logger)
         store = DefectStore(conn, conn.cursor(), settings, logger)
         purge_inf(settings.paths.inf)
-        run(Inspection(settings, detector, store, stats), settings, stats)
+        if settings.auto_roi.defaulted:
+            logger.warning(f"auto_roi keys not in the rendered config yet, defaults used: "
+                           f"{', '.join(settings.auto_roi.defaulted)}")
+        inspection = Inspection(settings, detector, store, stats, heartbeat.publish_event)
+        run(inspection, settings, stats)
+        inspection.roi.write_status()
         logger.info("Stop requested: finished the current frame, exiting")
         return 0
     except Exception as exc:
