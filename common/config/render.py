@@ -24,7 +24,7 @@ import os
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
-from common.config.site_config import SiteConfig, load_site_config, default_config_path
+from common.config.site_config import AUTO_ROI_KEYS, SiteConfig, load_site_config, default_config_path
 
 RENDERER_VERSION = 1
 WRITTEN, UNCHANGED, REMOVED = "written", "unchanged", "removed"
@@ -105,7 +105,9 @@ def inspection_config(cfg: SiteConfig, camera) -> Dict[str, Any]:
         "machine": machine,
         "object_sizes": {"wheel_w": sizes.wheel_w, "wheel_h": sizes.wheel_h, "bucket_clip_w": sizes.bucket_clip_w,
                          "chain_w": sizes.chain_w, "half_bucket_clip_w": sizes.half_bucket_clip_w},
-        "auto_roi": {"mode": insp.auto_roi.mode, "learn_images": insp.auto_roi.learn_images},
+        # every key settings.py reads, so inspection never falls back to a default (D-093, F53)
+        "auto_roi": {"mode": insp.auto_roi.mode,
+                     **{key: getattr(insp.auto_roi, key) for key in AUTO_ROI_KEYS}},
         "wheel_report": {"daily_time": insp.wheel_report.daily_time},
         # this side's tuning (defaults = today's values of this side, D-073 D5)
         "motion": side_cfg.motion,

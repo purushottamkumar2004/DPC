@@ -102,7 +102,23 @@ inspection:
   #                  min_magnet_travel_px: 9, wheel_xmin: 20, wheel_xmax: 2025, magnet_check_min_wheel_w: 600}
   #       wheel_missing: {min_frames: 9, belt_stop_frames: 20, bbox: {xmin: 668, xmax: 1474, ymin: 508, ymax: 1278}}
   #       best_image_band_x: {min: 400, max: 850}   # wheel centre x for the best image per wheel (both sides)
-  auto_roi: {mode: observe, learn_images: 30}   # off | observe | filter (D-054)
+  auto_roi:                       # auto region of interest (D-090..D-093); all keys optional, defaults shown
+    mode: observe                 # off | observe | filter; without a learned roi.json every mode acts as off
+    # margin_px: 100              # widen the learned region by this much
+    # static_px: 3                # a box moving less than this between frames counts as static ...
+    # static_share: 0.2           # ... and a point static this often is dropped while learning
+    # min_per_point: 30           # detections needed per grid point
+    # grid_steps: 10
+    # top_percentile: 1           # region edges from these percentiles (top < bottom)
+    # bottom_percentile: 99
+    # mad_factor: 3.0             # outlier cut while learning
+    # min_wheel_step_px: 5
+    # learn_max_frames: 8000      # give up learning when no second plate comes within this many frames
+    # outside_keep: 500           # outside-ROI crops kept ...
+    # outside_crop_pad_px: 30
+    # outside_max_per_minute: 60  # ... and written at most this often
+    # drift_window: 200           # drift warning: share of detections outside the region ...
+    # drift_ratio: 0.2            # ... above this over the last drift_window frames
 
 plc:
   type: modbus_tcp

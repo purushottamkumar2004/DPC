@@ -357,8 +357,45 @@ class ModelRef:
 
 @dataclass(frozen=True)
 class AutoRoi:
-    mode: str            # off | observe | filter (D-054)
-    learn_images: int
+    """Auto region of interest (D-090..D-093). Values in AUTO_ROI_KEYS order; see INSPECTION.md 13."""
+    mode: str = "observe"            # off | observe | filter (D-054)
+    margin_px: int = 100
+    static_px: int = 3
+    static_share: float = 0.2
+    min_per_point: int = 30
+    grid_steps: int = 10
+    top_percentile: float = 1.0
+    bottom_percentile: float = 99.0
+    mad_factor: float = 3.0
+    min_wheel_step_px: int = 5
+    learn_max_frames: int = 8000
+    outside_keep: int = 500
+    outside_crop_pad_px: int = 30
+    outside_max_per_minute: int = 60
+    drift_window: int = 200
+    drift_ratio: float = 0.2
+    learn_images_given: bool = field(default=False, compare=False, repr=False)   # retired key seen (D-093)
+
+
+# key -> (default, int|float, low, high): the same table as workers/inspection/settings.AUTO_ROI_KEYS
+# (a test keeps them equal), so a value this loader accepts never stops inspection.
+AUTO_ROI_KEYS = {
+    "margin_px": (100, int, 0, 2000),
+    "static_px": (3, int, 0, 100),
+    "static_share": (0.2, float, 0.01, 1.0),
+    "min_per_point": (30, int, 1, 100000),
+    "grid_steps": (10, int, 2, 100),
+    "top_percentile": (1.0, float, 0.0, 50.0),
+    "bottom_percentile": (99.0, float, 50.0, 100.0),
+    "mad_factor": (3.0, float, 0.5, 100.0),
+    "min_wheel_step_px": (5, int, 0, 2000),
+    "learn_max_frames": (8000, int, 100, 1000000),
+    "outside_keep": (500, int, 1, 100000),
+    "outside_crop_pad_px": (30, int, 0, 500),
+    "outside_max_per_minute": (60, int, 0, 100000),
+    "drift_window": (200, int, 10, 100000),
+    "drift_ratio": (0.2, float, 0.0, 1.0),
+}
 
 
 @dataclass(frozen=True)
@@ -1027,9 +1064,22 @@ def _read_model_ref(parent: _Section, paths: Paths, required: bool = True) -> Mo
 
 
 def _read_auto_roi(parent: _Section) -> AutoRoi:
+    """inspection.auto_roi (D-093): mode plus the tuning keys of AUTO_ROI_KEYS, each optional.
+    learn_images is retired: still accepted so an old file loads, but it does nothing and is
+    reported as a warning."""
     s = parent.section("auto_roi", required=False)
+    values = {}
+    for key, (default, kind, low, high) in AUTO_ROI_KEYS.items():
+        getter = s.integer if kind is int else s.number
+        values[key] = getter(key, required=False, default=default, low=low, high=high)
+    if None not in (values["top_percentile"], values["bottom_percentile"]) and \
+            values["top_percentile"] >= values["bottom_percentile"]:
+        s.problem("top_percentile", f"must be below bottom_percentile ({values['bottom_percentile']})")
+    learn_images_given = "learn_images" in s.data
+    s.used.add("learn_images")
     roi = AutoRoi(mode=s.choice("mode", AUTO_ROI_MODES, default="observe"),     # D-054 starts in observe
-                  learn_images=s.integer("learn_images", required=False, default=30, low=1, high=100000))
+                  learn_images_given=learn_images_given,
+                  **{k: (float(v) if AUTO_ROI_KEYS[k][1] is float and v is not None else v) for k, v in values.items()})
     s.finish()
     return roi
 
@@ -1288,7 +1338,7 @@ def load_site_config(path: Optional[str] = None) -> SiteConfig:
         raise SiteConfigError(path, problems)
     return SiteConfig(schema_version=version, site=site, paths=paths, db=db, mqtt=mqtt, graph=graph,
                       capture=capture, inspection=inspection, plc=plc, mail=mail, cleanup=cleanup,
-                      transfer=transfer, source_path=path, warnings=tuple(_warnings(db)))
+                      transfer=transfer, source_path=path, warnings=tuple(_warnings(db, inspection)))
 
 
 def _graph_users(mail: MailConfig, transfer: Optional[TransferConfig]) -> List[str]:
@@ -1301,12 +1351,14 @@ def _graph_users(mail: MailConfig, transfer: Optional[TransferConfig]) -> List[s
     return users
 
 
-def _warnings(db: DbConfig) -> List[str]:
+def _warnings(db: DbConfig, inspection: Optional["InspectionConfig"] = None) -> List[str]:
     """Allowed but not recommended settings. Never include a secret value here."""
     warnings = []
     if db.user == "root":
         # Allowed since D-050; a leaked site.yaml would then open every database on the server.
         warnings.append("db.user is root; a dedicated user with limited rights is recommended (D-030)")
+    if inspection is not None and inspection.auto_roi.learn_images_given:
+        warnings.append("inspection.auto_roi.learn_images is retired (D-093) and does nothing; remove it")
     return warnings
 
 

@@ -674,5 +674,39 @@ class PerSideModelRender(Site):                                      # F46, D-08
                          {"name": "dpc_maskrcnn_right", "models_dir": os.path.join(models, "dpc_maskrcnn_right")})
 
 
+class AutoRoiRender(Site):                                           # F53, D-093
+    def inspection_settings(self):
+        sys.path.insert(0, os.path.join(REPO_ROOT, "workers", "inspection"))
+        try:
+            import settings as inspection_settings
+        finally:
+            sys.path.pop(0)
+        return inspection_settings
+
+    def test_every_key_is_rendered_and_learn_images_is_gone(self):
+        self.render()
+        roi = self.load("inspection_left")["auto_roi"]
+        self.assertEqual(set(roi), {"mode"} | set(self.inspection_settings().AUTO_ROI_KEYS))
+        self.assertNotIn("learn_images", roi)                        # the reference still has it: dropped
+        self.assertEqual((roi["mode"], roi["margin_px"], roi["bottom_percentile"]), ("observe", 100, 99.0))
+        self.assertEqual(roi, self.load("inspection_right")["auto_roi"])   # site level, both sides
+
+    def test_inspection_starts_without_the_defaults_warning(self):   # F53 done when
+        self.data["inspection"]["auto_roi"] = {"mode": "filter", "margin_px": 120}
+        self.write()
+        self.render()
+        for worker in ("inspection_left", "inspection_right"):
+            loaded = self.inspection_settings().load_settings(os.path.join(self.rendered, f"{worker}.json"))
+            self.assertEqual(loaded.auto_roi.defaulted, ())          # nothing taken from the program's defaults
+            self.assertEqual((loaded.auto_roi.mode, loaded.auto_roi.margin_px), ("filter", 120))
+
+    def test_a_roi_value_change_rewrites_both_inspection_files_only(self):
+        self.render()
+        self.data["inspection"]["auto_roi"] = {"mode": "observe", "drift_ratio": 0.3}
+        self.write()
+        self.assertEqual({w for w, s in self.render().items() if s == "written"},
+                         {"inspection_left", "inspection_right"})
+
+
 if __name__ == "__main__":
     unittest.main()
