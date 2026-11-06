@@ -760,6 +760,13 @@ class AutoRoiF53(_TempDirTest):                                       # F53, D-0
                         r"^inspection\.auto_roi\.speed: unknown key"):
             self.assertProblem(problems, pattern)
 
+    def test_preview_classes_per_image(self):                        # F57
+        roi = sc.load_site_config(self.write_yaml(self.roi(preview_classes_per_image=4))).inspection.auto_roi
+        self.assertEqual(roi.preview_classes_per_image, 4)
+        for bad in (0, 10, 2.5):
+            problems = self.problems_for(self.roi(preview_classes_per_image=bad))
+            self.assertProblem(problems, r"^inspection\.auto_roi\.preview_classes_per_image: must be")
+
     def test_top_below_bottom(self):
         problems = self.problems_for(self.roi(top_percentile=50, bottom_percentile=50))
         self.assertIn("inspection.auto_roi.top_percentile: must be below bottom_percentile (50.0)", problems)

@@ -374,6 +374,7 @@ class AutoRoi:
     outside_max_per_minute: int = 60
     drift_window: int = 200
     drift_ratio: float = 0.2
+    preview_classes_per_image: int = 2   # classes per outside-ROI preview image (F56)
     learn_images_given: bool = field(default=False, compare=False, repr=False)   # retired key seen (D-093)
 
 
@@ -395,6 +396,7 @@ AUTO_ROI_KEYS = {
     "outside_max_per_minute": (60, int, 0, 100000),
     "drift_window": (200, int, 10, 100000),
     "drift_ratio": (0.2, float, 0.0, 1.0),
+    "preview_classes_per_image": (2, int, 1, 9),          # F56, F57
 }
 
 

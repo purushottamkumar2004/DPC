@@ -119,6 +119,7 @@ inspection:
     # outside_max_per_minute: 60  # ... and written at most this often
     # drift_window: 200           # drift warning: share of detections outside the region ...
     # drift_ratio: 0.2            # ... above this over the last drift_window frames
+    # preview_classes_per_image: 2   # classes shown together in one outside-ROI preview image (1-9)
 
 plc:
   type: modbus_tcp
