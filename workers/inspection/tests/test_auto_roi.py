@@ -210,7 +210,8 @@ class LearningTest(Base):
         self.assertTrue(data["classes"]["wheel"]["learned"])
         self.assertFalse(data["classes"]["plate"]["learned"])
         self.assertEqual(data["learned_from"]["model"], {"name": "dpc_test", "version": "v1"})
-        self.assertTrue(os.path.isfile(self.state(s, "roi_preview.jpg")))
+        self.assertEqual(sorted(n for n in os.listdir(self.state(s, "")) if n.startswith("roi_preview_")),
+                         ["roi_preview_01_bucket_clip__wheel.jpg"])           # plate: not learned, text only
         self.assertFalse(os.path.exists(os.path.join(s.paths.root, "run", s.worker_id + ".roi_learn")))
         self.assertEqual(self.events[-1][0], "roi_learned")
         self.learn_cycle(roi, moving_frames(1200, seed=2))                  # no request: nothing happens
@@ -285,17 +286,33 @@ class UsingTest(Base):
         self.assertLessEqual(len(read_lines(self.state(s, "roi_outside.jsonl"))), 3 + 1)
         self.assertEqual(roi.counts["bucket_clip"]["outside"], 10)
 
-    def test_drift_reported_once(self):
+    def run_off_path(self, roi, n, moving_box):
+        x = 1400
+        for i in range(n):
+            x = 1400 if x < 100 else x - 60
+            bx = (1700 - 40 * (i % 40)) if moving_box else 900          # moving: travels with the chain
+            roi.process({"wheel": [det("wheel", x, 100, x + 500, 600)],
+                         "bucket_clip": [det("bucket_clip", bx, 100, bx + 300, 160)]}, FRAME, f"d{i}.jpg")
+
+    def test_drift_reported_once_for_moving_off_path(self):
+        """F55: off-path detections that move with the chain raise drift (once)."""
         s, roi = self.learned(mode="observe", drift_window=20, outside_max_per_minute=0)
         self.events.clear()
-        x = 1400
-        for i in range(60):
-            x = 1400 if x < 100 else x - 60
-            roi.process({"wheel": [det("wheel", x, 100, x + 500, 600)],
-                         "bucket_clip": [det("bucket_clip", 900, 100, 1200, 160)]}, FRAME, f"d{i}.jpg")
+        self.run_off_path(roi, 80, moving_box=True)
         drift = [e for e in self.events if e[0] == "roi_drift"]
-        self.assertEqual(len(drift), 1)
-        self.assertEqual(drift[0][1]["class"], "bucket_clip")
+        self.assertEqual([d[1]["class"] for d in drift], ["bucket_clip"])
+
+    def test_stationary_off_path_counted_listed_never_drift(self):
+        """F55: a fixed off-path object (seen on Tadipatri RIGHT) is counted and listed as outside,
+        but never raises drift."""
+        s, roi = self.learned(mode="observe", drift_window=20, outside_max_per_minute=1000)
+        self.events.clear()
+        self.run_off_path(roi, 300, moving_box=False)
+        self.assertEqual([e for e in self.events if e[0] == "roi_drift"], [])
+        self.assertEqual(roi.counts["bucket_clip"]["outside"], 300)
+        self.assertGreaterEqual(len(read_lines(self.state(s, "roi_outside.jsonl"))), 300 * 0.8)
+        roi.write_status()
+        self.assertFalse(read_json(self.state(s, "roi_status.json"))["classes"]["bucket_clip"]["drift"])
 
     def test_off_and_broken_file_and_wrong_size(self):
         s, roi = self.learned(mode="off")
@@ -369,6 +386,63 @@ class PreviewTest(unittest.TestCase):
             self.assertTrue((image[900, x] == 60).all(), x)               # below the band: untouched
 
 
+class PairPreviewTest(Base):
+    """F56: one image per 2 learned classes, old previews of the side removed first."""
+
+    def learn(self, **roi):
+        s = self.settings(**roi)
+        state = self.state(s, "")
+        os.makedirs(state, exist_ok=True)
+        for old in ("roi_preview.jpg", "roi_preview_07_old__classes.jpg"):
+            cv2.imwrite(os.path.join(state, old), np.zeros((4, 4, 3), np.uint8))
+        roi = self.make_roi(s)
+        self.request(s)
+        rng = random.Random(8)
+        frames = moving_frames(1200)
+        for f in frames:
+            x = rng.uniform(0, W)
+            f.append(det("nut_bolt", x - 20, 280 - 0.05 * x, x + 20, 320 - 0.05 * x))
+        frames[600].append(det("plate", 1000, 0, 1300, 100))
+        self.learn_cycle(roi, frames)
+        return s, roi, sorted(n for n in os.listdir(state) if n.startswith("roi_preview"))
+
+    def test_two_classes_per_image(self):
+        s, roi, names = self.learn()
+        self.assertEqual(names, ["roi_preview_01_bucket_clip__nut_bolt.jpg", "roi_preview_02_wheel.jpg"])
+        roi.write_status()
+        self.assertEqual(read_json(self.state(s, "roi_status.json"))["roi"]["previews"], names)
+
+    def test_classes_per_image_setting(self):
+        _, _, names = self.learn(preview_classes_per_image=1)
+        self.assertEqual(names, ["roi_preview_01_bucket_clip.jpg", "roi_preview_02_nut_bolt.jpg",
+                                 "roi_preview_03_wheel.jpg"])
+
+    def test_two_distinct_colours_lines_and_fill(self):
+        data = {"side": "LEFT", "learned_from": {"time": "t", "frames_used": 1, "frame_size": [W, H]},
+                "classes": {c: {"learned": True, "x_range": [0, W], "line": {"slope": 0.0},
+                                "points": [[0, y0, y1], [W, y0, y1]]}
+                            for c, (y0, y1) in (("a_class", (300, 500)), ("b_class", (700, 900)))}}
+        data["classes"]["plate"] = {"learned": False, "reason": "x", "boxes": 1}
+        image = A.draw_preview(np.full((H, W, 3), 60, np.uint8), data, ["a_class", "b_class"])
+        a, b = image[300, W // 2].astype(int), image[700, W // 2].astype(int)   # top lines
+        self.assertLess(np.abs(a - A.PAIR_COLOURS[0]).max(), 40)
+        self.assertLess(np.abs(b - A.PAIR_COLOURS[1]).max(), 40)
+        self.assertGreater(np.abs(a - b).max(), 150)                            # clearly different
+        inside, outside = image[400, W // 2].astype(int), image[600, W // 2].astype(int)
+        self.assertTrue(0 < np.abs(inside - 60).max() < 60)                      # light fill
+        self.assertTrue((outside == 60).all())
+
+    def test_frame_with_both_classes_preferred(self):
+        frames = A.PreviewFrames()
+        one, both = np.full((4, 4, 3), 1, np.uint8), np.full((4, 4, 3), 2, np.uint8)
+        frames.add(["wheel"], one)
+        frames.add(["wheel"], one)                                                # nothing new: not kept
+        frames.add(["bucket_clip", "nut_bolt"], both)
+        self.assertEqual(len(frames.frames), 2)
+        self.assertEqual(int(frames.pick(["bucket_clip", "nut_bolt"])[0, 0, 0]), 2)
+        self.assertEqual(int(frames.pick(["wheel"])[0, 0, 0]), 1)
+
+
 class OfflineToolTest(Base):
     def test_offline_equals_live(self):
         """roi_offline.py on saved frames learns exactly what live learning learns from the same
@@ -389,7 +463,7 @@ class OfflineToolTest(Base):
         self.request(s)
         self.learn_cycle(live, frames[1:-1])
         self.assertEqual(data["classes"], read_json(self.state(s, "roi.json"))["classes"])
-        self.assertEqual(preview.shape, (H, W, 3))
+        self.assertEqual(preview.pick(["bucket_clip"]).shape, (H, W, 3))
 
 
 class SettingsTest(unittest.TestCase):

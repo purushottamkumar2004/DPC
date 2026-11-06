@@ -6,7 +6,7 @@
 
 Same calculation as the live learning (auto_roi.py): frames in order (names = capture time),
 moving-wheel frames only, from the first plate to the next plate (`--whole`: every frame), then
-roi.json + roi_preview.jpg are written to --out. Use it to check a preview before asking the live
+roi.json + the preview images (roi_preview_<NN>_<classA>__<classB>.jpg, F56) are written to --out. Use it to check a preview before asking the live
 program to learn, or to look at a past cycle.
 
 Read-only for the site: frames are only read; nothing is written outside --out; the live
@@ -30,8 +30,8 @@ sys.path.insert(0, HERE)
 
 import cv2  # noqa: E402
 
-from auto_roi import (MotionJudge, PREVIEW_FILE, ROI_FILE, SCHEMA_VERSION, atomic_write_jpg,   # noqa: E402
-                      atomic_write_json, box_of, draw_preview, learn_all, now_iso)
+from auto_roi import (MotionJudge, PreviewFrames, ROI_FILE, SCHEMA_VERSION, atomic_write_json,   # noqa: E402
+                      box_of, learn_all, now_iso, write_previews)
 from settings import load_settings                                                            # noqa: E402
 from tracking import PlateTracker                                                             # noqa: E402
 
@@ -56,7 +56,7 @@ def learn_from_frames(settings, frame_paths, whole=False, detector=None, package
     plates = PlateTracker(settings.motion, settings.tracker.new_plate_jump_px, logger)
     boxes, state = defaultdict(list), "active" if whole else "waiting"
     seen = used = 0
-    size, preview = None, None
+    size, preview = None, PreviewFrames()
     for path in frame_paths:
         image = cv2.imread(path)
         if image is None:
@@ -71,8 +71,7 @@ def learn_from_frames(settings, frame_paths, whole=False, detector=None, package
             if moving:
                 used += 1
                 size = (image.shape[1], image.shape[0])
-                if preview is None or used % 500 == 0:
-                    preview = image
+                preview.add([c for c, d in by_class.items() if d], image)
                 for cls, dets in by_class.items():
                     boxes[cls].extend((used, box_of(d)) for d in dets)
         if plates.is_new_plate(by_class.get("plate", []) + by_class.get("plate_area", []), os.path.basename(path)) \
@@ -105,7 +104,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--side", required=True, choices=("LEFT", "RIGHT"))
     ap.add_argument("--frames", required=True, help="folder with saved frames (YYYY_MM_DD_HH_MM_SS_ffffff.jpg)")
-    ap.add_argument("--out", required=True, help="folder for roi.json and roi_preview.jpg (created)")
+    ap.add_argument("--out", required=True, help="folder for roi.json and the preview images (created)")
     ap.add_argument("--config", help="rendered inspection_<side>.json (default <root>/config/rendered/...)")
     ap.add_argument("--version", help="model version to use (default: the one 'current' points to)")
     ap.add_argument("--whole", action="store_true", help="learn from every frame, not plate to plate")
@@ -129,14 +128,15 @@ def main(argv=None) -> int:
         return 1
     os.makedirs(args.out, exist_ok=True)
     atomic_write_json(os.path.join(args.out, ROI_FILE), data)
-    atomic_write_jpg(os.path.join(args.out, PREVIEW_FILE), draw_preview(preview, data))
+    previews = write_previews(args.out, data, preview, settings.auto_roi.preview_classes_per_image)
     for cls, entry in data["classes"].items():
         if entry.get("learned"):
             print(f"{cls}: learned, x {entry['x_range']}, {len(entry['points'])} points, boxes {entry['boxes']} "
                   f"(static dropped {entry['dropped_static']}, off-line dropped {entry['dropped_outliers']})")
         else:
             print(f"{cls}: not learned ({entry['reason']})")
-    print(f"OK: {message}; wrote {os.path.join(args.out, ROI_FILE)} and {PREVIEW_FILE}")
+    print(f"OK: {message}; wrote {os.path.join(args.out, ROI_FILE)} and {len(previews)} preview image(s): "
+          f"{', '.join(previews)}")
     return 0
 
 
