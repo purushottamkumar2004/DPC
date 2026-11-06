@@ -17,12 +17,14 @@ since the previous frame (no per-object tracking, D-092 item 2a). At the second 
      y_max = `bottom_percentile` of the bottom edges + `margin_px` (D-091 b);
   4. a point with fewer than `min_per_point` boxes is interpolated from neighbours; a class
      without any such point is stored as not learned and is never filtered (D-091 c, d);
-  5. x_range = 1st..99th percentile of the centres +- `margin_px`.
+  5. x_range = 1st..99th percentile of the centres +- `margin_px` (information only, D-094).
 `roi.json` + `roi_preview.jpg` are written to `<root>/data/state/<worker_id>/` (atomic; the
 previous file kept as `roi.prev.json`) and the request file is deleted. Never automatic.
 
-USING (`auto_roi.mode`). A detection is inside its class path when its centre x is inside
-x_range and, there, its box top >= y_min and bottom <= y_max (linear between points).
+USING (`auto_roi.mode`). Only y is restricted, never x (D-094): a detection is inside its class
+path when, at its centre x, its box top >= y_min and bottom <= y_max. The band is linear between
+the stored points and continues beyond the outermost point along the class's line slope with that
+point's band height, so it covers the full frame width.
   off      nothing is checked.
   observe  every detection is checked, nothing is removed (defects identical to off).
   filter   off-path detections are removed before every check.
@@ -144,6 +146,19 @@ def theil_sen(x, y):
     return slope, intercept
 
 
+def band_at(xs, ymins, ymaxs, slope, x):
+    """The band (y_min, y_max) of a class at x (D-094). Between the stored points: linear.
+    Beyond the outermost point: continued along the class's robust line slope with that point's
+    band height, so the band covers the full frame width (no flat clamp, no cut-off)."""
+    if x < xs[0]:
+        shift = slope * (x - xs[0])
+        return ymins[0] + shift, ymaxs[0] + shift
+    if x > xs[-1]:
+        shift = slope * (x - xs[-1])
+        return ymins[-1] + shift, ymaxs[-1] + shift
+    return float(np.interp(x, xs, ymins)), float(np.interp(x, xs, ymaxs))
+
+
 def learn_class(boxes, frames, frames_used, width, cfg):
     """One class. boxes: (n, 4) xmin, ymin, xmax, ymax; frames: frame index per box.
     Returns the roi.json entry for the class."""
@@ -185,8 +200,8 @@ def learn_class(boxes, frames, frames_used, width, cfg):
     ymins = np.array([measured[x][0] for x in mx])
     ymaxs = np.array([measured[x][1] for x in mx])
     xs = sorted({lo, hi} | {k * step for k in range(cfg.grid_steps + 1) if lo <= k * step <= hi})
-    points = [[int(round(x)), int(round(np.interp(x, mx, ymins))), int(round(np.interp(x, mx, ymaxs)))]
-              for x in xs]                         # np.interp holds the end values beyond the measured points
+    points = [[int(round(x))] + [int(round(v)) for v in band_at(mx, ymins, ymaxs, slope, x)]
+              for x in xs]                         # beyond the measured points: along the line slope (D-094)
     entry.update(learned=True, x_range=[int(round(lo)), int(round(hi))], points=points,
                  measured_points=len(measured), used_boxes=int(len(kept)))
     return entry
@@ -209,7 +224,8 @@ class RoiPaths:
             if entry.get("learned"):
                 pts = np.array(entry["points"], float)
                 order = np.argsort(pts[:, 0])
-                self.paths[cls] = (tuple(entry["x_range"]), pts[order, 0], pts[order, 1], pts[order, 2])
+                slope = float(entry.get("line", {}).get("slope", 0.0))
+                self.paths[cls] = (pts[order, 0], pts[order, 1], pts[order, 2], slope)
 
     @classmethod
     def load(cls, path):
@@ -222,17 +238,18 @@ class RoiPaths:
     def learned(self, cls) -> bool:
         return cls in self.paths
 
+    def band(self, cls, x):
+        xs, ymins, ymaxs, slope = self.paths[cls]
+        return band_at(xs, ymins, ymaxs, slope, x)
+
     def distance_outside(self, cls, box) -> float:
-        """0 when inside the class path, else how far outside in px. Classes not learned: 0."""
+        """0 when inside the class band, else how far outside in px (y only, D-094: every x is
+        valid; x_range is never a limit). Classes not learned: 0."""
         if cls not in self.paths:
             return 0.0
-        (lo, hi), xs, ymins, ymaxs = self.paths[cls]
         xmin, ymin, xmax, ymax = box
-        cx = (xmin + xmax) / 2
-        dx = max(lo - cx, cx - hi, 0.0)
-        top_limit, bottom_limit = np.interp(cx, xs, ymins), np.interp(cx, xs, ymaxs)
-        dy = max(top_limit - ymin, ymax - bottom_limit, 0.0)
-        return float(max(dx, dy))
+        top_limit, bottom_limit = self.band(cls, (xmin + xmax) / 2)
+        return float(max(top_limit - ymin, ymax - bottom_limit, 0.0))
 
 
 def draw_preview(image, data):
@@ -244,22 +261,24 @@ def draw_preview(image, data):
                (128, 0, 255), (0, 255, 160), (200, 200, 200)]
     h, w = out.shape[:2]
     learned = [(c, e) for c, e in data["classes"].items() if e.get("learned")]
-    for i, (cls, entry) in enumerate(learned):
+    paths = RoiPaths({"learned_from": {"frame_size": [w, h]}, "classes": dict(learned)})
+    for i, (cls, entry) in enumerate(learned):             # every band over the full width (D-094)
         colour = palette[i % len(palette)]
-        pts = sorted(entry["points"])
-        poly = np.array([[x, y0] for x, y0, _ in pts] + [[x, y1] for x, _, y1 in reversed(pts)], np.int32)
+        xs = sorted({0, w} | {p[0] for p in entry["points"]})
+        band = [paths.band(cls, x) for x in xs]
+        poly = np.array([[x, b[0]] for x, b in zip(xs, band)] +
+                        [[x, b[1]] for x, b in reversed(list(zip(xs, band)))], np.int32)
         cv2.fillPoly(overlay, [poly], colour)
         cv2.polylines(out, [poly], True, colour, 2)
     out = cv2.addWeighted(overlay, 0.15, out, 0.85, 0)
-    for i, (cls, entry) in enumerate(learned):            # label at the middle of the band's left end
-        x0, y0, y1 = sorted(entry["points"])[0]
+    for i, (cls, entry) in enumerate(learned):              # label at the middle of the band's left end
+        y0, y1 = paths.band(cls, 0)
         y = int(min(h - 10, max(20, (y0 + y1) / 2 + 22 * (i % 3) - 22)))
-        cv2.putText(out, cls, (int(min(w - 150, max(5, x0 + 8))), y), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                    palette[i % len(palette)], 2, cv2.LINE_AA)
+        cv2.putText(out, cls, (8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, palette[i % len(palette)], 2, cv2.LINE_AA)
 
     lines = [(f"auto-ROI {data['side']}  learned {data['learned_from']['time']}  "
               f"frames used {data['learned_from']['frames_used']}", (255, 255, 255))]
-    lines += [(f"{cls}: {len(e['points'])} points, x {e['x_range'][0]}-{e['x_range'][1]}", palette[i % len(palette)])
+    lines += [(f"{cls}: {len(e['points'])} points, seen at x {e['x_range'][0]}-{e['x_range'][1]}", palette[i % len(palette)])
               for i, (cls, e) in enumerate(learned)]
     not_learned = [c for c, e in data["classes"].items() if not e.get("learned")]
     if not_learned:

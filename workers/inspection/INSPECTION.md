@@ -226,7 +226,7 @@ The mail sender sends every unsent row of any type, so all of them are now maile
 - **New observation, kept:** a frame is deleted as invalid when it is less than 0.03 s old (L:503-526, `is_valid_image`). With the atomic hand-off (D-031) a fresh `INF` link can be that young, so a frame can be lost. It is rare at 4 fps. Fix: skip the frame instead of deleting it; developer decision.
 
 ## 11. Tests
-- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 66 tests.
+- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 69 tests.
   - Settings from the real renderer: Tadipatri per-side values; a missing key is named.
   - Wheel counter in both directions; plate tracker: one plate crossing = one new plate, on both sides (D-077).
   - D-077 through the real frame flow: a plate crossing the Left camera with a wheel in view gives one reset and no `Batch_Wheels_Missing`; the next plate gives one, with the right count. (With the old B5 rule the same test gives 4 resets and a false restart at wheel 1.)
@@ -284,11 +284,11 @@ On the conveyor every object of a class travels along a fixed path: at a given x
    - **Robust line:** a Theil-Sen line of the box centres (y over x); boxes with residual > `mad_factor` × MAD are dropped.
    - **Grid:** `grid_steps` + 1 points over the frame width (11 at 1920 px: 0, 192, … 1920). Per point, the boxes whose centre is within ± half a step give `y_min` = `top_percentile` of the top edges − `margin_px` and `y_max` = `bottom_percentile` of the bottom edges + `margin_px`. On a slanted path the band therefore also covers the slope across the 192 px window (slope × 96 px each side).
    - **Gaps:** a point with fewer than `min_per_point` boxes takes its values from the neighbours.
-   - **`x_range`:** 1st–99th percentile of the centres ± `margin_px`.
+   - **`x_range`:** 1st–99th percentile of the centres ± `margin_px`: where the class was seen while learning. **Information only, never a limit** (D-094). Stored points beyond the measured ones continue along the line slope (no flat clamp).
    - **Not learned:** a class without any point with enough boxes is stored as not learned and is **never filtered**. `plate` is the usual one, seen once per cycle.
 4. Files in `<root>/data/state/inspection_<side>/`, written atomically:
    - `roi.json`. A previous one is first copied to `roi.prev.json`, so `roi.json` is never missing.
-   - `roi_preview.jpg`: the bands on a real frame of the cycle, with a legend.
+   - `roi_preview.jpg`: the bands on a real frame of the cycle, drawn over the full frame width, with a legend ("seen at x …" = `x_range`).
    - The request file is then deleted, and event `roi_learned` (or `roi_learn_failed`) is published.
 5. No second plate within `learn_max_frames`: given up, WARNING, `roi_learn_failed`, request deleted, nothing written.
 6. Learning lives only in memory: after a restart the request file is still there, so learning starts again at the next plate. **Nothing ever relearns automatically.**
@@ -306,7 +306,10 @@ On the conveyor every object of a class travels along a fixed path: at a given x
 - An unreadable file, or a different frame size, is logged and ignored: nothing is checked, never a crash.
 - A model change doesn't invalidate it (D-090); `learned_from` is information only.
 
-**Using it (`auto_roi.mode`).** A detection is inside its class path when its centre x is inside `x_range` and, at that x, its box top ≥ `y_min` and bottom ≤ `y_max` (linear between points). Distance outside = the largest overshoot in px.
+**Using it (`auto_roi.mode`).** Only y is restricted, never x (D-094, F54): the conveyor moves through the whole image, so every x is valid. A detection is outside only when, at its centre x, its box top < `y_min` or its box bottom > `y_max`. Distance outside = the larger overshoot in px.
+- The band is linear between the stored points.
+- Beyond the outermost stored point it continues along the class's robust line slope (`line.slope` in `roi.json`) with that point's band height. So it covers the full frame width, with no flat clamp and no cut-off.
+- Existing `roi.json` files need no relearn: the stored points stay valid.
 - **`off`:** nothing is checked.
 - **`observe` (default):** every detection of a learned class is checked, **nothing is removed**: defects are identical to `off` (tested). Cost per detection: a few comparisons.
 - **`filter`:** off-path detections are removed right after grouping, **before everything that uses detections** (plate, wheel counter, best image, all checks). Switched on by a person in `site.yaml` after looking at the preview and the out-of-bound list (D-054, D-092 item 4).
@@ -326,10 +329,15 @@ On the conveyor every object of a class travels along a fixed path: at a given x
 **Keys** (`inspection.auto_roi`; missing ones take these defaults with one WARNING until CONFIG renders them):
 `mode` observe, `margin_px` 100, `static_px` 3, `static_share` 0.2, `min_per_point` 30, `grid_steps` 10, `top_percentile` 1, `bottom_percentile` 99, `mad_factor` 3, `min_wheel_step_px` 5, `learn_max_frames` 8000, `outside_keep` 500, `outside_crop_pad_px` 30, `outside_max_per_minute` 60, `drift_window` 200, `drift_ratio` 0.2. `learn_images` is no longer used.
 
-**Tests** (`tests/test_auto_roi.py`, 16):
+**Tests** (`tests/test_auto_roi.py`, 19):
 - **Calculation:** slanted path points against the true line (window rule included); a fixed false detection plus rare off-line boxes removed; too few boxes = not learned and never filtered; a sparse grid point interpolated; movement judged in both directions (stop, move, new wheel).
 - **Learning:** request → files → request deleted → `roi.prev.json` on relearn; no request = nothing; stopped-belt and no-wheel frames ignored; give-up without a second plate.
 - **Using:** filter drops an off-path box and leaves unlearned classes alone; the observe list fills, is trimmed and has matching crops; status counts; rate limit; drift reported once; `off`, unreadable file and other frame size ignored.
 - **Observe = identical defects** through the full frame flow (1,200-frame scenario with learning on request and injected off-path bolts), and those bolts appear in the out-of-bound list.
 - **The offline tool** learns exactly what live learning learns.
 - **Settings:** defaults and errors.
+- **y only (F54):**
+  - A box at the image edge, beyond the learned x range, is inside when its y is in the band and outside when it is not, on both edges.
+  - The band continues along the slope with the outermost band height.
+  - A roi.json in the P13 format stays valid.
+  - The preview band covers the full width.

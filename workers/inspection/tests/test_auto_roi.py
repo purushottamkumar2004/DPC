@@ -157,6 +157,35 @@ class CalculationTest(unittest.TestCase):
         point = next(p for p in entry["points"] if p[0] == 960)              # no box near x = 960
         self.assertAlmostEqual(point[1], 0.1 * 960 + 450 - 104, delta=25)
 
+    def test_y_only_box_at_image_edge(self):
+        """F54 / D-094: boxes only seen at x 600..1300 while learning; a box at the image edge
+        (beyond the learned x range) is judged on y only, against the band continued along the
+        line slope with the band height of the outermost point."""
+        rng = random.Random(6)
+        boxes = [A.box_of(slanted_clip(rng.uniform(600, 1300), rng)) for _ in range(2000)]
+        entry = A.learn_class(boxes, list(range(2000)), 2000, W, self.cfg)
+        self.assertTrue(entry["learned"])
+        self.assertLess(entry["x_range"][1], 1500)                         # seen only up to ~1400
+        paths = A.RoiPaths({"learned_from": {"frame_size": [W, H]}, "classes": {"bucket_clip": entry}})
+        for x in (1850, 40):                                               # right edge and left edge
+            on_line = A.box_of(slanted_clip(x, rng, noise=0))
+            self.assertEqual(paths.distance_outside("bucket_clip", on_line), 0, x)
+            below = (on_line[0], on_line[1] + 300, on_line[2], on_line[3] + 300)
+            self.assertAlmostEqual(paths.distance_outside("bucket_clip", below), 300 - 104, delta=12)
+        last_x, last_min, last_max = sorted(entry["points"])[-1]
+        y_min, y_max = paths.band("bucket_clip", W)                       # continued along the slope, not flat
+        self.assertAlmostEqual(y_min - last_min, 0.1 * (W - last_x), delta=1.5)
+        self.assertAlmostEqual(y_max - y_min, last_max - last_min, delta=0.5)
+
+    def test_existing_roi_file_stays_valid(self):
+        """A roi.json written by P13 (same format) is read unchanged; only the check is y-only."""
+        entry = {"learned": True, "x_range": [500, 1400], "line": {"slope": 0.0, "intercept": 500},
+                 "points": [[500, 350, 650], [576, 350, 650], [1400, 350, 650]], "boxes": 100}
+        paths = A.RoiPaths({"schema_version": 1, "learned_from": {"frame_size": [W, H]},
+                            "classes": {"bucket_clip": entry}})
+        self.assertEqual(paths.distance_outside("bucket_clip", (1700, 400, 1900, 600)), 0)   # was outside in x
+        self.assertEqual(paths.distance_outside("bucket_clip", (1700, 300, 1900, 600)), 50)
+
     def test_motion_judge(self):
         for motion, edges in (("rtl", (1000, 940, 940, 880, 1500)), ("ltr", (300, 360, 360, 420, 0))):
             judge = A.MotionJudge(motion, 5, 100)
@@ -326,6 +355,18 @@ class ObserveIdenticalDefectsTest(Base):
             self.assertTrue(any(e["class"] == "nut_bolt" and e["box"][1] == 100 for e in listed))
         finally:
             shutil.rmtree(root_b, ignore_errors=True)
+
+
+class PreviewTest(unittest.TestCase):
+    def test_band_drawn_over_full_width(self):
+        entry = {"learned": True, "x_range": [700, 1200], "line": {"slope": 0.0, "intercept": 600},
+                 "points": [[768, 500, 700], [960, 500, 700], [1152, 500, 700]], "boxes": 100}
+        data = {"side": "LEFT", "learned_from": {"time": "t", "frames_used": 1, "frame_size": [W, H]},
+                "classes": {"bucket_clip": entry}}
+        image = A.draw_preview(np.full((H, W, 3), 60, np.uint8), data)
+        for x in (3, W // 2, W - 3):
+            self.assertFalse((image[600, x] == 60).all(), x)              # inside the band: tinted
+            self.assertTrue((image[900, x] == 60).all(), x)               # below the band: untouched
 
 
 class OfflineToolTest(Base):
