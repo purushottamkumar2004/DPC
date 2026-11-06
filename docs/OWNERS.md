@@ -14,7 +14,7 @@ One owner per folder. A chat changes only the folder it owns. Anything that cros
 | `workers/mail/` | W-mail | read |
 | `workers/cleanup/` | W-cleanup | read |
 | `workers/plc/` | W-plc | read |
-| `ui/` | UI | read; DB, files and MQTT as per contracts |
+| `ui/` | W-ui (D-095: local web UI, Django) | read; DB, files and MQTT as per contracts |
 | `config/` | CONFIG | read |
 | `scripts/` | CONFIG | run |
 | `tests/unit`, `tests/golden` | the owner of the code under test | read |
