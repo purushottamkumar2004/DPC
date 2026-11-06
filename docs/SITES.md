@@ -25,6 +25,7 @@ SITE: tadipatri   HOST: dpc-tadipatri (HP Z2 Tower G9)   ROOT: /home/dpc_tadipat
 REFERENCE site.yaml (all real non-secret values, validated by the loader): docs/sites/tadipatri.site.reference.yaml
 UI: the old PyQt desktop UI (DPC_Ui, UI_CONFIG.xml) still runs on the machine; it must read data/frames/CAMn/UI/IMG_1.jpg, never live/ (F45); migration P17.
 MODELS (since 2026-11-04, D-086/D-089): LEFT dpc_maskrcnn_left 2026.10.29, RIGHT dpc_maskrcnn_right 2026.10.29 (12 classes each, same names, different order; no high_dusty_bucket_clip). Previous shared model dpc_maskrcnn 2026.10.12 (+ test copy 2026.10.12b) kept on disk; a per-side model is possible since D-086 if a camera angle needs its own training.
+AUTO-ROI (D-090..D-094): learned 2026-11-06 16:13 on both sides; mode filter since 2026-11-06 16:38 (off-path detections removed before the checks; e.g. a fixed false half_bucket_clip near the bottom of the RIGHT image). Relearn: touch ~/INSIGHTZZ/run/inspection_<side>.roi_learn.
 CHECKS (D-085): all four checks ON since 2026-11-04 18:19 (with the per-side models); wheel_missing had been off 2026-11-03/04 because of false alarms.
 MAIL: alarm mails OFF since 2026-11-04 (mail worker stopped, `enabled: false` in the machine's workers.yaml); defects are still recorded in defects_table. When switched back on, rows older than 24 h are never mailed (D-083). The cleanup's disk mail stays on.
 PER-SIDE DIFFERENCES (rendered 2026-10-28; same code both sides, D-069; everything else equal):
