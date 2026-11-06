@@ -18,8 +18,9 @@ since the previous frame (no per-object tracking, D-092 item 2a). At the second 
   4. a point with fewer than `min_per_point` boxes is interpolated from neighbours; a class
      without any such point is stored as not learned and is never filtered (D-091 c, d);
   5. x_range = 1st..99th percentile of the centres +- `margin_px` (information only, D-094).
-`roi.json` + `roi_preview.jpg` are written to `<root>/data/state/<worker_id>/` (atomic; the
-previous file kept as `roi.prev.json`) and the request file is deleted. Never automatic.
+`roi.json` + preview images (`roi_preview_<NN>_<classA>__<classB>.jpg`, F56) are written to
+`<root>/data/state/<worker_id>/` (atomic; the previous roi.json kept as `roi.prev.json`; old previews
+of the side removed first) and the request file is deleted. Never automatic.
 
 USING (`auto_roi.mode`). Only y is restricted, never x (D-094): a detection is inside its class
 path when, at its centre x, its box top >= y_min and bottom <= y_max. The band is linear between
@@ -31,8 +32,11 @@ point's band height, so it covers the full frame width.
 Without roi.json every mode behaves like off. Classes not learned are never checked.
 In observe and filter every off-path detection goes to `roi_outside.jsonl` (+ a crop), and
 `roi_status.json` holds per-class counts for the UI. Drift (too many outside among the last
-`drift_window` detections of a class in moving frames) is only reported: WARNING + event
-`roi_drift`; nothing is ever acted on (D-092 item 3).
+`drift_window` MOVING detections of a class) is only reported: WARNING + event `roi_drift`;
+nothing is ever acted on (D-092 item 3). Moving = learning's rule (F55): in a frame where the wheel
+moved, and not a stationary repeat (a box location seen within `static_px` in more than
+`static_share` of the class's recent moving frames). A stationary off-path detection is still
+counted and listed as outside, but never raises drift.
 
 Nothing here may stop inspection: every error in the ROI part is logged and skipped.
 """
@@ -46,7 +50,10 @@ import cv2
 import numpy as np
 
 SCHEMA_VERSION = 1
-ROI_FILE, PREV_FILE, PREVIEW_FILE = "roi.json", "roi.prev.json", "roi_preview.jpg"
+ROI_FILE, PREV_FILE = "roi.json", "roi.prev.json"
+PREVIEW_PREFIX = "roi_preview_"          # roi_preview_<NN>_<classA>__<classB>.jpg (F56)
+LEGACY_PREVIEW = "roi_preview.jpg"       # the single all-classes image before F56; removed with the old ones
+STATIONARY_MIN_FRAMES = 10               # F55: history needed before a box can be judged stationary
 OUTSIDE_FILE, OUTSIDE_DIR, STATUS_FILE = "roi_outside.jsonl", "roi_outside", "roi_status.json"
 REQUEST_SUFFIX = ".roi_learn"
 X_RANGE_PERCENTILES = (1.0, 99.0)
@@ -101,6 +108,42 @@ class MotionJudge:
             return False
         step = (last - edge) if self.motion == "rtl" else (edge - last)
         return step >= self.min_step or step < -self.jump
+
+
+class StationaryWatch:
+    """F55: is a detection a stationary repeat? Per class, the box locations of the last `window`
+    moving frames (buckets of static_px, as in learning); a box is stationary when its location
+    (with the neighbouring buckets) was seen in more than `share` of those frames."""
+
+    OFFSETS = [(a, b, c, d) for a in (-1, 0, 1) for b in (-1, 0, 1) for c in (-1, 0, 1) for d in (-1, 0, 1)]
+
+    def __init__(self, static_px, share, window):
+        self.size, self.share, self.window = max(1, static_px), share, window
+        self.history = defaultdict(deque)            # class -> deque of sets of bucket keys (one per frame)
+        self.counts = defaultdict(lambda: defaultdict(int))
+
+    def _key(self, box):
+        return tuple(int(v) // self.size for v in box)
+
+    def stationary(self, cls, box) -> bool:
+        frames = len(self.history[cls])
+        if frames < STATIONARY_MIN_FRAMES:
+            return False
+        k, counts = self._key(box), self.counts[cls]
+        seen = sum(counts.get((k[0] + o[0], k[1] + o[1], k[2] + o[2], k[3] + o[3]), 0) for o in self.OFFSETS)
+        return min(seen, frames) > self.share * frames
+
+    def add_frame(self, cls, boxes):
+        keys = {self._key(b) for b in boxes}
+        history, counts = self.history[cls], self.counts[cls]
+        history.append(keys)
+        for k in keys:
+            counts[k] += 1
+        if len(history) > self.window:
+            for k in history.popleft():
+                counts[k] -= 1
+                if counts[k] == 0:
+                    del counts[k]
 
 
 # ======================================================================
@@ -252,41 +295,103 @@ class RoiPaths:
         return float(max(top_limit - ymin, ymax - bottom_limit, 0.0))
 
 
-def draw_preview(image, data):
-    """The learned bands on a real frame, one colour per class, with a legend; classes not
-    learned are listed (they are never filtered)."""
-    out = image.copy()
-    overlay = out.copy()
-    palette = [(0, 200, 255), (0, 255, 0), (255, 128, 0), (255, 0, 255), (0, 128, 255), (255, 255, 0),
-               (128, 0, 255), (0, 255, 160), (200, 200, 200)]
-    h, w = out.shape[:2]
-    learned = [(c, e) for c, e in data["classes"].items() if e.get("learned")]
-    paths = RoiPaths({"learned_from": {"frame_size": [w, h]}, "classes": dict(learned)})
-    for i, (cls, entry) in enumerate(learned):             # every band over the full width (D-094)
-        colour = palette[i % len(palette)]
-        xs = sorted({0, w} | {p[0] for p in entry["points"]})
-        band = [paths.band(cls, x) for x in xs]
-        poly = np.array([[x, b[0]] for x, b in zip(xs, band)] +
-                        [[x, b[1]] for x, b in reversed(list(zip(xs, band)))], np.int32)
-        cv2.fillPoly(overlay, [poly], colour)
-        cv2.polylines(out, [poly], True, colour, 2)
-    out = cv2.addWeighted(overlay, 0.15, out, 0.85, 0)
-    for i, (cls, entry) in enumerate(learned):              # label at the middle of the band's left end
-        y0, y1 = paths.band(cls, 0)
-        y = int(min(h - 10, max(20, (y0 + y1) / 2 + 22 * (i % 3) - 22)))
-        cv2.putText(out, cls, (8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, palette[i % len(palette)], 2, cv2.LINE_AA)
+PAIR_COLOURS = [(0, 230, 255), (255, 0, 255), (255, 200, 0), (0, 200, 0), (0, 0, 255), (255, 255, 255),
+                (0, 128, 255), (180, 0, 120), (128, 255, 0)]      # BGR: yellow, magenta, cyan, green, red, ...
 
-    lines = [(f"auto-ROI {data['side']}  learned {data['learned_from']['time']}  "
-              f"frames used {data['learned_from']['frames_used']}", (255, 255, 255))]
-    lines += [(f"{cls}: {len(e['points'])} points, seen at x {e['x_range'][0]}-{e['x_range'][1]}", palette[i % len(palette)])
-              for i, (cls, e) in enumerate(learned)]
-    not_learned = [c for c, e in data["classes"].items() if not e.get("learned")]
+
+class PreviewFrames:
+    """Real frames for the previews, kept while learning (F56): a frame is kept only when it shows a
+    class not yet covered, so a few full frames in memory instead of one per class."""
+
+    def __init__(self):
+        self.frames = []                     # [(set of classes, image)]
+        self.covered = set()
+
+    def add(self, classes, image):
+        new = set(classes) - self.covered
+        if new:
+            self.frames.append((set(classes), image.copy()))
+            self.covered |= set(classes)
+
+    def pick(self, wanted):
+        """The kept frame showing most of the wanted classes (all of them if possible)."""
+        if not self.frames:
+            return None
+        return max(self.frames, key=lambda item: len(item[0] & set(wanted)))[1]
+
+
+def preview_name(index, classes):
+    safe = ["".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in c) for c in classes]
+    return f"{PREVIEW_PREFIX}{index:02d}_{'__'.join(safe) or 'none'}.jpg"
+
+
+def draw_preview(image, data, classes=None, index=1, total=1):
+    """The bands of `classes` (default: every learned class) on a frame, over the full width (D-094):
+    a light fill plus the top and bottom lines in the class colour, a legend with the names, and the
+    classes not learned as text (they are never filtered)."""
+    out = image.copy()
+    h, w = out.shape[:2]
+    learned_all = {c: e for c, e in data["classes"].items() if e.get("learned")}
+    classes = list(learned_all) if classes is None else list(classes)
+    paths = RoiPaths({"learned_from": {"frame_size": [w, h]}, "classes": {c: learned_all[c] for c in classes}})
+    overlay = out.copy()
+    bands = {}
+    for i, cls in enumerate(classes):
+        xs = sorted({0, w} | {p[0] for p in learned_all[cls]["points"]})
+        band = [paths.band(cls, x) for x in xs]
+        top = np.array([[x, b[0]] for x, b in zip(xs, band)], np.int32)
+        bottom = np.array([[x, b[1]] for x, b in zip(xs, band)], np.int32)
+        bands[cls] = (top, bottom)
+        cv2.fillPoly(overlay, [np.vstack([top, bottom[::-1]])], PAIR_COLOURS[i % len(PAIR_COLOURS)])
+    out = cv2.addWeighted(overlay, 0.12, out, 0.88, 0)
+    for i, cls in enumerate(classes):
+        colour = PAIR_COLOURS[i % len(PAIR_COLOURS)]
+        top, bottom = bands[cls]
+        cv2.polylines(out, [top], False, colour, 3, cv2.LINE_AA)
+        cv2.polylines(out, [bottom], False, colour, 3, cv2.LINE_AA)
+        y = int(min(h - 10, max(20, top[0][1] + 28)))
+        cv2.putText(out, cls, (8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, colour, 2, cv2.LINE_AA)
+
+    not_learned = sorted(c for c, e in data["classes"].items() if not e.get("learned"))
+    lines = [(f"auto-ROI {data['side']}  image {index}/{total}  learned {data['learned_from']['time']}  "
+              f"frames used {data['learned_from']['frames_used']}", (255, 255, 255), False)]
+    lines += [(f"{cls}  (seen at x {learned_all[cls]['x_range'][0]}-{learned_all[cls]['x_range'][1]})",
+               PAIR_COLOURS[i % len(PAIR_COLOURS)], True) for i, cls in enumerate(classes)]
     if not_learned:
-        lines.append(("not learned (never filtered): " + ", ".join(not_learned), (180, 180, 180)))
-    cv2.rectangle(out, (0, 0), (min(w, 900), 14 + 26 * len(lines)), (0, 0, 0), cv2.FILLED)
-    for k, (text, colour) in enumerate(lines):
-        cv2.putText(out, text, (10, 30 + 26 * k), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2, cv2.LINE_AA)
+        lines.append(("not learned (never filtered): " + ", ".join(not_learned), (190, 190, 190), False))
+    width = min(w, max(500, 14 * max(len(t) for t, _, _ in lines)))
+    cv2.rectangle(out, (0, 0), (width, 14 + 30 * len(lines)), (0, 0, 0), cv2.FILLED)
+    for k, (text, colour, swatch) in enumerate(lines):
+        x = 10
+        if swatch:
+            cv2.rectangle(out, (10, 14 + 30 * k), (40, 34 + 30 * k), colour, cv2.FILLED)
+            x = 50
+        cv2.putText(out, text, (x, 32 + 30 * k), cv2.FONT_HERSHEY_SIMPLEX, 0.75, colour, 2, cv2.LINE_AA)
     return out
+
+
+def remove_previews(folder):
+    for name in os.listdir(folder):
+        if (name.startswith(PREVIEW_PREFIX) and name.endswith(".jpg")) or name == LEGACY_PREVIEW:
+            os.remove(os.path.join(folder, name))
+
+
+def write_previews(folder, data, frames, per_image):
+    """F56: the old previews of the side are removed, then one image per `per_image` learned classes
+    (sorted names; the last may have fewer). Returns the file names."""
+    remove_previews(folder)
+    learned = sorted(c for c, e in data["classes"].items() if e.get("learned"))
+    groups = [learned[i:i + per_image] for i in range(0, len(learned), per_image)] or [[]]
+    names = []
+    for index, group in enumerate(groups, 1):
+        image = frames.pick(group)
+        if image is None:
+            width, height = data["learned_from"]["frame_size"]
+            image = np.zeros((height, width, 3), np.uint8)
+        name = preview_name(index, group)
+        atomic_write_jpg(os.path.join(folder, name), draw_preview(image, data, group, index, len(groups)))
+        names.append(name)
+    return names
 
 
 # ======================================================================
@@ -311,6 +416,8 @@ class AutoRoi:
         self.recent = defaultdict(lambda: deque(maxlen=self.cfg.drift_window))
         self.drifting = set()
         self.minute, self.written_this_minute, self.suppressed = None, 0, 0
+        self.stationary = StationaryWatch(self.cfg.static_px, self.cfg.static_share, self.cfg.drift_window)
+        self.previews = sorted(n for n in os.listdir(self.dir) if n.startswith(PREVIEW_PREFIX) and n.endswith(".jpg"))
         self.outside_lines = self._count_outside_lines()
         self.frames = 0
         self._load()
@@ -351,7 +458,7 @@ class AutoRoi:
             if self.learning == "armed":
                 self.learning = "active"
                 self.learn = {"boxes": defaultdict(list), "seen": 0, "used": 0, "size": None,
-                              "preview": None, "start": now_iso()}
+                              "frames": PreviewFrames(), "start": now_iso()}
                 self.log.info("auto-ROI: learning started at this plate (ends at the next plate)")
             elif self.learning == "active":
                 self._finish()
@@ -378,8 +485,7 @@ class AutoRoi:
             return
         learn["used"] += 1
         learn["size"] = (image.shape[1], image.shape[0])
-        if learn["preview"] is None or learn["used"] % 500 == 0:
-            learn["preview"] = image.copy()
+        learn["frames"].add([c for c, d in by_class.items() if d], image)
         for cls, dets in by_class.items():
             for det in dets:
                 learn["boxes"][cls].append((learn["used"], box_of(det)))
@@ -400,7 +506,7 @@ class AutoRoi:
                     "top_percentile", "bottom_percentile", "mad_factor", "min_wheel_step_px")},
                 "classes": classes}
         roi_path = os.path.join(self.dir, ROI_FILE)
-        atomic_write_jpg(os.path.join(self.dir, PREVIEW_FILE), draw_preview(learn["preview"], data))
+        self.previews = write_previews(self.dir, data, learn["frames"], self.cfg.preview_classes_per_image)
         if os.path.exists(roi_path):                    # keep the previous one; roi.json never missing
             with open(roi_path, "rb") as src, open(os.path.join(self.dir, PREV_FILE + ".tmp"), "wb") as dst:
                 dst.write(src.read())
@@ -447,13 +553,17 @@ class AutoRoi:
                 distance = self.paths.distance_outside(cls, box_of(det))
                 outside = distance > 0
                 self.counts[cls]["outside" if outside else "inside"] += 1
-                if moving:
+                # F55: drift counts only moving detections (learning's rule): a moving frame and
+                # not a stationary repeat. Stationary ones are still counted and listed above/below.
+                if moving and not self.stationary.stationary(cls, box_of(det)):
                     self._drift(cls, outside)
                 if outside:
                     self._record_outside(cls, det, distance, image, frame_path)
                 if not outside or self.cfg.mode != "filter":
                     keep.append(det)
             filtered[cls] = keep
+            if moving:
+                self.stationary.add_frame(cls, [box_of(d) for d in dets])
         return filtered
 
     def _drift(self, cls, outside):
@@ -537,7 +647,8 @@ class AutoRoi:
                 "roi": None if self.paths is None else {
                     "learned_at": self.paths.data["learned_from"].get("time"),
                     "learned_classes": sorted(self.paths.paths),
-                    "not_learned": sorted(c for c, e in self.paths.data["classes"].items() if not e.get("learned"))},
+                    "not_learned": sorted(c for c, e in self.paths.data["classes"].items() if not e.get("learned")),
+                "previews": self.previews},
                 "learning": {"state": self.learning or "idle",
                              "frames_seen": self.learn["seen"] if self.learn else 0,
                              "frames_used": self.learn["used"] if self.learn else 0},
