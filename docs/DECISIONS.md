@@ -298,6 +298,27 @@ Developer, 2026-11-05. The conveyor moves through the whole image from left to r
 
 ## D-095 | 2026-11 | Accepted | The new UI: a local web UI for monitoring and control (supersedes the PyQt UI; settles D-017)
 Developer and MASTER, 2026-11-06. **Purpose:** in-depth monitoring and control of every program, device, setting and error, usable by a person without training. **Form:** a Django web application in `ui/`, run by the Supervisor as worker `ui` (crash = restart like any worker), listening **only on 127.0.0.1** (configurable port), opened on the same machine in a full-screen browser (kiosk, started at login). **No external network use:** every script, style and font is bundled in the repo; no CDN; works with the network unplugged. Server-rendered pages with HTMX for live refresh (1-2 s); no Node/React build chain. **Rules:** (1) nobody sees YAML or a terminal: every setting is a form field with its range (from the loader), unit and one-line explanation; (2) every change shows its consequence before it is applied (which programs restart, what that costs, e.g. "Inspection RIGHT pauses until the next plate"), then Apply or Cancel; (3) every applied `site.yaml` is kept (last 20) with "Restore previous settings"; (4) errors in plain language with an action, technical details behind "Details"; (5) roles: Operator (watch, acknowledge, park defects, clean camera) and Engineer (settings, programs, models, ROI) with Django logins (D-046); (6) audit log of every change (who, when, from, to). **Everything goes through what exists:** the site.yaml loader and renderer, `supervisor.py` commands, the PLC command topic, the ROI request files, the model commands; the UI cannot reach a state the command line could not. Secrets are never displayed (change-password fields only). Live images are read from `data/frames/CAMn/live/IMG_1.jpg` read-only (never deleted; the `UI/` mailbox stays with the old PyQt UI until it is retired). UI-owned data (users, sessions, stored events, audit log, acknowledgements, false-alarm marks) lives in SQLite `data/state/ui/ui.sqlite3`; site data is read from the site MySQL DB. **Pages:** Dashboard, Alerts and errors, Defects, Cameras, Inspection settings, Programs, Models, Auto-ROI, System health, Mail and cleanup. **Stages:** UI-1 read-only monitoring (dashboard, alerts, programs, system health, defects); UI-2 controls (start/stop/restart, checks on/off, mail on/off, clean camera, acknowledge); UI-3 settings with preview / apply / undo; UI-4 models and auto-ROI; UI-5 roles, audit log, false-alarm feedback. The PyQt UI is retired after UI-2.
+**Control inventory (developer, 2026-11-06): every switch we built gets a UI control,** each through its existing mechanism:
+| Control | Mechanism | Stage |
+|---|---|---|
+| Start / stop / restart any program | `supervisor.py start/stop/restart <worker>` | UI-2 |
+| Program on/off permanently (e.g. mail) | `workers.yaml` `enabled` + Supervisor restart (reload once F18 re-reads workers.yaml) | UI-2 |
+| Inspection checks on/off (bolt, skidding, wheel missing, cycle restart), both sides or one side | `inspection.checks` / `sides.<SIDE>.checks` + reload --confirm | UI-2 |
+| Mail on/off; recipients, cc, flood breaker, max age | `workers.yaml` mail `enabled`; `mail.*` + reload | UI-2 / UI-3 |
+| Clean camera (pulse) | MQTT `dpc/plc/command` `clean_pulse` | UI-2 |
+| Acknowledge alerts | UI database | UI-2 |
+| Camera exposure, fps, rotate | `capture.cameras[]` + reload (only that camera restarts) | UI-3 |
+| Inspection threshold, wheel count, cycle total, daily report time, per-side tracker values and clip windows (Advanced) | `inspection.*` + reload --confirm | UI-3 |
+| PLC light check, pulse length, auto-cleaning on/off | `plc.*` + reload | UI-3 |
+| Cleanup thresholds, raw image hours, disk report time | `cleanup.*` + reload | UI-3 |
+| Restore previous settings | kept `site.yaml` versions + reload | UI-3 |
+| **Auto-ROI mode Off / Observe / Filter** | `inspection.auto_roi.mode` + reload --confirm | UI-4 |
+| Auto-ROI learn now (per side), restore previous ROI | request file `run/inspection_<side>.roi_learn`; copy `roi.prev.json` + restart that side | UI-4 |
+| Auto-ROI margin and other ROI values (Advanced) | `inspection.auto_roi.*` + reload --confirm | UI-4 |
+| Model per side: switch, rollback, pin, unpin | `supervisor.py model ...` (self-test shown) | UI-4 |
+| Run dpc-check | `scripts/dpc_check.py` | UI-1 |
+| Users and roles, audit log, false-alarm marks | UI database | UI-5 |
+Every control follows rule (2): show the consequence (which programs restart, for how long inspection pauses) and ask before applying; Engineer role for everything except watching, acknowledging, parking defects and the clean-camera button.
 
 ## Open questions
 - Q22: When is the view "bad" enough for an automatic cleaning pulse (A10)? Which signal (N frames without wheels, dust/dusty classes, darkness), from inspection, published how (`dpc/plc/command` or a `poor_view` event)? Until decided, cleaning is manual (`auto_cleaning: false`).
