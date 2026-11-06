@@ -35,6 +35,8 @@ Owned by MASTER; update after each handoff. Last updated: 2026-10-22 (full clean
 
 **Tadipatri 2026-11-04 evening:** per-side models running (P18); all four inspection checks ON; alarm mails OFF (mail worker stopped by the developer, to be kept off in workers.yaml); watch the defects in the DB/UI before switching mail back on.
 
+**On hold (developer, 2026-11-06):** P12 (OneDrive transfer) and P17 (UI migration) wait; deferred decisions: the half-clip bolt check (check half clips for 1 nut bolt, or keep as is) and a new GitHub token (the current one expires 2026-11-10; after that MASTER cannot push until a new one is given).
+
 ## Pending, in order (do one at a time)
 | # | Owner | What | Done when |
 |---|---|---|---|
