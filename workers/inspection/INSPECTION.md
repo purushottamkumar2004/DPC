@@ -226,7 +226,7 @@ The mail sender sends every unsent row of any type, so all of them are now maile
 - **New observation, kept:** a frame is deleted as invalid when it is less than 0.03 s old (L:503-526, `is_valid_image`). With the atomic hand-off (D-031) a fresh `INF` link can be that young, so a frame can be lost. It is rare at 4 fps. Fix: skip the frame instead of deleting it; developer decision.
 
 ## 11. Tests
-- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 69 tests.
+- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 74 tests.
   - Settings from the real renderer: Tadipatri per-side values; a missing key is named.
   - Wheel counter in both directions; plate tracker: one plate crossing = one new plate, on both sides (D-077).
   - D-077 through the real frame flow: a plate crossing the Left camera with a wheel in view gives one reset and no `Batch_Wheels_Missing`; the next plate gives one, with the right count. (With the old B5 rule the same test gives 4 resets and a false restart at wheel 1.)
@@ -288,7 +288,11 @@ On the conveyor every object of a class travels along a fixed path: at a given x
    - **Not learned:** a class without any point with enough boxes is stored as not learned and is **never filtered**. `plate` is the usual one, seen once per cycle.
 4. Files in `<root>/data/state/inspection_<side>/`, written atomically:
    - `roi.json`. A previous one is first copied to `roi.prev.json`, so `roi.json` is never missing.
-   - `roi_preview.jpg`: the bands on a real frame of the cycle, drawn over the full frame width, with a legend ("seen at x …" = `x_range`).
+   - Preview images (F56) `roi_preview_<NN>_<classA>__<classB>.jpg`, one per `preview_classes_per_image` (2) learned classes in name order; the last may have fewer.
+     - Each band is drawn as its top and bottom line plus a light fill, over the full width, in two clearly different colours (yellow, magenta), with a legend of the names ("seen at x …" = `x_range`) and the classes not learned as text.
+     - The frame is a real frame of the cycle that shows those classes if possible. While learning, a frame is kept only when it shows a class not yet covered, so only a few frames are held in memory.
+     - The side's old previews (`roi_preview_*.jpg`, and the single `roi_preview.jpg` from before F56) are removed first.
+     - `roi_status.json` lists their names under `roi.previews` for the UI.
    - The request file is then deleted, and event `roi_learned` (or `roi_learn_failed`) is published.
 5. No second plate within `learn_max_frames`: given up, WARNING, `roi_learn_failed`, request deleted, nothing written.
 6. Learning lives only in memory: after a restart the request file is still there, so learning starts again at the next plate. **Nothing ever relearns automatically.**
@@ -320,16 +324,18 @@ On the conveyor every object of a class travels along a fixed path: at a given x
   - Kept to the last `outside_keep` entries; trimmed at 120 %, crops of trimmed entries deleted.
   - At most `outside_max_per_minute` entries are written per minute. Beyond that, detections are still counted (`not_listed_rate_limit`), so a bad ROI can never slow inspection.
 - `roi_status.json`: rewritten every 100 frames and at stop. Holds mode, ROI (time, learned and not-learned classes), learning state, per class `inside` / `outside` counts, recent outside ratio and drift flag, and the list size.
-- **Drift:** per class, the last `drift_window` detections in moving frames. Above `drift_ratio` outside: one WARNING and event `roi_drift` {side, class, ratio, window}; reported again only after it was back below. Never acted on.
+- **Drift:** per class, over the last `drift_window` **moving detections**. Above `drift_ratio` outside: one WARNING and event `roi_drift` {side, class, ratio, window}; reported again only after it was back below. Never acted on.
+  - Moving = learning's rule (F55): the frame's wheel moved, and the detection is not a stationary repeat. A stationary repeat is a box location seen within `static_px` in more than `static_share` of the class's last `drift_window` moving frames, judged once 10 frames are known.
+  - A stationary off-path object (a fixed part, a stain) is still counted and listed as outside, but never raises drift. Seen on Tadipatri RIGHT `half_bucket_clip`.
 - Events go on `dpc/worker/inspection_<side>/event` (CONTRACTS 2) through the heartbeat's MQTT client (best effort).
 - Any error in the ROI part is logged and skipped for that frame; inspection continues.
 
-**Offline:** `python3 workers/inspection/roi_offline.py --side LEFT --frames <saved frames> --out <folder> [--version <v>] [--whole] [--limit N]` runs the model on saved frames and the same calculation (first plate to next plate, or `--whole`), and writes `roi.json` + `roi_preview.jpg` to `--out` only. It is read-only for the site and uses the GPU, so run it at a quiet time.
+**Offline:** `python3 workers/inspection/roi_offline.py --side LEFT --frames <saved frames> --out <folder> [--version <v>] [--whole] [--limit N]` runs the model on saved frames and the same calculation (first plate to next plate, or `--whole`), and writes `roi.json` + the preview images to `--out` only. It is read-only for the site and uses the GPU, so run it at a quiet time.
 
 **Keys** (`inspection.auto_roi`; missing ones take these defaults with one WARNING until CONFIG renders them):
-`mode` observe, `margin_px` 100, `static_px` 3, `static_share` 0.2, `min_per_point` 30, `grid_steps` 10, `top_percentile` 1, `bottom_percentile` 99, `mad_factor` 3, `min_wheel_step_px` 5, `learn_max_frames` 8000, `outside_keep` 500, `outside_crop_pad_px` 30, `outside_max_per_minute` 60, `drift_window` 200, `drift_ratio` 0.2. `learn_images` is no longer used.
+`mode` observe, `preview_classes_per_image` 2 (F56), `margin_px` 100, `static_px` 3, `static_share` 0.2, `min_per_point` 30, `grid_steps` 10, `top_percentile` 1, `bottom_percentile` 99, `mad_factor` 3, `min_wheel_step_px` 5, `learn_max_frames` 8000, `outside_keep` 500, `outside_crop_pad_px` 30, `outside_max_per_minute` 60, `drift_window` 200, `drift_ratio` 0.2. `learn_images` is no longer used.
 
-**Tests** (`tests/test_auto_roi.py`, 19):
+**Tests** (`tests/test_auto_roi.py`, 24):
 - **Calculation:** slanted path points against the true line (window rule included); a fixed false detection plus rare off-line boxes removed; too few boxes = not learned and never filtered; a sparse grid point interpolated; movement judged in both directions (stop, move, new wheel).
 - **Learning:** request → files → request deleted → `roi.prev.json` on relearn; no request = nothing; stopped-belt and no-wheel frames ignored; give-up without a second plate.
 - **Using:** filter drops an off-path box and leaves unlearned classes alone; the observe list fills, is trimmed and has matching crops; status counts; rate limit; drift reported once; `off`, unreadable file and other frame size ignored.
@@ -341,3 +347,5 @@ On the conveyor every object of a class travels along a fixed path: at a given x
   - The band continues along the slope with the outermost band height.
   - A roi.json in the P13 format stays valid.
   - The preview band covers the full width.
+- **Drift on moving detections (F55):** off-path detections moving with the chain raise drift once; a stationary off-path object is counted and listed, but never drifts. Without F55 that test fails.
+- **Pair previews (F56):** file names for 2 classes per image and for 1 per image; old previews removed; two distinct colours; lines plus a light fill; a frame showing both classes preferred.
