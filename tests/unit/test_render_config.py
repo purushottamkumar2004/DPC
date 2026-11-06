@@ -140,8 +140,19 @@ class Tadipatri(Site):                                               # P4 done w
         self.assertEqual(right["paths"]["wheel_status_images"], f"{data}/wheel_status/IMAGES/RIGHT")   # D-073 D4
         self.assertNotIn("start_file", right["paths"])                                          # D-072 (2)
         for doc in (left, right):                                    # no model files or classes (D-060)
+            self.assertEqual(set(doc["model"]), {"name", "models_dir"})
+            keys = set()
+
+            def collect(node):
+                if isinstance(node, dict):
+                    for key, value in node.items():
+                        keys.add(key)
+                        collect(value)
+            collect(doc)
+            # key names, not words: auto_roi.preview_classes_per_image (F57) is a setting, not a class list
+            self.assertFalse(keys & {"classes", "label_map", "weights", "detectron_yaml", "version"}, keys)
             text = json.dumps(doc)
-            for word in ("classes", "weights", ".pth", "detectron", "version"):
+            for word in (".pth", "detectron"):
                 self.assertNotIn(word, text)
 
     def test_only_needed_secrets(self):
@@ -688,7 +699,8 @@ class AutoRoiRender(Site):                                           # F53, D-09
         roi = self.load("inspection_left")["auto_roi"]
         self.assertEqual(set(roi), {"mode"} | set(self.inspection_settings().AUTO_ROI_KEYS))
         self.assertNotIn("learn_images", roi)                        # the reference still has it: dropped
-        self.assertEqual((roi["mode"], roi["margin_px"], roi["bottom_percentile"]), ("observe", 100, 99.0))
+        self.assertEqual((roi["mode"], roi["margin_px"], roi["bottom_percentile"], roi["preview_classes_per_image"]),
+                         ("observe", 100, 99.0, 2))                  # F57
         self.assertEqual(roi, self.load("inspection_right")["auto_roi"])   # site level, both sides
 
     def test_inspection_starts_without_the_defaults_warning(self):   # F53 done when
