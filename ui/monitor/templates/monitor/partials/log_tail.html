@@ -1,0 +1,4 @@
+{% if error %}<p class="note">{{ error }}</p>
+{% elif not lines %}<p class="note">No matching lines.</p>
+{% else %}<pre class="log">{% for line in lines %}{{ line }}
+{% endfor %}</pre>{% endif %}

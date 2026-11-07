@@ -1,0 +1,33 @@
+<section class="panel">
+  <h2>Now</h2>
+  {% if not problems %}<p class="note lvl-ok"><span class="lamp"></span>Nothing is wrong right now.</p>{% endif %}
+  <ul class="problems">
+  {% for p in problems %}
+    <li class="lvl-{{ p.level }}"><span class="lamp"></span>
+      <div><p>{{ p.sentence }}</p>{% if p.action %}<p class="action">{{ p.action }}</p>{% endif %}</div>
+      {% if p.link %}<a href="{{ p.link }}">more</a>{% endif %}</li>
+  {% endfor %}
+  </ul>
+</section>
+<section class="panel">
+  <h2>History <small>newest first</small></h2>
+  {% if not page.object_list %}<p class="note">No events stored yet.</p>{% endif %}
+  <ul class="events">
+  {% for e in page.object_list %}
+    <li class="lvl-{{ e.severity }}">
+      <span class="when num">{{ e.received_at|date:"d M H:i:s" }}</span>
+      <span class="lamp"></span>
+      <div class="what"><p>{{ e.message }}</p>{% if e.action %}<p class="action">{{ e.action }}</p>{% endif %}
+        <details><summary>Details</summary>
+          <p class="tech">{{ e.source }} · {{ e.name }} · {{ e.topic }}</p>
+          <pre>{{ e.payload }}</pre></details></div>
+    </li>
+  {% endfor %}
+  </ul>
+  {% if page.has_other_pages %}
+  <p class="pager">
+    {% if page.has_previous %}<a href="?level={{ level }}&source={{ source }}&page={{ page.previous_page_number }}">newer</a>{% endif %}
+    page {{ page.number }} of {{ page.paginator.num_pages }}
+    {% if page.has_next %}<a href="?level={{ level }}&source={{ source }}&page={{ page.next_page_number }}">older</a>{% endif %}
+  </p>{% endif %}
+</section>

@@ -1,0 +1,13 @@
+{% extends "monitor/base.html" %}
+{% block content %}
+<h1>System health</h1>
+<div hx-get="/part/health/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="innerHTML">
+  {% include "monitor/partials/health_body.html" %}
+</div>
+<section class="panel">
+  <h2>Commissioning check (dpc-check)</h2>
+  <p>Checks settings, folders, disk, cameras, database, MQTT and models. It only reads; nothing is changed.</p>
+  <button class="btn" hx-post="/health/dpc-check/" hx-target="#check" hx-swap="innerHTML">Run dpc-check</button>
+  <div id="check">{% include "monitor/partials/dpc_check.html" %}</div>
+</section>
+{% endblock %}

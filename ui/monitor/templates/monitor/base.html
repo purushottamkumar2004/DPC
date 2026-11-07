@@ -1,0 +1,25 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ site_name }} · DPC{% endblock %}</title>
+<link rel="stylesheet" href="{% static 'monitor/ui.css' %}">
+<script src="{% static 'monitor/vendor/htmx-2.0.4.min.js' %}" defer></script>
+<script src="{% static 'monitor/ui.js' %}" defer></script>
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+<header class="top">
+  <div class="site"><span class="product">DPC</span> {{ site_name }}</div>
+  <nav>
+    <a href="/" class="{% if active == 'dashboard' %}on{% endif %}">Dashboard</a>
+    <a href="/alerts/" class="{% if active == 'alerts' %}on{% endif %}">Alerts and errors</a>
+    <a href="/programs/" class="{% if active == 'programs' %}on{% endif %}">Programs</a>
+    <a href="/health/" class="{% if active == 'health' %}on{% endif %}">System health</a>
+    <a href="/defects/" class="{% if active == 'defects' %}on{% endif %}">Defects</a>
+  </nav>
+  <div class="clock" id="clock">--:--:--</div>
+</header>
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>

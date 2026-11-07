@@ -1,0 +1,12 @@
+{% load monitor_tags %}
+{% if check.running %}
+<div hx-get="/part/dpc-check/" hx-trigger="every 1s" hx-swap="outerHTML" hx-target="this">
+  <p class="note">dpc-check is running (started {{ check.started_at|clock }})…</p>
+</div>
+{% elif check.finished_at %}
+<p class="note">Finished {{ check.finished_at|clock }}{% if check.exit_code is not None %} · exit {{ check.exit_code }}{% endif %}</p>
+{% if check.error %}<p class="note lvl-warning">{{ check.error }}</p>{% endif %}
+<ul class="checklines">
+{% for line in check.lines %}<li class="grade-{{ line.grade|default:'none' }}"><code>{{ line.text }}</code></li>{% endfor %}
+</ul>
+{% else %}<p class="note">Not run yet.</p>{% endif %}

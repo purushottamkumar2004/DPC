@@ -1,0 +1,18 @@
+{% load monitor_tags %}
+<table class="list programs">
+  <thead><tr><th>Program</th><th>State</th><th>Since</th><th>Restarts</th><th>Heartbeat</th><th>Last error</th></tr></thead>
+  <tbody>
+  {% for p in programs %}
+  <tr class="lvl-{{ p.text.level }}">
+    <td><a href="/programs/{{ p.id }}/">{{ p.label }}</a><br><small class="tech">{{ p.id }}</small></td>
+    <td><span class="lamp"></span>{{ p.text.sentence }}<br><small class="tech">{{ p.value }}</small></td>
+    <td class="num">{{ p.since_s|age }}</td>
+    <td class="num">{{ p.restarts|default_if_none:"—" }}</td>
+    <td class="num">{% if p.heartbeat_age_s is not None %}{{ p.heartbeat_age_s|age }} ago{% else %}—{% endif %}</td>
+    <td>{% if p.last_error %}{{ p.last_error.message|truncatechars:90 }} <a href="/programs/{{ p.id }}/">Details</a>{% else %}—{% endif %}</td>
+  </tr>
+  {% empty %}
+  <tr><td colspan="6">No programs known yet: is the Supervisor running?</td></tr>
+  {% endfor %}
+  </tbody>
+</table>

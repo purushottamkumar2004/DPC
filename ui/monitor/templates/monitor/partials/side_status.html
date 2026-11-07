@@ -1,0 +1,17 @@
+{% load monitor_tags %}
+<dl class="rows">
+  <div class="row lvl-{{ s.camera.text.level|default:'off' }}">
+    <dt><span class="lamp"></span>Camera</dt>
+    <dd>{{ s.camera.text.sentence|default:"Not configured." }}</dd>
+    <dd class="figs"><span title="frames per second, measured from the live image">{{ s.frames.fps|num:1 }} fps</span>
+      <span title="age of the newest image">image {{ s.frames.age_s|age }} old</span></dd>
+  </div>
+  <div class="row lvl-{{ s.inspection.text.level|default:'off' }}">
+    <dt><span class="lamp"></span>Inspection</dt>
+    <dd>{{ s.inspection.text.sentence|default:"Not configured." }}</dd>
+    <dd class="figs"><span>{{ s.inspection_fps|num:1 }} img/s</span>
+      <span title="processing time per image (not published yet)">{% if s.ms_per_image %}{{ s.ms_per_image|num }} ms/img{% else %}— ms/img{% endif %}</span>
+      <span title="images waiting in INF">{{ s.queue|default_if_none:"—" }} waiting</span>
+      {% if s.roi %}<span title="auto region of interest">area: {{ s.roi.mode|default:"?" }}{% if not s.roi.learned %} (not learned){% endif %}</span>{% endif %}</dd>
+  </div>
+</dl>
