@@ -167,6 +167,7 @@ class ConfigurationManager:
         self.settings: Optional[Settings] = None
         self.workers: List[WorkerConfig] = []   # enabled workers only, in file order
         self.start_order: List[WorkerConfig] = []  # the same workers, start_after respected
+        self.disabled: List[WorkerConfig] = []     # enabled: false, file order (status DISABLED, F59)
 
     # ------------------------------------------------------------------
     def load(self):
@@ -188,6 +189,7 @@ class ConfigurationManager:
         self._check_models(self.settings.models)
 
         self.workers = []
+        self.disabled = []
         all_ids = set()                 # enabled AND disabled: a start_after may name a disabled one
         for i, item in enumerate(raw.get("workers") or []):
             worker = self._parse_worker(item, restart_defaults, i)
@@ -196,6 +198,8 @@ class ConfigurationManager:
             all_ids.add(worker.id)
             if worker.enabled:
                 self.workers.append(worker)
+            else:
+                self.disabled.append(worker)
 
         self.start_order = self._resolve_start_order(all_ids)
 

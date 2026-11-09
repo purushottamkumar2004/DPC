@@ -167,7 +167,7 @@ class RealBroker(unittest.TestCase):
         client.publish(STATUS_TOPIC, json.dumps({"status": "offline"}), retain=True).wait_for_publish()
         client.loop_stop()
         client.disconnect()
-        self.assertEqual(self.retained()["status"], "offline")
+        # no read-back of "offline" here: the Supervisor's next "online" may already have replaced it
         self.wait_status("online", timeout=6)          # status_publish_interval_seconds = 2
 
 

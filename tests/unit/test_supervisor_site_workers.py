@@ -49,7 +49,7 @@ class TwoCameraFile(unittest.TestCase):
     def test_worker_ids_from_d033_and_order(self):
         self.assertEqual([w.id for w in self.manager.start_order],
                          ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right", "cleanup",
-                          "mail", "plc"])
+                          "mail", "plc", "ui"])
 
     def test_each_camera_has_its_own_live_file_and_no_xml(self):
         for n in (1, 2):
@@ -168,6 +168,54 @@ class PlcWorkerF40(unittest.TestCase):
             text = f.read()
         for gone in ("plc_light", "light_reassert", "light.py"):
             self.assertNotIn(gone, text)
+
+
+class UiWorkerF59(unittest.TestCase):
+    """STATUS F59: the ui worker exactly as listed there (P17, D-095, D-096)."""
+
+    def test_ui(self):
+        manager = ConfigurationManager(SITE_FILE, SUPERVISOR_DIR)
+        manager.load()
+        w = {x.id: x for x in manager.workers}["ui"]
+        self.assertEqual((w.type, w.mode, w.restart_cost), ("ui", "service", "normal"))
+        self.assertEqual(w.command, "python3 run_ui.py")
+        self.assertEqual(w.working_directory, os.path.join(os.path.expanduser("~"), "INSIGHTZZ/code/ui"))
+        self.assertEqual((w.stop_signal, w.stop_timeout_seconds), ("SIGTERM", 10))
+        self.assertEqual((w.health.type, w.health.max_age_seconds, w.health.startup_grace_seconds),
+                         ("heartbeat", 30, 30))
+        self.assertEqual((w.env, w.start_after, w.follows, w.env_from_site), ({}, [], None, False))
+
+    def test_id_matches_the_ui(self):
+        # rendered/ui.json -> DPC_WORKER_CONFIG, and the UI's heartbeat topic dpc/worker/<id>/health
+        with open(os.path.join(os.path.dirname(SUPERVISOR_DIR), "ui", "dpc_ui", "ui_config.py")) as f:
+            self.assertIn('"worker_id": "ui"', f.read())
+
+
+class EveryWorkerHasItsRenderedFile(unittest.TestCase):
+    """Each worker in the two-camera file must get rendered/<worker id>.json from site.yaml: the
+    Supervisor sets DPC_WORKER_CONFIG only when that file exists (6f), so an id that does not
+    match the renderer starts a worker without its settings (F59: ui like any worker).
+    Checked with the example site.yaml and the real renderer (common.config.render)."""
+
+    def test_ids_match_the_renderer(self):
+        from core.site_env import SiteEnv
+        example = os.path.join(os.path.dirname(SUPERVISOR_DIR), "config", "examples", "site.example.yaml")
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(example) as f:
+                data = yaml.safe_load(f)
+            data["paths"]["root"] = os.path.join(tmp, "INSIGHTZZ")
+            os.makedirs(os.path.join(tmp, "INSIGHTZZ", "config"))
+            site = os.path.join(tmp, "INSIGHTZZ", "config", "site.yaml")
+            with open(site, "w") as f:
+                yaml.safe_dump(data, f, sort_keys=False)
+            os.chmod(site, 0o600)
+            result = SiteEnv(site).render()
+        self.assertTrue(result.ok, result.error)
+        manager = ConfigurationManager(SITE_FILE, SUPERVISOR_DIR)
+        manager.load()
+        missing = [w.id for w in manager.workers if w.id not in result.changes]
+        self.assertEqual(missing, [], "workers without a rendered/<id>.json")
+        self.assertIn("ui", result.changes)
 
 
 class SiteNumbersWithDummyCaptures(SupervisorTest):
