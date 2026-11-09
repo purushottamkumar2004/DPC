@@ -235,3 +235,13 @@ restarted, pending, not_running}, `model_switch_failed` {model, action, to, reas
 change is done even when the broker is down.
 `workers.yaml` `models: {auto_update: off|download|install, check_interval_hours: 6}`: only `off` is acted
 on today; the transfer service (P12) uses the others, never for a pinned model.
+
+## For the UI (F59, D-095, D-096)
+
+* `python3 supervisor.py status --json` prints `{"supervisor": <dpc/supervisor/status or null>, "workers":
+  {<id>: <status, same keys as the MQTT status>}}`; `model status --json` prints `{"auto_update", "models"}`.
+  In `--json` mode an error is one object `{"error": "..."}` (stdout stays pure JSON; remarks go to stderr).
+  Exit 0 = read; 1 = broker or Supervisor not reached; 2 = configuration error. The human table is unchanged.
+* Workers with `enabled: false` get a retained status `DISABLED` ("disabled in workers.yaml"), sent with the
+  periodic "online" once MQTT is connected, so the UI does not need to read workers.yaml.
+* The `ui` worker (two-camera file) gets `DPC_WORKER_CONFIG=<root>/config/rendered/ui.json` like any worker.

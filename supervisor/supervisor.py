@@ -85,6 +85,7 @@ class Supervisor:
             w.health_check = build_health_check(wc, self.heartbeats)
             self.workers[wc.id] = w
 
+        self.disabled = list(config.disabled)          # F59: published once as DISABLED (retained)
         self.monitor = Monitor(self.workers, self.process_manager, self.recovery,
                                self.mqtt, self.settings.monitoring)
         self._not_started = []                # worker ids still waiting for their turn at startup
@@ -137,6 +138,15 @@ class Supervisor:
             self._next_check = time.time() + self.settings.monitoring.check_interval_seconds
         self.monitor.publish_changes()
         self._publish_presence_if_due()
+
+    def _publish_disabled(self):
+        """F59: a retained status DISABLED for every `enabled: false` worker, with the same keys as
+        any worker status, so the UI shows the program as switched off (and a worker that was
+        disabled since the last run does not keep showing its old RUNNING status)."""
+        for wc in self.disabled:
+            status = self.process_manager.get_status(Worker(config=wc))
+            status.update(status="DISABLED", message="disabled in workers.yaml (enabled: false)")
+            self.mqtt.publish_status(wc.id, status)
 
     # ---- staged start (start_after) ----------------------------------------
     def _launch_ready_workers(self):
@@ -365,11 +375,18 @@ class Supervisor:
 
     def _publish_presence_if_due(self):
         """F28: "online" (retained) again every status_publish_interval_seconds, so a stale
-        "offline" on dpc/supervisor/status never outlives one interval while we run."""
+        "offline" on dpc/supervisor/status never outlives one interval while we run.
+        F59: the DISABLED statuses go out with it. Only once connected: a QoS-0 message sent
+        before the connection is up is dropped, so until then this retries every tick."""
         now = time.time()
-        if now >= self._next_presence:
-            self.mqtt.publish_online()
-            self._next_presence = now + self.settings.monitoring.status_publish_interval_seconds
+        if now < self._next_presence:
+            return
+        connected = getattr(self.mqtt, "connected", None)          # threading.Event on the real client
+        if connected is not None and not connected.is_set():
+            return
+        self.mqtt.publish_online()
+        self._publish_disabled()
+        self._next_presence = now + self.settings.monitoring.status_publish_interval_seconds
 
     def request_stop(self, *_):
         log.info("Stop requested")
@@ -548,7 +565,8 @@ def _cli_mqtt(config, site_env):
     try:
         login = site_env.mqtt_login()
     except SiteEnvError as e:
-        print(f"(site.yaml not read: {e}; trying the broker without a login)")
+        # stderr: a remark, not a result (stdout of `status --json` must stay pure JSON, F59)
+        print(f"(site.yaml not read: {e}; trying the broker without a login)", file=sys.stderr)
         login = (None, None)
     # no announce_presence: a CLI call never touches dpc/supervisor/status (F28)
     return MqttClient(config.settings.mqtt, client_id=f"dpc-ctl-{os.getpid()}", login=login)
@@ -569,17 +587,27 @@ def cmd_worker_command(config, site_env, command, worker_id):
     return 0
 
 
-def cmd_status(config, site_env):
-    """Read the retained status messages the supervisor publishes."""
+def cmd_status(config, site_env, as_json=False):
+    """Read the retained status messages the supervisor publishes.
+    --json (F59, for the UI): {"supervisor": <dpc/supervisor/status> or null, "workers": {id: status}};
+    errors as {"error": ...}. Exit 0 = statuses read, 1 = broker or Supervisor not reached."""
     client = _cli_mqtt(config, site_env)
-    found = {}
-    client.subscribe(client.worker_topic("+", "status"), lambda t, p: found.update({p["worker_id"]: p}))
+    found, supervisor = {}, {}
+
+    def on_worker_status(topic, payload):
+        if isinstance(payload, dict) and isinstance(payload.get("worker_id"), str):
+            found[payload["worker_id"]] = payload
+
+    client.subscribe(client.worker_topic("+", "status"), on_worker_status)
+    client.subscribe(client.topic("supervisor", "status"), lambda t, p: supervisor.update(p if isinstance(p, dict) else {}))
     client.start()
     if not client.wait_connected(3):
-        print("Cannot reach the MQTT broker - is it running?")
-        return 1
+        return _status_error("Cannot reach the MQTT broker - is it running?", as_json)
     time.sleep(1.5)
     client.stop()
+    if as_json:
+        print(json.dumps({"supervisor": supervisor or None, "workers": dict(sorted(found.items()))}, indent=1))
+        return 0 if found else 1
     if not found:
         print("No status received (is the supervisor running?)")
         return 1
@@ -587,6 +615,15 @@ def cmd_status(config, site_env):
     for wid, s in sorted(found.items()):
         print(f"{wid:<20}{s['status']:<17}{str(s['pid'] or '-'):<8}{s['restart_count']:<10}{s['message']}")
     return 0
+
+
+def _print_config_error(text, as_json):
+    print(json.dumps({"error": text}) if as_json else text)
+
+
+def _status_error(text, as_json) -> int:
+    print(json.dumps({"error": text}) if as_json else text)
+    return 1
 
 
 # ======================================================================
@@ -612,16 +649,17 @@ def cmd_model(argv) -> int:
     if len(args.args) != MODEL_ARGS[args.command]:
         p.error(f"'model {args.command}' needs {MODEL_ARGS[args.command]} argument(s)")
 
+    as_json = args.json and args.command == "status"
     site_env = SiteEnv(args.site_config)
     config, problem = _load_workers_file(args.config, site_env)
     if problem:
-        print(f"Configuration error: {problem}")
+        print(json.dumps({"error": f"Configuration error: {problem}"}) if as_json else f"Configuration error: {problem}")
         return 2
     try:
         manager = ModelManager(site_env.load(), config.settings.runtime_root, args.selftest_script,
                                _inspection_python(config))
     except SiteEnvError as e:
-        print(f"Site config error: {e}")
+        print(json.dumps({"error": f"Site config error: {e}"}) if as_json else f"Site config error: {e}")
         return 2
 
     if args.command == "status":
@@ -751,6 +789,7 @@ def main():
                         help="site.yaml (default: $DPC_SITE_CONFIG, then ~/INSIGHTZZ/config/site.yaml)")
     parser.add_argument("--confirm", action="store_true",
                         help="reload: also restart restart_cost: high workers now (inspection loses its wheel state)")
+    parser.add_argument("--json", action="store_true", help="status: machine-readable output (for the UI)")
     args = parser.parse_args()
 
     site_env = SiteEnv(args.site_config)
@@ -758,14 +797,14 @@ def main():
     if workers_file is None:
         workers_file, problem = find_workers_file(site_env)
         if problem:
-            print(f"Configuration error: {problem}")
+            _print_config_error(f"Configuration error: {problem}", args.json)
             return 2
 
     config = ConfigurationManager(workers_file, BASE_DIR)
     try:
         config.load()
     except ConfigError as e:
-        print(f"Configuration error: {e}")
+        _print_config_error(f"Configuration error: {e}", args.json)
         return 2
 
     if args.action == "check-config":
@@ -792,7 +831,7 @@ def main():
     if args.action == "reload":
         return cmd_reload(config, args.confirm)
     if args.action == "status":
-        return cmd_status(config, site_env)
+        return cmd_status(config, site_env, args.json)
     if not args.worker_id:
         parser.error(f"'{args.action}' needs a worker_id")
     return cmd_worker_command(config, site_env, args.action, args.worker_id)

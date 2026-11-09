@@ -168,3 +168,21 @@ workers:
     stop_timeout_seconds: 20
     health:
       type: process
+
+  # ---- ui (P17, D-095, D-096): the local web UI (127.0.0.1 only, kiosk browser) ----
+  # id "ui" = rendered/ui.json (F58) = the UI's worker_id; settings only from DPC_WORKER_CONFIG.
+  # Health: the UI publishes {"healthy": true} on dpc/worker/ui/health every 10 s.
+  # Note: heartbeat health needs the MQTT broker; with mosquitto down the UI is restarted
+  # after max_age + worker_timeout (it shows "MQTT unreachable" anyway).
+  - id: ui
+    type: ui
+    mode: service
+    restart_cost: normal
+    command: python3 run_ui.py
+    working_directory: ~/INSIGHTZZ/code/ui
+    stop_signal: SIGTERM
+    stop_timeout_seconds: 10
+    health:
+      type: heartbeat
+      max_age_seconds: 30
+      startup_grace_seconds: 30
