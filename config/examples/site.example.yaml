@@ -170,3 +170,10 @@ transfer:                         # optional: leave out if this site runs no tra
   models_folder: "DPC/models"     # OneDrive folder with <name>/<version>/ (default)
   log: {backup_count: 5}
 # Model updates (auto_update, check interval, pin) are Supervisor settings, not here (D-060).
+
+ui:                               # the local web UI (D-095); optional, these are the defaults
+  port: 8080                      # http://127.0.0.1:<port> on this machine only
+  refresh_seconds: 2              # live refresh of the pages
+  event_keep_days: 90             # stored events older than this are removed ...
+  event_keep_rows: 50000          # ... and at most this many are kept
+  log: {backup_count: 5}

@@ -32,7 +32,8 @@ REFERENCE = os.path.join(REPO_ROOT, "docs", "sites", "tadipatri.site.reference.y
 DB_PASSWORD = "s3cret-db-Rt55"
 GRAPH_SECRET = "s3cret-graph-Uy21"
 WORKERS = ["frame_capture_cam1", "frame_capture_cam2", "inspection_left", "inspection_right", "cleanup", "mail",
-           "plc"]
+           "plc", "ui"]
+UI_DIR = os.path.join(REPO_ROOT, "ui")
 PLC_WORKER = os.path.join(REPO_ROOT, "workers", "plc")
 MAIL_WORKER = os.path.join(REPO_ROOT, "workers", "mail")
 CLEANUP_SETTINGS = os.path.join(REPO_ROOT, "workers", "cleanup")
@@ -162,6 +163,12 @@ class Tadipatri(Site):                                               # P4 done w
             if worker in ("cleanup", "mail"):
                 continue                                             # they mail via Graph (F29, F36: checked below)
             self.assertNotIn(GRAPH_SECRET, text)
+            if worker == "ui":
+                # the ui shows the disk thresholds: cleanup.disk_percent only (F58); its "mail" is a threshold
+                doc = self.load(worker)
+                self.assertFalse({"graph", "mail", "transfer"} & set(doc))
+                self.assertEqual(set(doc["cleanup"]), {"disk_percent"})
+                continue
             for section in ("graph", "mail", "cleanup", "transfer"):
                 self.assertNotIn(f'"{section}"', text)
             if worker.startswith("frame_capture"):
@@ -188,7 +195,8 @@ class Changes(Site):
         self.write()
         self.assertEqual(self.render(), {"frame_capture_cam1": "unchanged", "frame_capture_cam2": "unchanged",
                                          "inspection_left": "written", "inspection_right": "written",
-                                         "cleanup": "unchanged", "mail": "unchanged", "plc": "unchanged"})
+                                         "cleanup": "unchanged", "mail": "unchanged", "plc": "unchanged",
+                                         "ui": "unchanged"})
         self.data["capture"]["cameras"][0]["exposure_us"] = 1800
         self.write()
         self.assertEqual(self.render()["frame_capture_cam1"], "written")
@@ -210,7 +218,8 @@ class Changes(Site):
         self.assertEqual(changes["frame_capture_cam2"], "removed")
         self.assertEqual(changes["inspection_right"], "removed")
         self.assertEqual(sorted(os.listdir(self.rendered)),
-                         ["cleanup.json", "frame_capture_cam1.json", "inspection_left.json", "mail.json", "plc.json"])
+                         ["cleanup.json", "frame_capture_cam1.json", "inspection_left.json", "mail.json", "plc.json",
+                          "ui.json"])
 
     def test_foreign_files_are_never_removed(self):
         self.render()
@@ -310,7 +319,8 @@ class P7Prep(Site):                                                  # D-072, D-
         self.write()
         self.assertEqual(self.render(), {"frame_capture_cam1": "unchanged", "frame_capture_cam2": "unchanged",
                                          "inspection_left": "unchanged", "inspection_right": "written",
-                                         "cleanup": "unchanged", "mail": "unchanged", "plc": "unchanged"})
+                                         "cleanup": "unchanged", "mail": "unchanged", "plc": "unchanged",
+                                         "ui": "unchanged"})
 
     def test_capture_health_interval(self):                          # P4d
         self.render()
@@ -718,6 +728,83 @@ class AutoRoiRender(Site):                                           # F53, D-09
         self.write()
         self.assertEqual({w for w, s in self.render().items() if s == "written"},
                          {"inspection_left", "inspection_right"})
+
+
+class UiFile(Site):                                                  # F58, D-095, D-096
+    KEYS = {"worker_id", "site", "paths", "log", "ui", "db", "mqtt", "cameras", "sides", "cleanup", "machine"}
+
+    def ui_loader(self):
+        """ui/dpc_ui/ui_config.py, used read-only to prove the file is what the UI reads."""
+        sys.path.insert(0, UI_DIR)
+        try:
+            from dpc_ui import ui_config
+        finally:
+            sys.path.pop(0)
+        return ui_config
+
+    def test_tadipatri_renders_ui_json_with_the_exact_key_set(self):   # F58 done when
+        self.assertEqual(self.render()["ui"], "written")
+        path = os.path.join(self.rendered, "ui.json")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        doc = self.load("ui")
+        self.assertEqual(set(doc) - {"_generated"}, self.KEYS)
+        r, data = self.root, os.path.join(self.root, "data")
+        self.assertEqual(doc["paths"], {
+            "root": r, "code": f"{r}/code", "config": f"{r}/config", "site_yaml": self.path,
+            "workers_file": f"{r}/config/workers.yaml", "logs": f"{r}/logs", "run": f"{r}/run", "data": data,
+            "frames": f"{data}/frames", "state": f"{data}/state/ui"})
+        self.assertEqual(doc["ui"], {"port": 8080, "refresh_seconds": 2.0, "event_keep_days": 90,
+                                     "event_keep_rows": 50000})
+        self.assertEqual(doc["log"], {"backup_count": 5})
+        self.assertEqual(doc["db"], {"host": "localhost", "port": 3306, "name": self.data["db"]["name"],
+                                     "user": self.data["db"]["user"], "password": DB_PASSWORD})
+        self.assertEqual(doc["mqtt"], {"host": "localhost", "port": 1883, "user": None, "password": None,
+                                       "topic_prefix": "dpc"})
+        self.assertEqual(doc["cameras"], [
+            {"id": "CAM1", "side": "LEFT", "serial": "24824427", "ip": "192.168.1.102"},
+            {"id": "CAM2", "side": "RIGHT", "serial": "24874775", "ip": "192.168.1.103"}])
+        self.assertEqual(doc["sides"], [
+            {"side": "LEFT", "camera_id": "CAM1", "inspection_worker": "inspection_left"},
+            {"side": "RIGHT", "camera_id": "CAM2", "inspection_worker": "inspection_right"}])
+        self.assertEqual(doc["cleanup"], {"disk_percent": {"delete": 75, "raw_delete": 85, "mail": 90,
+                                                           "inference_delete": 95}})
+        self.assertEqual(doc["machine"], {"total_wheel_count": 190})
+        self.assertNotIn(GRAPH_SECRET, json.dumps(doc))
+
+    def test_ui_loader_reads_it_with_no_missing_key(self):           # F58 done when
+        self.render()
+        with self.assertNoLogs("dpc.ui.config", level="WARNING"):
+            cfg = self.ui_loader().load(os.path.join(self.rendered, "ui.json"))
+        self.assertEqual(cfg["_missing"], [])
+        self.assertEqual(cfg.paths["state"], os.path.join(self.root, "data", "state", "ui"))
+        self.assertEqual(cfg.camera_for_side("RIGHT")["serial"], "24874775")
+        self.assertEqual(cfg.secret_values(), [DB_PASSWORD])
+
+    def test_ui_block_values(self):
+        self.data["ui"] = {"port": 8090, "refresh_seconds": 1, "event_keep_days": 30, "event_keep_rows": 1000,
+                           "log": {"backup_count": 7}}
+        self.write()
+        self.render()
+        doc = self.load("ui")
+        self.assertEqual(doc["ui"], {"port": 8090, "refresh_seconds": 1.0, "event_keep_days": 30,
+                                     "event_keep_rows": 1000})
+        self.assertEqual(doc["log"], {"backup_count": 7})
+
+    def test_a_ui_value_change_rewrites_only_ui(self):
+        self.render()
+        self.data["ui"] = {"port": 8081}
+        self.write()
+        self.assertEqual({w for w, s in self.render().items() if s == "written"}, {"ui"})
+
+    def test_one_camera_site(self):
+        del self.data["capture"]["cameras"][1]
+        del self.data["inspection"]["sides"]["RIGHT"]
+        self.data["inspection"].pop("live_wheel_counter_side", None)
+        self.write()
+        self.render()
+        doc = self.load("ui")
+        self.assertEqual([c["id"] for c in doc["cameras"]], ["CAM1"])
+        self.assertEqual(doc["sides"], [{"side": "LEFT", "camera_id": "CAM1", "inspection_worker": "inspection_left"}])
 
 
 if __name__ == "__main__":

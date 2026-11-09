@@ -778,6 +778,24 @@ class AutoRoiF53(_TempDirTest):                                       # F53, D-0
         self.assertFalse(any("learn_images" in w for w in cfg.warnings))
 
 
+class UiF58(_TempDirTest):                                             # F58, D-095
+    def test_defaults(self):
+        data = self.config_data()
+        data.pop("ui", None)
+        ui = sc.load_site_config(self.write_yaml(data)).ui
+        self.assertEqual((ui.port, ui.refresh_seconds, ui.event_keep_days, ui.event_keep_rows, ui.log.backup_count),
+                         (8080, 2.0, 90, 50000, 5))
+
+    def test_bad_values(self):
+        data = self.config_data()
+        data["ui"] = {"port": 80, "refresh_seconds": 0, "event_keep_days": 0, "event_keep_rows": 10, "login": True}
+        problems = self.problems_for(data)
+        for pattern in (r"^ui\.port: must be between 1024 and 65535", r"^ui\.refresh_seconds: must be >= 0\.5",
+                        r"^ui\.event_keep_days: must be between 1", r"^ui\.event_keep_rows: must be between 100",
+                        r"^ui\.login: unknown key"):
+            self.assertProblem(problems, pattern)
+
+
 class Secrets(_TempDirTest):
     def assertNoSecret(self, text):
         for value in list(SECRETS.values()) + ["s3cret"]:
