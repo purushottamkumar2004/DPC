@@ -144,6 +144,9 @@ class ProgramsTests(ViewTestBase):
         self.assertIn("LEFT inspection", html)
         self.assertIn("bad box", html)
         self.assertIn("Defect mails are switched off", html)
+        self.cache.handle(*helpers.status("frame_capture_cam2", "FAILED",
+                                          message="process exited (exit code 1) (gave up after 3 retries)"))
+        self.assertContains(self.client.get("/part/programs/"), "gave up after 3 retries")
         r = self.client.get("/programs/inspection_left/")
         self.assertContains(r, "<summary>Details</summary>", html=False)
         self.assertContains(r, "check.py:5 in run")

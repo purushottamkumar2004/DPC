@@ -17,6 +17,7 @@ import json
 import os
 from dataclasses import dataclass, field
 
+from monitor.secrets import mask
 from monitor.messages import (ERROR, OFF, OK, WARNING, Text, effective_status, plc_text, status_text,
                               worker_label, worker_type)
 
@@ -91,7 +92,7 @@ def programs(snapshot: dict, configured: list) -> list:
             "last_error": last_error if isinstance(last_error, dict) else None,
             "log_file": (payload or {}).get("log_file"),
             "pid": (payload or {}).get("pid"),
-            "message": (payload or {}).get("message") or "",
+            "message": mask(str((payload or {}).get("message") or ""))[:200],
         })
     return entries
 

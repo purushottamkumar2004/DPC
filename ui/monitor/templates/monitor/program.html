@@ -5,6 +5,7 @@
 <section class="panel lvl-{{ p.text.level }}">
   <p class="state"><span class="lamp"></span>{{ p.text.sentence }}</p>
   {% if p.text.action %}<p class="action">{{ p.text.action }}</p>{% endif %}
+  {% if p.message %}<p class="tech">Supervisor: {{ p.message }}</p>{% endif %}
   <p class="figs"><span>state for {{ p.since_s|age }}</span><span>restarts {{ p.restarts|default_if_none:"—" }}</span>
     <span>heartbeat {% if p.heartbeat_age_s is not None %}{{ p.heartbeat_age_s|age }} ago{% else %}none{% endif %}</span></p>
   {% if p.last_error %}
