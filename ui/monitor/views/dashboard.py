@@ -1,80 +1,75 @@
-"""Dashboard (D-095): banner, both sides with live image, tiles, live wheel, last defects."""
+"""Dashboard (D-098, docs/ui/dashboard_reference.html).
+
+The full page renders once; then one request every refresh_seconds (/part/dash/) returns every
+small fragment marked hx-swap-oob, so values change in place without reloading the page or the
+camera images. The older fragment URLs stay (same fragments, one each).
+"""
 from django.http import Http404, HttpResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_GET
 
 from dpc_ui.ui_config import get_config
-from monitor import overview
-from monitor.messages import plc_text
-from monitor.sources import files, system
+from monitor import dash
+from monitor.sources import files
 from monitor.sources.sitedb import SiteDBError, get_sitedb
 from monitor.views.common import gather
 
 
-def _side_context(state, side_name):
-    for s in state["sides"]:
-        if s["side"] == side_name:
-            return s
-    raise Http404("unknown side")
-
-
-def _tiles_context(state):
-    progs = state["programs"]
+def _context(oob=False):
+    state = gather()
+    cfg = state["cfg"]
     wheel, wheel_error = None, ""
     try:
         wheel = get_sitedb().live_wheel()
     except SiteDBError as e:
         wheel_error = str(e)
-    return {
-        "plc": state["plc"], "plc_text": plc_text(state["plc"]), "plc_expected": state["plc_expected"],
-        "disk": state["disk"], "gpu": system.gpu(),
-        "mail": overview.program_by_id(progs, "mail"), "cleanup": overview.program_by_id(progs, "cleanup"),
-        "wheel": wheel, "wheel_error": wheel_error,
-        "total_wheels": state["cfg"]["machine"].get("total_wheel_count"),
-    }
-
-
-def _recent_context():
-    try:
-        return {"defects": get_sitedb().last_defects(10), "defects_error": ""}
-    except SiteDBError as e:
-        return {"defects": [], "defects_error": str(e)}
+    defects, defects_error = dash.recent_defects()
+    return {"state": state, "oob": oob, "active": "dashboard",
+            "top": dash.top_bar(state, wheel, wheel_error, cfg["machine"].get("total_wheel_count")),
+            "cams": dash.camera_cards(state, cfg), "strip": dash.device_strip(state),
+            "alerts": dash.recent_alerts(state), "defects": defects, "defects_error": defects_error}
 
 
 @require_GET
 def page(request):
-    state = gather()
-    context = {"state": state, "banner": state["banner"], "sides": state["sides"], "active": "dashboard"}
-    context.update(_tiles_context(state))
-    context.update(_recent_context())
-    return render(request, "monitor/dashboard.html", context)
+    return render(request, "monitor/dashboard.html", _context())
+
+
+@require_GET
+def poll(request):
+    """Every fragment of the dashboard, each swapped into its own element (hx-swap-oob)."""
+    return render(request, "monitor/partials/dash_oob.html", _context(oob=True))
 
 
 @require_GET
 def banner(request):
-    state = gather()
-    return render(request, "monitor/partials/banner.html", {"banner": state["banner"]})
+    return render(request, "monitor/partials/banner.html", _context())
 
 
 @require_GET
 def side(request, side):
-    state = gather()
-    return render(request, "monitor/partials/side_status.html", {"s": _side_context(state, side.upper())})
+    context = _context()
+    for cam in context["cams"]:
+        if cam["side"] == side.upper():
+            context["cam"] = cam
+            return render(request, "monitor/partials/side_status.html", context)
+    raise Http404("unknown side")
 
 
 @require_GET
 def tiles(request):
-    return render(request, "monitor/partials/tiles.html", _tiles_context(gather()))
+    return render(request, "monitor/partials/tiles.html", _context())
 
 
 @require_GET
 def recent_defects(request):
-    return render(request, "monitor/partials/recent_defects.html", _recent_context())
+    return render(request, "monitor/partials/recent_defects.html", _context())
 
 
 @require_GET
 def live_image(request, camera_id):
-    """The current frame of one configured camera, downscaled (read-only, D-031)."""
+    """The current frame of one configured camera, downscaled (read-only, D-031); the fresh
+    inspection overlay instead when there is one (F60)."""
     cfg = get_config()
     if camera_id not in {c["id"] for c in cfg["cameras"]}:
         raise Http404("unknown camera")
@@ -82,9 +77,14 @@ def live_image(request, camera_id):
         width = max(160, min(1920, int(request.GET.get("w", files.LIVE_WIDTH))))
     except ValueError:
         width = files.LIVE_WIDTH
-    jpeg = files.live_image(cfg.paths["frames"], camera_id, width)
+    side = next(c["side"] for c in cfg["cameras"] if c["id"] == camera_id)
+    path, overlay = files.camera_source(cfg.paths["frames"], cfg.paths["data"], camera_id, side)
+    jpeg = files.live_image(cfg.paths["frames"], camera_id, width, path=path)
+    if jpeg is None and overlay:               # overlay vanished between stat and read
+        jpeg, overlay = files.live_image(cfg.paths["frames"], camera_id, width), False
     if jpeg is None:
         raise Http404("no live image")
     response = HttpResponse(jpeg, content_type="image/jpeg")
     response["Cache-Control"] = "no-store"
+    response["X-DPC-Overlay"] = "1" if overlay else "0"
     return response

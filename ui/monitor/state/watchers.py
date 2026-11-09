@@ -1,5 +1,6 @@
 """Background checks of the UI process (started by run_ui.py, never by tests or manage.py):
 
+* sparkline samples every samples.SAMPLE_EVERY_S (fps, ms/img, GPU temperature, disk)
 * disk level every DISK_EVERY_S: a change of level (ok / delete / mail) is stored as an event
 * camera ping every PING_EVERY_S (results shown on System health)
 * event pruning every PRUNE_EVERY_S (ui.event_keep_days, ui.event_keep_rows)
@@ -9,7 +10,8 @@ import logging
 import threading
 import time
 
-from monitor.sources import system
+from monitor.sources import files, system
+from monitor.state import get_cache, samples
 
 log = logging.getLogger("dpc.ui.watchers")
 
@@ -22,7 +24,7 @@ class Watchers:
     def __init__(self, cfg, store):
         self.cfg, self.store = cfg, store
         self._stop = threading.Event()
-        self._due = {"disk": 0.0, "ping": 0.0, "prune": 0.0}
+        self._due = {"samples": 0.0, "disk": 0.0, "ping": 0.0, "prune": 0.0}
 
     def start(self):
         threading.Thread(target=self._run, name="ui-watchers", daemon=True).start()
@@ -33,7 +35,8 @@ class Watchers:
     def _run(self):
         while not self._stop.wait(1.0):
             now = time.time()
-            for name, every, step in (("disk", DISK_EVERY_S, self.check_disk),
+            for name, every, step in (("samples", samples.SAMPLE_EVERY_S, self.take_samples),
+                                      ("disk", DISK_EVERY_S, self.check_disk),
                                       ("ping", PING_EVERY_S, self.ping_cameras),
                                       ("prune", PRUNE_EVERY_S, self.prune)):
                 if now >= self._due[name]:
@@ -42,6 +45,10 @@ class Watchers:
                         step()
                     except Exception:
                         log.exception("background check '%s' failed", name)
+
+    def take_samples(self):
+        disk = system.disk(self.cfg.paths["data"], self.cfg["cleanup"]["disk_percent"])
+        samples.take(self.cfg, get_cache().snapshot(), files.get_meter(), system.gpu(), disk)
 
     def check_disk(self):
         disk = system.disk(self.cfg.paths["data"], self.cfg["cleanup"]["disk_percent"])

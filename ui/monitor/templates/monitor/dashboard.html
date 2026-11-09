@@ -1,32 +1,36 @@
 {% extends "monitor/base.html" %}
+{% block main_class %}main dash{% endblock %}
 {% block content %}
-<div id="banner" hx-get="/part/banner/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="innerHTML">
-  {% include "monitor/partials/banner.html" %}
-</div>
+{# One poll every refresh_seconds; the answer swaps each small fragment in place (hx-swap-oob). #}
+<div hidden hx-get="/part/dash/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="none"></div>
 
-<section class="sides">
-  {% for s in sides %}
-  <article class="side">
-    <h2>{{ s.side }} <small>{{ s.camera_id }}</small></h2>
-    <div class="live">
-      <img data-live="/live/{{ s.camera_id }}.jpg" src="/live/{{ s.camera_id }}.jpg" alt="{{ s.side }} camera, live image">
-      <div class="nolive">No live image from {{ s.side }} camera</div>
-    </div>
-    <div hx-get="/part/side/{{ s.side }}/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="innerHTML">
-      {% include "monitor/partials/side_status.html" %}
-    </div>
+<header class="card top">
+  <div><div class="site">{{ site_name }}</div><div class="muted" id="clock">&nbsp;</div></div>
+  {% include "monitor/partials/banner.html" %}
+  {% include "monitor/partials/wheel.html" %}
+</header>
+
+<section class="cams">
+  {% for cam in cams %}
+  <article class="card cam">
+    <a class="camhead" href="{{ cam.link }}" data-tip="Open the {{ cam.side }} camera page">
+      <span>{{ cam.side }} <span class="muted">{{ cam.camera_id }}</span></span>
+      {% include "monitor/partials/cam_fps.html" %}
+    </a>
+    <a class="img" href="{{ cam.link }}" data-tip="Live image of the {{ cam.side }} camera{% if cam.overlay %} with detections drawn by inspection{% endif %}">
+      <img data-live="/live/{{ cam.camera_id }}.jpg" src="/live/{{ cam.camera_id }}.jpg" alt="{{ cam.side }} camera, live image">
+      {% include "monitor/partials/cam_badges.html" %}
+      <span class="nolive">No live image from the {{ cam.side }} camera</span>
+    </a>
+    {% include "monitor/partials/side_status.html" %}
   </article>
   {% endfor %}
 </section>
 
-<section id="tiles" hx-get="/part/tiles/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="innerHTML">
-  {% include "monitor/partials/tiles.html" %}
-</section>
+{% include "monitor/partials/tiles.html" %}
 
-<section class="panel">
-  <h2>Last 10 defects <a class="small" href="/defects/">all defects</a></h2>
-  <div hx-get="/part/recent-defects/" hx-trigger="every 5s" hx-swap="innerHTML">
-    {% include "monitor/partials/recent_defects.html" %}
-  </div>
+<section class="bottom">
+  <div class="card list-card"><h3><a href="/alerts/">Alerts</a></h3>{% include "monitor/partials/dash_alerts.html" %}</div>
+  <div class="card list-card"><h3><a href="/defects/">Last defects</a></h3>{% include "monitor/partials/recent_defects.html" %}</div>
 </section>
 {% endblock %}

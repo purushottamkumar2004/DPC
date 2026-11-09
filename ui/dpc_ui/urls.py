@@ -8,6 +8,7 @@ from monitor.views import alerts, dashboard, defects, health, programs
 
 urlpatterns = [
     path("", dashboard.page, name="dashboard"),
+    path("part/dash/", dashboard.poll, name="part-dash"),
     path("part/banner/", dashboard.banner, name="part-banner"),
     path("part/side/<str:side>/", dashboard.side, name="part-side"),
     path("part/tiles/", dashboard.tiles, name="part-tiles"),

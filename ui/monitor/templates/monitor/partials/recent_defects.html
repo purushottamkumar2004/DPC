@@ -1,15 +1,9 @@
-{% load monitor_tags %}
-{% if defects_error %}<p class="note lvl-warning">{{ defects_error }}</p>
-{% elif not defects %}<p class="note">No defects recorded.</p>
-{% else %}
-<table class="list">
-  <thead><tr><th>Time</th><th>Side</th><th>Defect</th><th>Wheel</th><th></th></tr></thead>
-  <tbody>
-  {% for d in defects %}
-  <tr><td class="num">{{ d.create_datetime|date:"d M H:i:s" }}</td><td>{{ d.defect_side|side_word }}</td>
-    <td>{{ d.defect_type|type_word }}</td><td class="num">{{ d.wheel_no }}</td>
-    <td><a href="/defects/{{ d.ID }}/">image</a></td></tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% endif %}
+{% load monitor_tags %}<div class="rows" id="dash-defects"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if defects_error %}<div class="row"><span class="c-warn">{{ defects_error }}</span><span></span></div>
+  {% else %}{% for d in defects %}
+  <a class="row" href="/defects/{{ d.ID }}/" data-tip="Open this defect with its image">
+    <span>{{ d.defect_type|type_word }}</span>
+    <span class="muted">{{ d.defect_side|first }} · wheel {{ d.wheel_no }} · {{ d.create_datetime|date:"H:i" }}</span></a>
+  {% empty %}<div class="row"><span class="muted">No defects recorded.</span><span></span></div>
+  {% endfor %}{% endif %}
+</div>
