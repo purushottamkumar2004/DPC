@@ -212,9 +212,38 @@ def plc_config(cfg: SiteConfig) -> Dict[str, Any]:
     }
 
 
+MQTT_TOPIC_PREFIX = "dpc"     # every topic starts with dpc/ (CONTRACTS 2)
+
+
+def ui_config(cfg: SiteConfig) -> Dict[str, Any]:
+    """ui (F58, D-095, D-096): exactly the CONTRACTS 13 `ui` key set, every key always written so
+    ui/dpc_ui/ui_config.py takes nothing from its defaults. Only the DB and MQTT logins are
+    secrets here; the UI never shows them."""
+    p, ui, db = cfg.paths, cfg.ui, cfg.db
+    return {
+        "worker_id": "ui",
+        "site": {"id": cfg.site.id, "name": cfg.site.name},
+        "paths": {"root": p.root, "code": p.code, "config": p.config, "site_yaml": cfg.source_path,
+                  "workers_file": os.path.join(p.config, "workers.yaml"), "logs": p.logs, "run": p.run,
+                  "data": p.data, "frames": os.path.join(p.data, "frames"),
+                  "state": os.path.join(p.data, "state", "ui")},
+        "log": {"backup_count": ui.log.backup_count},
+        "ui": {"port": ui.port, "refresh_seconds": ui.refresh_seconds, "event_keep_days": ui.event_keep_days,
+               "event_keep_rows": ui.event_keep_rows},
+        "db": {"host": db.host, "port": db.port, "name": db.name, "user": db.user, "password": db.password},
+        "mqtt": {"host": cfg.mqtt.host, "port": cfg.mqtt.port, "user": cfg.mqtt.user, "password": cfg.mqtt.password,
+                 "topic_prefix": MQTT_TOPIC_PREFIX},
+        "cameras": [{"id": cam.id, "side": cam.side, "serial": cam.serial, "ip": cam.ip} for cam in cfg.cameras],
+        "sides": [{"side": cam.side, "camera_id": cam.id, "inspection_worker": SIDE_WORKER[cam.side]}
+                  for cam in cfg.cameras],
+        "cleanup": {"disk_percent": dict(cfg.cleanup.disk_percent)},
+        "machine": {"total_wheel_count": cfg.inspection.machine.total_wheel_count},
+    }
+
+
 def worker_configs(cfg: SiteConfig) -> Dict[str, Dict[str, Any]]:
     """worker_id -> settings. Capture and inspection for the configured cameras only (a
-    one-camera site gets two of each kind less); cleanup, mail and plc always."""
+    one-camera site gets two of each kind less); cleanup, mail, plc and ui always."""
     configs = {}
     for camera in cfg.cameras:
         configs[CAMERA_WORKER[camera.id]] = capture_config(cfg, camera)
@@ -223,6 +252,7 @@ def worker_configs(cfg: SiteConfig) -> Dict[str, Dict[str, Any]]:
     configs["cleanup"] = cleanup_config(cfg)
     configs["mail"] = mail_config(cfg)
     configs["plc"] = plc_config(cfg)
+    configs["ui"] = ui_config(cfg)
     return configs
 
 

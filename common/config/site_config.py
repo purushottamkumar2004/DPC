@@ -498,6 +498,16 @@ class TransferConfig:
 
 
 @dataclass(frozen=True)
+class UiSettings:
+    """The local web UI (D-095, D-096, F58). Listens on 127.0.0.1 only; the port is configurable."""
+    port: int = 8080
+    refresh_seconds: float = 2.0     # live refresh of the pages
+    event_keep_days: int = 90        # stored events (data/state/ui/ui.sqlite3) older than this are removed ...
+    event_keep_rows: int = 50000     # ... and at most this many are kept
+    log: LogSettings = LogSettings(backup_count=5)
+
+
+@dataclass(frozen=True)
 class SiteConfig:
     schema_version: int
     site: SiteInfo
@@ -513,6 +523,7 @@ class SiteConfig:
     transfer: Optional[TransferConfig]   # None = no transfer service on this site
     source_path: str
     warnings: Tuple[str, ...] = ()   # the file is valid, but these deserve a look (printed by the CLI)
+    ui: UiSettings = UiSettings()    # optional block `ui:` (F58)
 
     @property
     def cameras(self) -> Tuple[Camera, ...]:
@@ -1329,6 +1340,7 @@ def load_site_config(path: Optional[str] = None) -> SiteConfig:
     mail = _read_mail(top, paths)
     cleanup = _read_cleanup(top)
     transfer = _read_transfer(top, site.id)
+    ui = _read_ui(top)
     graph = _read_graph(top, _graph_users(mail, transfer))
     if "models" in top.data:
         top.used.add("models")
@@ -1340,7 +1352,21 @@ def load_site_config(path: Optional[str] = None) -> SiteConfig:
         raise SiteConfigError(path, problems)
     return SiteConfig(schema_version=version, site=site, paths=paths, db=db, mqtt=mqtt, graph=graph,
                       capture=capture, inspection=inspection, plc=plc, mail=mail, cleanup=cleanup,
-                      transfer=transfer, source_path=path, warnings=tuple(_warnings(db, inspection)))
+                      transfer=transfer, source_path=path, warnings=tuple(_warnings(db, inspection)), ui=ui)
+
+
+def _read_ui(top: _Section) -> UiSettings:
+    """`ui:` (optional, F58): port, refresh_seconds, event_keep_days, event_keep_rows, log."""
+    s = top.section("ui", required=False)
+    ui = UiSettings(
+        port=s.integer("port", required=False, default=8080, low=1024, high=65535),
+        refresh_seconds=s.number("refresh_seconds", required=False, default=2.0, low=0.5, high=60),
+        event_keep_days=s.integer("event_keep_days", required=False, default=90, low=1, high=3650),
+        event_keep_rows=s.integer("event_keep_rows", required=False, default=50000, low=100, high=10000000),
+        log=_read_log(s),
+    )
+    s.finish()
+    return ui
 
 
 def _graph_users(mail: MailConfig, transfer: Optional[TransferConfig]) -> List[str]:
