@@ -1,0 +1,75 @@
+<!-- REFERENCE LAYOUT for the UI-1b restyle (D-098). Static, no data, no external files.
+     The real dashboard must follow this structure and these colours; values here are examples. -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>DPC dashboard reference (D-098)</title>
+<style>
+:root{--bg:#0f1216;--card:#171b21;--line:#2a3038;--row:#232a32;--text:#e6e8eb;--muted:#8b949e;--ok:#4cc38a;--warn:#e3b341;--err:#f0605d;--off:#8b949e}
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,sans-serif}
+.app{display:grid;grid-template-columns:64px 1fr;height:100vh}
+.sb{display:flex;flex-direction:column;align-items:center;gap:22px;padding-top:18px;border-right:0.5px solid var(--line)}
+.sb a{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--muted);text-decoration:none;font-size:12px}
+.sb a.on{background:#12301f;color:var(--ok)}
+.main{display:grid;grid-template-rows:auto 1fr auto auto;gap:12px;padding:12px 16px;min-width:0;height:100vh}
+.card{background:var(--card);border:0.5px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0}
+.top{display:flex;justify-content:space-between;align-items:center;gap:16px}
+.site{font-size:18px;font-weight:600}.muted{color:var(--muted);font-size:12px}
+.pill{display:inline-flex;align-items:center;gap:8px;padding:5px 14px;border-radius:999px;font-size:14px}
+.pill.ok{background:#12301f;color:var(--ok)}.pill.warn{background:#3a2f12;color:var(--warn)}.pill.err{background:#3d1717;color:var(--err)}
+.prog{width:240px}.bar{height:8px;background:var(--row);border-radius:4px;margin-top:5px}.bar>div{height:8px;background:var(--ok);border-radius:4px}
+.cams{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-height:0}
+.cam{display:flex;flex-direction:column;min-height:0}
+.camhead{display:flex;justify-content:space-between;margin-bottom:8px;font-weight:600}
+.img{flex:1;min-height:0;background:#0b0e12;border:0.5px solid var(--line);border-radius:8px;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.img img{width:100%;height:100%;object-fit:cover}
+.band{position:absolute;left:0;right:0;background:rgba(76,195,138,.08);border-top:1px dashed #2f6f52;border-bottom:1px dashed #2f6f52}
+.box{position:absolute;border:2px solid var(--ok);border-radius:2px}.box.filtered{border-color:var(--err)}
+.lines{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+.lines div{background:#12161b;border-radius:6px;padding:6px 8px}
+.val{font-size:14px}.ok{color:var(--ok)}.warn{color:var(--warn)}.err{color:var(--err)}.off{color:var(--off)}
+.strip{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+.bottom{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:0.5px solid var(--row)}.row:last-child{border:0}
+h3{margin:0 0 6px;font-size:14px;font-weight:600}
+a.card{color:inherit;text-decoration:none}a.card:hover{border-color:#3a424c}
+</style></head><body><div class="app">
+<nav class="sb" aria-label="Pages">
+<a class="on" href="#" title="Dashboard">Dash</a><a href="#" title="Alerts and errors">Alrt</a><a href="#" title="Defects">Def</a><a href="#" title="Cameras">Cam</a><a href="#" title="Inspection settings">Set</a><a href="#" title="Programs">Prog</a><a href="#" title="Models">Mdl</a><a href="#" title="Auto-ROI">ROI</a><a href="#" title="System health">Hlth</a>
+</nav>
+<main class="main">
+<header class="card top">
+ <div><div class="site">Tadipatri DPC</div><div class="muted">Tue 10 Nov, 00:13:48</div></div>
+ <span class="pill ok" title="Overall state: green = all programs and devices OK">● All systems running</span>
+ <div class="prog" title="Wheel counted since the last plate"><div class="muted">Wheel 137 of 190</div><div class="bar"><div style="width:72%"></div></div></div>
+</header>
+<section class="cams">
+ <a class="card cam" href="#" title="Open the LEFT camera page">
+  <div class="camhead"><span>LEFT <span class="muted">CAM1</span></span><span class="ok">4.1 fps</span></div>
+  <div class="img">live_overlay.jpg (or live/IMG_1.jpg), filling the box
+   <div class="band" style="top:36%;height:30%"></div><div class="box" style="left:20%;top:40%;width:9%;height:16%"></div><div class="box" style="left:45%;top:41%;width:9%;height:15%"></div></div>
+  <div class="lines"><div><div class="muted">Camera</div><div class="val ok">Running · 0 s</div></div><div><div class="muted">Inspection</div><div class="val ok">85 ms/img · 3 waiting</div></div><div><div class="muted">Model</div><div class="val">left 2026.10.29</div></div><div><div class="muted">Auto-ROI</div><div class="val ok">Filter · 0 removed</div></div></div>
+ </a>
+ <a class="card cam" href="#" title="Open the RIGHT camera page">
+  <div class="camhead"><span>RIGHT <span class="muted">CAM2</span></span><span class="ok">4.0 fps</span></div>
+  <div class="img">live_overlay.jpg (or live/IMG_1.jpg), filling the box
+   <div class="band" style="top:30%;height:34%"></div><div class="box" style="left:22%;top:34%;width:9%;height:17%"></div><div class="box filtered" style="left:58%;top:86%;width:8%;height:9%"></div></div>
+  <div class="lines"><div><div class="muted">Camera</div><div class="val ok">Running · 0 s</div></div><div><div class="muted">Inspection</div><div class="val warn">160 ms/img · 7 waiting</div></div><div><div class="muted">Model</div><div class="val">right 2026.10.29</div></div><div><div class="muted">Auto-ROI</div><div class="val warn">Filter · 116 removed</div></div></div>
+ </a>
+</section>
+<section class="card strip">
+ <div title="PLC answers on Modbus"><div class="muted">PLC</div><div class="val ok">Connected</div></div>
+ <div><div class="muted">Light</div><div class="val ok">On</div></div>
+ <div><div class="muted">Conveyor</div><div class="val ok">Running</div></div>
+ <div title="Data disk; cleanup deletes above 75 %"><div class="muted">Disk</div><div class="val">62 %</div></div>
+ <div><div class="muted">GPU</div><div class="val warn">73 °C</div></div>
+ <div><div class="muted">Mail</div><div class="val off">Off</div></div>
+</section>
+<section class="bottom">
+ <div class="card"><h3>Alerts</h3>
+  <div class="row"><span class="warn">▲ Right GPU warm</span><span class="muted">17:40</span></div>
+  <div class="row"><span class="ok">↻ Inspection restarted</span><span class="muted">16:38</span></div>
+  <div class="row"><span class="err">✕ Camera 2 lost, recovered</span><span class="muted">14:05</span></div></div>
+ <div class="card"><h3>Last defects</h3>
+  <div class="row"><span>Nut bolt missing</span><span class="muted">R · wheel 37 · 17:31</span></div>
+  <div class="row"><span>Wheel skidding</span><span class="muted">L · wheel 112 · 17:05</span></div>
+  <div class="row"><span>Nut bolt missing</span><span class="muted">L · wheel 64 · 16:52</span></div></div>
+</section>
+</main></div></body></html>
