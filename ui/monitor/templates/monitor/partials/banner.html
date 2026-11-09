@@ -1,0 +1,5 @@
+<div class="banner lvl-{{ banner.level }}">
+  <span class="lamp"></span>
+  <span class="headline">{{ banner.headline }}</span>
+  {% if banner.count > 1 %}<a class="more" href="/alerts/">{{ banner.count }} problems: see all</a>{% endif %}
+</div>

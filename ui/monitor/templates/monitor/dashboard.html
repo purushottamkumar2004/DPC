@@ -1,0 +1,32 @@
+{% extends "monitor/base.html" %}
+{% block content %}
+<div id="banner" hx-get="/part/banner/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="innerHTML">
+  {% include "monitor/partials/banner.html" %}
+</div>
+
+<section class="sides">
+  {% for s in sides %}
+  <article class="side">
+    <h2>{{ s.side }} <small>{{ s.camera_id }}</small></h2>
+    <div class="live">
+      <img data-live="/live/{{ s.camera_id }}.jpg" src="/live/{{ s.camera_id }}.jpg" alt="{{ s.side }} camera, live image">
+      <div class="nolive">No live image from {{ s.side }} camera</div>
+    </div>
+    <div hx-get="/part/side/{{ s.side }}/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="innerHTML">
+      {% include "monitor/partials/side_status.html" %}
+    </div>
+  </article>
+  {% endfor %}
+</section>
+
+<section id="tiles" hx-get="/part/tiles/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="innerHTML">
+  {% include "monitor/partials/tiles.html" %}
+</section>
+
+<section class="panel">
+  <h2>Last 10 defects <a class="small" href="/defects/">all defects</a></h2>
+  <div hx-get="/part/recent-defects/" hx-trigger="every 5s" hx-swap="innerHTML">
+    {% include "monitor/partials/recent_defects.html" %}
+  </div>
+</section>
+{% endblock %}

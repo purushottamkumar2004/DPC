@@ -1,0 +1,15 @@
+{% load monitor_tags %}
+{% if defects_error %}<p class="note lvl-warning">{{ defects_error }}</p>
+{% elif not defects %}<p class="note">No defects recorded.</p>
+{% else %}
+<table class="list">
+  <thead><tr><th>Time</th><th>Side</th><th>Defect</th><th>Wheel</th><th></th></tr></thead>
+  <tbody>
+  {% for d in defects %}
+  <tr><td class="num">{{ d.create_datetime|date:"d M H:i:s" }}</td><td>{{ d.defect_side|side_word }}</td>
+    <td>{{ d.defect_type|type_word }}</td><td class="num">{{ d.wheel_no }}</td>
+    <td><a href="/defects/{{ d.ID }}/">image</a></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}

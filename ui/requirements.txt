@@ -1,0 +1,6 @@
+# The UI worker (ui/). Install with the same Python as the Supervisor (INSTALL step 2).
+Django>=5.2,<5.3          # 5.2 LTS, Python 3.10+
+waitress>=3.0,<4          # production WSGI server, one process with threads (one MQTT subscriber)
+# already installed for the other workers (INSTALL step 2):
+# paho-mqtt>=1.6  pymysql  PyYAML  opencv-python-headless  numpy
+# bundled, no download at run time: static/monitor/vendor/htmx-2.0.4.min.js

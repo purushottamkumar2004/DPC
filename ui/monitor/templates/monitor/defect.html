@@ -1,0 +1,17 @@
+{% extends "monitor/base.html" %}
+{% load monitor_tags %}
+{% block content %}
+<p><a href="/defects/">← all defects</a></p>
+{% if error %}<p class="note lvl-warning">{{ error }}</p>
+{% else %}
+<h1>{{ row.defect_type|type_word }} · {{ row.defect_side|side_word }} · wheel {{ row.wheel_no }}</h1>
+<p class="figs"><span>{{ row.create_datetime|date:"d M Y H:i:s" }}</span>
+  <span>box x {{ row.xmin }}–{{ row.xmax }}, y {{ row.ymin }}–{{ row.ymax }}</span>
+  <span>mail {% if row.is_alert_sent == 1 %}sent{% elif row.is_alert_sent == 2 %}not sent (duplicate, too old or held){% else %}waiting{% endif %}</span></p>
+<figure class="defect">
+  <img src="/defects/{{ row.ID }}/image.jpg" alt="Defect image with the box drawn by inspection"
+       onerror="this.replaceWith(Object.assign(document.createElement('p'), {className: 'note', textContent: 'The image is not available (removed by the cleanup, or stored on another machine).'}))">
+</figure>
+<details><summary>Details</summary><p class="tech">ID {{ row.ID }} · {{ row.view_defect }}</p></details>
+{% endif %}
+{% endblock %}

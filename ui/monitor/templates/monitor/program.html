@@ -1,0 +1,34 @@
+{% extends "monitor/base.html" %}
+{% load monitor_tags %}
+{% block content %}
+<h1>{{ p.label }} <small class="tech">{{ p.id }}</small></h1>
+<section class="panel lvl-{{ p.text.level }}">
+  <p class="state"><span class="lamp"></span>{{ p.text.sentence }}</p>
+  {% if p.text.action %}<p class="action">{{ p.text.action }}</p>{% endif %}
+  {% if p.message %}<p class="tech">Supervisor: {{ p.message }}</p>{% endif %}
+  <p class="figs"><span>state for {{ p.since_s|age }}</span><span>restarts {{ p.restarts|default_if_none:"—" }}</span>
+    <span>heartbeat {% if p.heartbeat_age_s is not None %}{{ p.heartbeat_age_s|age }} ago{% else %}none{% endif %}</span></p>
+  {% if p.last_error %}
+  <h2>Last error</h2>
+  <p>{{ error_message }}</p>
+  <details><summary>Details</summary>
+    <p class="tech">{{ p.last_error.type }} at {{ p.last_error.where }} · {{ p.last_error.at }}</p>
+    <pre>{{ error_traceback }}</pre></details>
+  {% endif %}
+  {% if raw_status %}<details><summary>Full status (technical)</summary><pre>{{ raw_status }}</pre></details>{% endif %}
+</section>
+<section class="panel">
+  <h2>Log <small>last 200 lines</small></h2>
+  <form class="filters" id="logfilter" onsubmit="return false">
+    <label>Contains <input type="search" name="q" value="{{ log_text }}"
+      hx-get="/part/programs/{{ p.id }}/log/" hx-trigger="keyup changed delay:400ms" hx-target="#log" hx-include="#logfilter"></label>
+    <label>Level <select name="level" hx-get="/part/programs/{{ p.id }}/log/" hx-trigger="change" hx-target="#log" hx-include="#logfilter">
+      <option value="" {% if not log_level %}selected{% endif %}>all lines</option>
+      <option value="WARNING" {% if log_level == 'WARNING' %}selected{% endif %}>warnings and errors</option>
+      <option value="ERROR" {% if log_level == 'ERROR' %}selected{% endif %}>errors only</option></select></label>
+  </form>
+  <div id="log" hx-get="/part/programs/{{ p.id }}/log/" hx-include="#logfilter" hx-trigger="load, every 5s" hx-swap="innerHTML">
+    <p class="note">Loading…</p>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends "monitor/base.html" %}
+{% block content %}
+<h1>Alerts and errors</h1>
+<form class="filters" method="get">
+  <label>Show
+    <select name="level" onchange="this.form.submit()">
+      <option value="warning" {% if level == 'warning' %}selected{% endif %}>Warnings and errors</option>
+      <option value="error" {% if level == 'error' %}selected{% endif %}>Errors only</option>
+      <option value="all" {% if level == 'all' %}selected{% endif %}>Everything</option>
+    </select></label>
+  <label>From
+    <select name="source" onchange="this.form.submit()">
+      <option value="">all programs</option>
+      {% for s in sources %}<option value="{{ s }}" {% if s == source %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select></label>
+</form>
+<div hx-get="/part/alerts/?{{ query }}" hx-trigger="every {{ refresh_seconds }}s" hx-swap="innerHTML">
+  {% include "monitor/partials/alerts_body.html" %}
+</div>
+{% endblock %}

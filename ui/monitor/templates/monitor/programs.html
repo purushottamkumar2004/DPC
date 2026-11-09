@@ -1,0 +1,7 @@
+{% extends "monitor/base.html" %}
+{% block content %}
+<h1>Programs</h1>
+<div hx-get="/part/programs/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="innerHTML">
+  {% include "monitor/partials/programs_table.html" %}
+</div>
+{% endblock %}
