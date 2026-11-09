@@ -1,0 +1,10 @@
+<div class="rows" id="dash-alerts"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% for a in alerts %}
+  <a class="row" href="{{ a.link }}" data-tip="{{ a.tip }}"{% if a.id %} data-alert="{{ a.id }}"{% endif %}>
+    <span class="{{ a.level|default:'' }}{% if a.level == 'error' %} c-err{% elif a.level == 'warning' %} c-warn{% endif %}">
+      <svg class="ico sm"><use href="#i-{{ a.icon }}"/></svg> {{ a.text }}</span>
+    <span class="muted">{{ a.when }}</span></a>
+  {% empty %}
+  <div class="row"><span class="c-ok"><svg class="ico sm"><use href="#i-circle-check"/></svg> No alerts</span><span class="muted"></span></div>
+  {% endfor %}
+</div>

@@ -1,12 +1,12 @@
 {% extends "monitor/base.html" %}
 {% block content %}
-<h1>System health</h1>
+{% with title="System health" %}{% include "monitor/partials/page_top.html" %}{% endwith %}
 <div hx-get="/part/health/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="innerHTML">
   {% include "monitor/partials/health_body.html" %}
 </div>
-<section class="panel">
-  <h2>Commissioning check (dpc-check)</h2>
-  <p>Checks settings, folders, disk, cameras, database, MQTT and models. It only reads; nothing is changed.</p>
+<section class="card">
+  <h3>Commissioning check (dpc-check)</h3>
+  <p class="muted">Checks settings, folders, disk, cameras, database, MQTT and models. It only reads; nothing is changed.</p>
   <button class="btn" hx-post="/health/dpc-check/" hx-target="#check" hx-swap="innerHTML">Run dpc-check</button>
   <div id="check">{% include "monitor/partials/dpc_check.html" %}</div>
 </section>

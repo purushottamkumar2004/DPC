@@ -1,8 +1,8 @@
 {% extends "monitor/base.html" %}
 {% load monitor_tags %}
 {% block content %}
-<h1>Defects</h1>
-<form class="filters" method="get">
+{% with title="Defects" %}{% include "monitor/partials/page_top.html" %}{% endwith %}
+<form class="card filters" method="get">
   <label>From <input type="date" name="from" value="{{ flt.date_from|date:'Y-m-d' }}"></label>
   <label>To <input type="date" name="to" value="{{ flt.date_to|date:'Y-m-d' }}"></label>
   <label>Side <select name="side"><option value="">both</option>
@@ -11,19 +11,20 @@
     {% for t in types %}<option value="{{ t }}" {% if t == flt.defect_type %}selected{% endif %}>{{ t|type_word }}</option>{% endfor %}</select></label>
   <label>Wheel <input type="text" name="wheel" value="{{ flt.wheel }}" size="5" inputmode="numeric"></label>
   <button class="btn" type="submit">Show</button>
-  <a class="btn quiet" href="/defects/export.csv?{{ query }}">Export CSV</a>
+  <a class="btn" href="/defects/export.csv?{{ query }}" data-tip="Download the defects of this filter as a CSV file">Export CSV</a>
 </form>
+<section class="card">
 {% if error %}<p class="note lvl-warning">{{ error }}</p>
 {% else %}
-<p class="note">{{ total }} defect{{ total|pluralize }} found.</p>
+<h3>{{ total }} defect{{ total|pluralize }} found.</h3>
 <table class="list">
-  <thead><tr><th>Time</th><th>Side</th><th>Defect</th><th>Wheel</th><th>Mail</th><th></th></tr></thead>
+  <thead><tr><th>Time</th><th>Side</th><th>Defect</th><th>Wheel</th><th>Mail</th></tr></thead>
   <tbody>
   {% for d in rows %}
-  <tr><td class="num">{{ d.create_datetime|date:"d M Y H:i:s" }}</td><td>{{ d.defect_side|side_word }}</td>
+  <tr class="clickable" onclick="location.href='/defects/{{ d.ID }}/'" data-tip="Open this defect with its image">
+    <td class="num"><a href="/defects/{{ d.ID }}/">{{ d.create_datetime|date:"d M Y H:i:s" }}</a></td><td>{{ d.defect_side|side_word }}</td>
     <td>{{ d.defect_type|type_word }}</td><td class="num">{{ d.wheel_no }}</td>
-    <td>{% if d.is_alert_sent == 1 %}sent{% elif d.is_alert_sent == 2 %}not sent{% else %}waiting{% endif %}</td>
-    <td><a href="/defects/{{ d.ID }}/">image</a></td></tr>
+    <td>{% if d.is_alert_sent == 1 %}sent{% elif d.is_alert_sent == 2 %}not sent{% else %}waiting{% endif %}</td></tr>
   {% endfor %}
   </tbody>
 </table>
@@ -32,4 +33,5 @@
   page {{ page_no }} of {{ pages }}
   {% if page_no < pages %}<a href="?{{ query }}&page={{ page_no|add:'1' }}">older</a>{% endif %}</p>{% endif %}
 {% endif %}
+</section>
 {% endblock %}

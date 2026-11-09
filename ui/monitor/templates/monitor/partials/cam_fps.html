@@ -1,0 +1,1 @@
+{% load monitor_tags %}<span class="fps {{ cam.fps.level|lvl }}" id="fps-{{ cam.side }}" data-tip="{{ cam.fps.tip }}"{% if oob %} hx-swap-oob="true"{% endif %}>{% if cam.fps.spark %}{% spark cam.fps.spark 48 14 %} {% endif %}{{ cam.fps.text }}</span>

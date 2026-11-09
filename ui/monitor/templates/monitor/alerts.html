@@ -1,7 +1,7 @@
 {% extends "monitor/base.html" %}
 {% block content %}
-<h1>Alerts and errors</h1>
-<form class="filters" method="get">
+{% with title="Alerts and errors" %}{% include "monitor/partials/page_top.html" %}{% endwith %}
+<form class="card filters" method="get">
   <label>Show
     <select name="level" onchange="this.form.submit()">
       <option value="warning" {% if level == 'warning' %}selected{% endif %}>Warnings and errors</option>

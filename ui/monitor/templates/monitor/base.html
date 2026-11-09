@@ -4,22 +4,24 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{{ site_name }} · DPC{% endblock %}</title>
+<script>/* theme before first paint: dark by default, light only if chosen on this browser (D-098 1) */
+try { if (localStorage.getItem("dpc-theme") === "light") document.documentElement.dataset.theme = "light"; } catch (e) {}</script>
 <link rel="stylesheet" href="{% static 'monitor/ui.css' %}">
 <script src="{% static 'monitor/vendor/htmx-2.0.4.min.js' %}" defer></script>
 <script src="{% static 'monitor/ui.js' %}" defer></script>
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
-<header class="top">
-  <div class="site"><span class="product">DPC</span> {{ site_name }}</div>
-  <nav>
-    <a href="/" class="{% if active == 'dashboard' %}on{% endif %}">Dashboard</a>
-    <a href="/alerts/" class="{% if active == 'alerts' %}on{% endif %}">Alerts and errors</a>
-    <a href="/programs/" class="{% if active == 'programs' %}on{% endif %}">Programs</a>
-    <a href="/health/" class="{% if active == 'health' %}on{% endif %}">System health</a>
-    <a href="/defects/" class="{% if active == 'defects' %}on{% endif %}">Defects</a>
-  </nav>
-  <div class="clock" id="clock">--:--:--</div>
-</header>
-<main>{% block content %}{% endblock %}</main>
+{% include "monitor/icons.svg" %}
+<div class="app">
+<nav class="sb" aria-label="Pages">
+  {% for p in nav_pages %}
+  <a href="{{ p.url }}" class="{% if active == p.key %}on{% endif %}{% if not p.ready %} later{% endif %}" data-tip="{{ p.tip }}" data-tip-side="right" aria-label="{{ p.title }}">
+    <svg class="ico"><use href="#i-{{ p.icon }}"/></svg></a>
+  {% endfor %}
+  <button class="theme" type="button" id="theme-toggle" data-tip="Switch between dark and light (this browser only)" data-tip-side="right" aria-label="Switch theme">
+    <svg class="ico dark-only"><use href="#i-sun"/></svg><svg class="ico light-only"><use href="#i-moon"/></svg></button>
+</nav>
+<main class="{% block main_class %}main page{% endblock %}">{% block content %}{% endblock %}</main>
+</div>
 </body>
 </html>

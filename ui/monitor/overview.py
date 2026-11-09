@@ -113,7 +113,8 @@ def read_roi_status(data_dir: str, side: str):
     except (OSError, ValueError):
         return None
     drifting = sorted(c for c, e in (data.get("classes") or {}).items() if isinstance(e, dict) and e.get("drift"))
-    return {"mode": data.get("mode"), "learned": data.get("roi") is not None,
+    outside = sum(int(e.get("outside") or 0) for e in (data.get("classes") or {}).values() if isinstance(e, dict))
+    return {"mode": data.get("mode"), "learned": data.get("roi") is not None, "outside": outside,
             "learning": (data.get("learning") or {}).get("state"), "drifting": drifting}
 
 

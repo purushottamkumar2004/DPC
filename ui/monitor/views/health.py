@@ -9,6 +9,7 @@ from dpc_ui.ui_config import get_config
 from monitor.sources import files, system
 from monitor.sources.dpc_check import get_runner
 from monitor.sources.sitedb import SiteDBError, get_sitedb
+from monitor.state.samples import get_samples
 from monitor.views.common import gather
 
 _mysql_cache = {"at": 0.0, "value": None}
@@ -47,7 +48,7 @@ def _context():
         "supervisor": {"state": (sup.get("payload") or {}).get("status"),
                        "age_s": (snap["now"] - sup["received_at"]) if sup else None},
         "plc": state["plc"], "plc_expected": state["plc_expected"], "cameras": cameras,
-        "now": snap["now"],
+        "now": snap["now"], "disk_spark": get_samples().values("disk"), "gpu_spark": get_samples().values("gpu_temp"),
     }
 
 

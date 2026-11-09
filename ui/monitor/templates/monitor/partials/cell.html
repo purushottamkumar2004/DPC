@@ -1,0 +1,4 @@
+{% load monitor_tags %}<a class="cell" href="{{ c.link|default:'#' }}" data-tip="{{ c.tip }}">
+  <div class="muted">{{ c.label }}</div>
+  <div class="val {{ c.level|lvl }}">{{ c.text }}{% if c.spark %} {% spark c.spark %}{% endif %}</div>
+</a>

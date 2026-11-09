@@ -1,0 +1,4 @@
+<span class="badges" id="badges-{{ cam.side }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if cam.stale_text %}<span class="badge stale-badge">{{ cam.stale_text }}</span>{% endif %}
+  {% if cam.overlay %}<span class="badge" data-tip="Detections and auto-ROI bands drawn by inspection (live_overlay.jpg)">overlay</span>{% endif %}
+</span>

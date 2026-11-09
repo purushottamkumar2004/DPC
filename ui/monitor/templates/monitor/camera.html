@@ -1,0 +1,17 @@
+{% extends "monitor/base.html" %}
+{% block content %}
+{% with title=cam.side|add:" camera" %}{% include "monitor/partials/page_top.html" %}{% endwith %}
+<nav class="tabs">{% for s in sides %}<a href="/cameras/{{ s }}/" class="{% if s == cam.side %}on{% endif %}">{{ s }}</a>{% endfor %}</nav>
+<section class="campage">
+  <div class="card">
+    <a class="img big-img" href="/live/{{ cam.camera_id }}.jpg?w=1920" data-tip="Open the full-size image">
+      <img data-live="/live/{{ cam.camera_id }}.jpg?w=1600" src="/live/{{ cam.camera_id }}.jpg?w=1600" alt="{{ cam.side }} camera, live image">
+      {% include "monitor/partials/cam_badges.html" %}
+      <span class="nolive">No live image from the {{ cam.side }} camera</span>
+    </a>
+  </div>
+  <div hx-get="/part/cameras/{{ cam.side }}/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="innerHTML">
+    {% include "monitor/partials/camera_body.html" %}
+  </div>
+</section>
+{% endblock %}

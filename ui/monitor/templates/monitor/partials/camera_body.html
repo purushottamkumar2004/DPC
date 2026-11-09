@@ -1,0 +1,27 @@
+{% load monitor_tags %}
+<div class="card">
+  <h3>Status</h3>
+  <div class="lines two">
+    {% with c=cam.camera %}{% include "monitor/partials/cell.html" %}{% endwith %}
+    {% with c=cam.fps %}{% include "monitor/partials/cell.html" %}{% endwith %}
+    {% with c=cam.inspection %}{% include "monitor/partials/cell.html" %}{% endwith %}
+    {% with c=cam.model %}{% include "monitor/partials/cell.html" %}{% endwith %}
+  </div>
+  <p class="figs"><span>camera {{ view.camera_id }}</span>
+    {% if view.camera %}<a href="/programs/{{ view.camera.id }}/">camera program and log</a>{% endif %}
+    {% if view.inspection %}<a href="/programs/{{ view.inspection.id }}/">inspection program and log</a>{% endif %}</p>
+</div>
+<div class="card">
+  <h3>Auto-ROI</h3>
+  <div class="lines one">{% with c=cam.roi %}{% include "monitor/partials/cell.html" %}{% endwith %}</div>
+  {% if roi_classes %}
+  <table class="list compact">
+    <thead><tr><th>Class</th><th class="num">inside</th><th class="num">outside</th><th class="num">recent outside</th><th></th></tr></thead>
+    <tbody>{% for r in roi_classes %}
+      <tr><td>{{ r.cls }}</td><td class="num">{{ r.inside }}</td><td class="num">{{ r.outside }}</td>
+        <td class="num">{% if r.ratio is not None %}{{ r.ratio|floatformat:"-3" }}{% else %}—{% endif %}</td>
+        <td>{% if r.drift %}<span class="c-warn" data-tip="Many recent detections are outside the learned area: the camera may have moved.">drift</span>{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table>
+  {% else %}<p class="note">No auto-ROI status from this side's inspection.</p>{% endif %}
+</div>

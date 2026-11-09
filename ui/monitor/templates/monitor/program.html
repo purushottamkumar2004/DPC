@@ -1,15 +1,15 @@
 {% extends "monitor/base.html" %}
 {% load monitor_tags %}
 {% block content %}
-<h1>{{ p.label }} <small class="tech">{{ p.id }}</small></h1>
-<section class="panel lvl-{{ p.text.level }}">
-  <p class="state"><span class="lamp"></span>{{ p.text.sentence }}</p>
+{% with title=p.label %}{% include "monitor/partials/page_top.html" %}{% endwith %}
+<section class="card">
+  <p class="state {{ p.text.level|lvl }}"><span class="lamp lvl-{{ p.text.level }}"></span>{{ p.text.sentence }}</p>
   {% if p.text.action %}<p class="action">{{ p.text.action }}</p>{% endif %}
   {% if p.message %}<p class="tech">Supervisor: {{ p.message }}</p>{% endif %}
-  <p class="figs"><span>state for {{ p.since_s|age }}</span><span>restarts {{ p.restarts|default_if_none:"—" }}</span>
+  <p class="figs"><span>{{ p.id }}</span><span>state for {{ p.since_s|age }}</span><span>restarts {{ p.restarts|default_if_none:"—" }}</span>
     <span>heartbeat {% if p.heartbeat_age_s is not None %}{{ p.heartbeat_age_s|age }} ago{% else %}none{% endif %}</span></p>
   {% if p.last_error %}
-  <h2>Last error</h2>
+  <h3>Last error</h3>
   <p>{{ error_message }}</p>
   <details><summary>Details</summary>
     <p class="tech">{{ p.last_error.type }} at {{ p.last_error.where }} · {{ p.last_error.at }}</p>
@@ -17,8 +17,8 @@
   {% endif %}
   {% if raw_status %}<details><summary>Full status (technical)</summary><pre>{{ raw_status }}</pre></details>{% endif %}
 </section>
-<section class="panel">
-  <h2>Log <small>last 200 lines</small></h2>
+<section class="card">
+  <h3>Log <span class="muted">last 200 lines</span></h3>
   <form class="filters" id="logfilter" onsubmit="return false">
     <label>Contains <input type="search" name="q" value="{{ log_text }}"
       hx-get="/part/programs/{{ p.id }}/log/" hx-trigger="keyup changed delay:400ms" hx-target="#log" hx-include="#logfilter"></label>
