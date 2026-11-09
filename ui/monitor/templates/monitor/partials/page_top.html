@@ -1,0 +1,7 @@
+{# Top bar of every page except the dashboard: title, the same status pill (refreshed), clock. #}
+<header class="card top pagetop">
+  <div><div class="site">{{ title }}</div><div class="muted"><span>{{ site_name }}</span> · <span id="clock">&nbsp;</span></div></div>
+  <span hx-get="/part/banner/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="innerHTML">
+    <a class="pill" href="/alerts/"><span class="dot"></span><span class="pilltext">…</span></a></span>
+  {% block extra %}{% endblock %}
+</header>

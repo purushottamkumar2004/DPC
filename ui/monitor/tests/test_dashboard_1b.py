@@ -150,3 +150,30 @@ class SparklineTests(TestCase):
         self.assertEqual((s.values("fps:CAM1"), s.values("ips:LEFT"), s.values("ms:LEFT"), s.values("gpu_temp"),
                           s.values("disk")), ([4.0], [3.9], [85.0], [70.0], [61.5]))
         set_samples(Samples())
+
+
+class PagesTests(ViewTestBase):
+    def test_camera_page_per_side(self):
+        write_roi(self.root, "LEFT", outside=7, drift=True)
+        r = self.client.get("/cameras/LEFT/")
+        self.assertEqual(r.status_code, 200)
+        html = r.content.decode()
+        self.assertIn("LEFT camera", html)
+        self.assertIn('data-live="/live/CAM1.jpg', html)
+        self.assertIn(">drift<", html)
+        self.assertIn("/programs/inspection_left/", html)
+        self.assertEqual(self.client.get("/part/cameras/right/").status_code, 200)
+        self.assertEqual(self.client.get("/cameras/MIDDLE/").status_code, 404)
+
+    def test_every_page_has_the_top_bar_and_sidebar(self):
+        for url in ("/alerts/", "/programs/", "/programs/plc/", "/health/", "/defects/", "/defects/7/", "/cameras/LEFT/"):
+            html = self.client.get(url).content.decode()
+            self.assertIn('class="card top pagetop"', html, url)
+            self.assertIn('hx-get="/part/banner/"', html, url)
+            self.assertIn('class="sb"', html, url)
+
+    def test_dashboard_alert_links_land_on_their_event(self):
+        self.cache.handle("dpc/worker/plc/event", {"worker_id": "plc", "event": "worker_failed"})
+        html = self.client.get("/alerts/").content.decode()
+        event_id = re.search(r'<li id="e(\d+)"', html).group(1)
+        self.assertIn(f'href="/alerts/#e{event_id}"', self.client.get("/part/dash/").content.decode())

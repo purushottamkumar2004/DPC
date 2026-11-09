@@ -4,7 +4,7 @@ from django.conf import settings
 from django.urls import path, re_path
 from django.views.static import serve
 
-from monitor.views import alerts, dashboard, defects, health, programs
+from monitor.views import alerts, cameras, dashboard, defects, health, programs
 
 urlpatterns = [
     path("", dashboard.page, name="dashboard"),
@@ -14,6 +14,9 @@ urlpatterns = [
     path("part/tiles/", dashboard.tiles, name="part-tiles"),
     path("part/recent-defects/", dashboard.recent_defects, name="part-recent-defects"),
     path("live/<str:camera_id>.jpg", dashboard.live_image, name="live-image"),
+
+    path("cameras/<str:side>/", cameras.page, name="camera"),
+    path("part/cameras/<str:side>/", cameras.part, name="part-camera"),
 
     path("alerts/", alerts.page, name="alerts"),
     path("part/alerts/", alerts.part, name="part-alerts"),

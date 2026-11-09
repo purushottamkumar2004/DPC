@@ -1,22 +1,23 @@
-<section class="panel">
-  <h2>Now</h2>
-  {% if not problems %}<p class="note lvl-ok"><span class="lamp"></span>Nothing is wrong right now.</p>{% endif %}
-  <ul class="problems">
+<section class="card">
+  <h3>Now</h3>
+  <div class="rows">
   {% for p in problems %}
-    <li class="lvl-{{ p.level }}"><span class="lamp"></span>
-      <div><p>{{ p.sentence }}</p>{% if p.action %}<p class="action">{{ p.action }}</p>{% endif %}</div>
-      {% if p.link %}<a href="{{ p.link }}">more</a>{% endif %}</li>
+    <a class="row" href="{{ p.link|default:'#' }}" data-tip="{{ p.action|default:p.sentence }}">
+      <span class="{% if p.level == 'error' %}c-err{% else %}c-warn{% endif %}"><svg class="ico sm"><use href="#i-{% if p.level == 'error' %}circle-x{% else %}triangle-alert{% endif %}"/></svg> {{ p.sentence }}</span>
+      <span class="muted">now</span></a>
+  {% empty %}
+    <div class="row"><span class="c-ok"><svg class="ico sm"><use href="#i-circle-check"/></svg> Nothing is wrong right now.</span><span></span></div>
   {% endfor %}
-  </ul>
+  </div>
 </section>
-<section class="panel">
-  <h2>History <small>newest first</small></h2>
+<section class="card">
+  <h3>History <span class="muted">newest first</span></h3>
   {% if not page.object_list %}<p class="note">No events stored yet.</p>{% endif %}
   <ul class="events">
   {% for e in page.object_list %}
-    <li class="lvl-{{ e.severity }}">
-      <span class="when num">{{ e.received_at|date:"d M H:i:s" }}</span>
-      <span class="lamp"></span>
+    <li id="e{{ e.id }}" class="lvl-{{ e.severity }}">
+      <span class="muted">{{ e.received_at|date:"d M H:i:s" }}</span>
+      <span class="{% if e.severity == 'error' %}c-err{% elif e.severity == 'warning' %}c-warn{% else %}c-ok{% endif %}"><svg class="ico sm"><use href="#i-{% if e.severity == 'error' %}circle-x{% elif e.severity == 'warning' %}triangle-alert{% else %}info{% endif %}"/></svg></span>
       <div class="what"><p>{{ e.message }}</p>{% if e.action %}<p class="action">{{ e.action }}</p>{% endif %}
         <details><summary>Details</summary>
           <p class="tech">{{ e.source }} · {{ e.name }} · {{ e.topic }}</p>

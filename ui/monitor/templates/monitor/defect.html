@@ -1,10 +1,12 @@
 {% extends "monitor/base.html" %}
 {% load monitor_tags %}
 {% block content %}
-<p><a href="/defects/">← all defects</a></p>
+{% with title="Defect" %}{% include "monitor/partials/page_top.html" %}{% endwith %}
+<section class="card">
+<p><a class="muted" href="/defects/">← all defects</a></p>
 {% if error %}<p class="note lvl-warning">{{ error }}</p>
 {% else %}
-<h1>{{ row.defect_type|type_word }} · {{ row.defect_side|side_word }} · wheel {{ row.wheel_no }}</h1>
+<h3>{{ row.defect_type|type_word }} · {{ row.defect_side|side_word }} · wheel {{ row.wheel_no }}</h3>
 <p class="figs"><span>{{ row.create_datetime|date:"d M Y H:i:s" }}</span>
   <span>box x {{ row.xmin }}–{{ row.xmax }}, y {{ row.ymin }}–{{ row.ymax }}</span>
   <span>mail {% if row.is_alert_sent == 1 %}sent{% elif row.is_alert_sent == 2 %}not sent (duplicate, too old or held){% else %}waiting{% endif %}</span></p>
@@ -14,4 +16,5 @@
 </figure>
 <details><summary>Details</summary><p class="tech">ID {{ row.ID }} · {{ row.view_defect }}</p></details>
 {% endif %}
+</section>
 {% endblock %}

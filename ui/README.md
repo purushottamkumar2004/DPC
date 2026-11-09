@@ -3,12 +3,36 @@
 The monitoring and (from UI-2) control screen of a DPC site (D-095). A Django application on
 **127.0.0.1 only**, opened in a full-screen browser on the same machine. It uses no internet, no CDN
 and no web fonts: htmx and every style are bundled in `static/`.
-**Stage UI-1 (this version): read-only monitoring.** No login (developer, 2026-11-06; proposed D-095 amendment).
+**Stage UI-1 + UI-1b (this version): read-only monitoring, D-098 style.** No login (D-096).
+
+## Look (UI-1b, D-098)
+- Dark theme by default with the D-098 colours; a light toggle (sidebar, bottom) is stored per browser.
+  Colour carries meaning only: green OK, amber attention, red failure, grey off.
+- Dashboard = `docs/ui/dashboard_reference.html`, on one 1920 x 1080 screen with no scrolling:
+  - top bar: site, clock, status pill, "Wheel N of 190";
+  - two camera cards, each with the live image in the camera's own aspect ratio (no black bars) and four
+    tiles: camera, inspection, model, auto-ROI;
+  - device strip: PLC, light, conveyor, disk, GPU, mail;
+  - alerts and last defects side by side.
+- Slim icon sidebar (Lucide 0.460.0, ISC, bundled in `templates/monitor/icons.svg`). Pages of later stages
+  are greyed.
+- Interaction:
+  - every tile, alert and defect links to its detail page; every value has a one-sentence tooltip;
+  - one poll per `refresh_seconds` returns small out-of-band fragments, so values change in place and the
+    images never reload;
+  - new alerts slide in highlighted;
+  - sparklines (camera fps, inspection rate, GPU temperature, disk) are plain inline SVG from the UI's own
+    samples (`monitor/state/samples.py`, every 10 s, last hour, kept in memory only).
+- Live overlay (F60): if `data/state/inspection_<side>/live_overlay.jpg` is younger than 10 s, it is shown
+  instead of `live/IMG_1.jpg`, with an "overlay" badge. A frozen image gets a red "Last image N s old"
+  badge.
+- Camera page per side (`/cameras/<SIDE>/`): large image, programs, rates, auto-ROI per class.
 
 ## Pages
 | URL | Page | Refresh |
 |---|---|---|
-| `/` | Dashboard: overall banner, per side the live image, camera and inspection state; tiles for wheel, PLC, disk, GPU, mail, cleanup; last 10 defects | 2 s (images 1 s) |
+| `/` | Dashboard (D-098 reference layout) | 2 s, one poll (images 1 s) |
+| `/cameras/<SIDE>/` | Camera page: large image, programs, rates, auto-ROI per class | 2 s |
 | `/alerts/` | Alerts and errors: what is wrong **now**, then the stored history, newest first; technical details behind "Details" | 2 s |
 | `/programs/`, `/programs/<id>/` | Every program: state, since, restarts, heartbeat age, last error; last 200 log lines with text and level filters | 2 s / 5 s |
 | `/health/` | Disk, GPU, CPU/RAM, database, MQTT, Supervisor, PLC, cameras; "Run dpc-check" | 2 s |
@@ -25,7 +49,9 @@ and no web fonts: htmx and every style are bundled in `static/`.
 | Live image | `data/frames/<CAM>/live/IMG_1.jpg`, opened read-only, **never deleted or modified** (D-031, F45) |
 | Supervisor online/offline | retained `dpc/supervisor/status` |
 | PLC connected, light, conveyor | retained `dpc/plc/status` |
-| Auto-ROI mode, drift | `data/state/inspection_<side>/roi_status.json` and `roi_drift` events |
+| Auto-ROI mode, drift, removed count | `data/state/inspection_<side>/roi_status.json` (sum of `classes.*.outside`) and `roi_drift` events |
+| Model version | not published yet: shown "—" (request: inspection heartbeat `model {name, version}`) |
+| Conveyor | `dpc/plc/status.conveyor_status`, shown as the raw value (its meaning is not documented) |
 | Disk | used / (used + free) of `paths.data`, graded by `cleanup.disk_percent` (same as cleanup and dpc-check) |
 | GPU | `nvidia-smi --query-gpu=...` (cached 5 s) |
 | CPU, RAM | `/proc` |

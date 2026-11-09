@@ -1,60 +1,66 @@
 {% load monitor_tags %}
 <div class="tiles">
-  <div class="tile lvl-{% if disk.level == 'mail' %}error{% elif disk.level == 'delete' %}warning{% elif disk.ok %}ok{% else %}warning{% endif %}">
-    <h3>Disk</h3>
-    {% if disk.ok %}<p class="big">{{ disk.percent|num:1 }} %</p>
-    <div class="bar"><span style="width: {{ disk.percent|num }}%"></span></div>
+  <div class="tile" data-tip="Data disk of the site; the cleanup deletes old images above its threshold.">
+    <div class="muted">Disk</div>
+    {% if disk.ok %}<div class="big {% if disk.level == 'mail' %}c-err{% elif disk.level == 'delete' %}c-warn{% endif %}">{{ disk.percent|num:1 }} % {% spark disk_spark 80 18 %}</div>
+    <div class="bar"><div style="width: {{ disk.percent|num }}%"></div></div>
     <p>{{ disk.free_gb|num }} GB free of {{ disk.total_gb|num }} GB</p>
     <p class="tech">cleanup {{ disk.thresholds.delete }} % · raw images {{ disk.thresholds.raw_delete }} % · mail {{ disk.thresholds.mail }} % · INF {{ disk.thresholds.inference_delete }} %</p>
-    {% else %}<p>{{ disk.error }}</p>{% endif %}
+    {% else %}<p class="c-warn">{{ disk.error }}</p>{% endif %}
   </div>
-  <div class="tile lvl-{% if gpu.ok %}ok{% else %}warning{% endif %}">
-    <h3>GPU</h3>
+  <div class="tile" data-tip="GPU of the inspection programs (nvidia-smi).">
+    <div class="muted">GPU</div>
     {% if gpu.ok %}{% for g in gpu.gpus %}
-    <p class="big">{{ g.temperature_c|num }} °C</p>
+    <div class="big {% if g.temperature_c >= 85 %}c-err{% elif g.temperature_c >= 75 %}c-warn{% else %}c-ok{% endif %}">{{ g.temperature_c|num }} °C {% spark gpu_spark 80 18 %}</div>
     <p class="figs"><span>load {{ g.load_percent|num }} %</span><span>clock {{ g.clock_mhz|num }} MHz</span></p>
     <p class="figs"><span>memory {{ g.memory_used_mb|num }} / {{ g.memory_total_mb|num }} MB</span></p>
     <p class="tech">{{ g.name }}</p>
-    {% endfor %}{% else %}<p>{{ gpu.error }}</p>{% endif %}
+    {% endfor %}{% else %}<p class="c-warn">{{ gpu.error }}</p>{% endif %}
   </div>
-  <div class="tile lvl-{% if cpu.ok %}ok{% else %}warning{% endif %}">
-    <h3>CPU and memory</h3>
-    {% if cpu.ok %}<p class="big">{{ cpu.cpu_percent|num }} %</p>
+  <div class="tile" data-tip="Processor and memory of this computer.">
+    <div class="muted">CPU and memory</div>
+    {% if cpu.ok %}<div class="big">{{ cpu.cpu_percent|num }} %</div>
     <p class="figs"><span>load {{ cpu.load.0|num:2 }} / {{ cpu.load.1|num:2 }} / {{ cpu.load.2|num:2 }}</span></p>
     <p class="figs"><span>memory {{ cpu.ram_used_percent|num }} % of {{ cpu.ram_total_gb|num:1 }} GB</span></p>
-    {% else %}<p>{{ cpu.error }}</p>{% endif %}
+    {% else %}<p class="c-warn">{{ cpu.error }}</p>{% endif %}
   </div>
-  <div class="tile lvl-{% if mysql.ok %}ok{% else %}error{% endif %}">
-    <h3>Database</h3>
+  <div class="tile" data-tip="The site MySQL database (read only by this screen).">
+    <div class="muted">Database</div>
+    <div class="big {% if mysql.ok %}c-ok{% else %}c-err{% endif %}">{% if mysql.ok %}OK{% else %}Not reachable{% endif %}</div>
     <p>{% if mysql.ok %}The site database answers.{% else %}{{ mysql.error }}{% endif %}</p>
     <p class="tech">MySQL · {{ db_name|default:"(no name configured)" }}</p>
   </div>
-  <div class="tile lvl-{% if mqtt.connected %}ok{% else %}error{% endif %}">
-    <h3>Status service</h3>
-    <p>{% if mqtt.connected %}Connected; last message {{ mqtt.last_message_age_s|age }} ago.{% else %}Not connected; values shown may be old.{% endif %}</p>
+  <div class="tile" data-tip="MQTT broker carrying every program's status to this screen.">
+    <div class="muted">Status service</div>
+    <div class="big {% if mqtt.connected %}c-ok{% else %}c-err{% endif %}">{% if mqtt.connected %}Connected{% else %}Not connected{% endif %}</div>
+    <p>{% if mqtt.connected %}Last message {{ mqtt.last_message_age_s|age }} ago.{% else %}Values shown may be old.{% endif %}</p>
     <p class="tech">MQTT {{ mqtt.host }}:{{ mqtt.port }}</p>
   </div>
-  <div class="tile lvl-{% if supervisor.state == 'online' %}ok{% else %}error{% endif %}">
-    <h3>Supervisor</h3>
+  <a class="tile" href="/programs/" data-tip="The Supervisor starts, watches and restarts every program.">
+    <div class="muted">Supervisor</div>
+    <div class="big {% if supervisor.state == 'online' %}c-ok{% else %}c-err{% endif %}">{% if supervisor.state == 'online' %}Online{% else %}Offline{% endif %}</div>
     <p>{% if supervisor.state == 'online' %}Running; programs are watched.{% elif supervisor.state %}Not running ({{ supervisor.state }}).{% else %}No news from the Supervisor.{% endif %}</p>
     <p class="tech">last sign of life {{ supervisor.age_s|age }} ago</p>
-  </div>
-  <div class="tile lvl-{% if not plc_expected %}off{% elif plc.connected %}ok{% else %}error{% endif %}">
-    <h3>PLC</h3>
-    {% if not plc_expected %}<p>No PLC service on this site.</p>
-    {% elif not plc %}<p>No information from the PLC service yet.</p>
-    {% else %}<p>{% if plc.connected %}The PLC answers.{% else %}The PLC does not answer.{% endif %}</p>
+  </a>
+  <div class="tile" id="plc" data-tip="The PLC switches the conveyor light and the camera cleaning.">
+    <div class="muted">PLC</div>
+    {% if not plc_expected %}<div class="big c-off">None</div><p>No PLC service on this site.</p>
+    {% elif not plc %}<div class="big c-warn">No status</div><p>No information from the PLC service yet.</p>
+    {% else %}<div class="big {% if plc.connected %}c-ok{% else %}c-err{% endif %}">{% if plc.connected %}Connected{% else %}Disconnected{% endif %}</div>
+    <p>{% if plc.connected %}The PLC answers.{% else %}The PLC does not answer.{% endif %}</p>
     <p class="figs"><span>light {{ plc.light_value|default_if_none:"—" }}{% if plc.light_ok is False %} (not confirmed){% endif %}</span>
       <span>conveyor {{ plc.conveyor_status|default_if_none:"—" }}</span></p>
     <p class="tech">last cleaning {{ plc.last_pulse_at|default:"—" }} · automatic cleaning {% if plc.auto_cleaning %}on{% else %}off{% endif %}</p>{% endif %}
   </div>
   {% for c in cameras %}
-  <div class="tile lvl-{% if c.frames.age_s is not None and c.frames.age_s < 10 %}ok{% elif c.ping and c.ping.ok %}warning{% else %}error{% endif %}">
-    <h3>{{ c.side }} camera</h3>
-    <p>{% if c.frames.age_s is not None and c.frames.age_s < 10 %}Delivering images ({{ c.frames.fps|num:1 }} per second).
+  <a class="tile" href="/cameras/{{ c.side }}/" data-tip="Open the {{ c.side }} camera page">
+    <div class="muted">{{ c.side }} camera</div>
+    <div class="big {% if c.frames.age_s is not None and c.frames.age_s < 15 %}c-ok{% elif c.ping and c.ping.ok %}c-warn{% else %}c-err{% endif %}">
+      {% if c.frames.age_s is not None and c.frames.age_s < 15 %}{{ c.frames.fps|num:1 }} fps{% elif c.frames.age_s is not None %}{{ c.frames.age_s|age }} old{% else %}No image{% endif %}</div>
+    <p>{% if c.frames.age_s is not None and c.frames.age_s < 15 %}Delivering images ({{ c.frames.fps|num:1 }} per second).
       {% elif c.frames.age_s is not None %}Newest image is {{ c.frames.age_s|age }} old.{% else %}No image found.{% endif %}</p>
     <p class="figs"><span>network: {% if not c.ip %}no IP configured{% elif not c.ping %}not checked yet{% elif c.ping.ok %}answers{% else %}{{ c.ping.error }}{% endif %}</span></p>
-    <p class="tech">{{ c.id }} · serial {{ c.serial|default:"—" }} · {{ c.ip|default:"" }}</p>
-  </div>
+    <p class="tech">{{ c.id }} · serial {{ c.serial|default:"—" }}{% if c.ip %} · {{ c.ip }}{% endif %}</p>
+  </a>
   {% endfor %}
 </div>
