@@ -3,11 +3,12 @@ camera and inspection programs, rates with sparklines, auto-ROI per class. Exist
 import json
 import os
 
-from django.http import Http404
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_GET
 
 from monitor import dash
+from monitor.sources.detections import get_reader
 from monitor.views.common import gather
 
 
@@ -38,9 +39,43 @@ def _context(side):
             "roi_classes": _roi_classes(state["cfg"].paths["data"], card["side"]), "banner": state["banner"]}
 
 
+def _detections_folder(side):
+    """<data>/state/<inspection worker of this side>/ (F65 writes the pair there)."""
+    state = gather()
+    for s in state["cfg"]["sides"]:
+        if s["side"] == side.upper():
+            return os.path.join(state["cfg"].paths["data"], "state", s["inspection_worker"])
+    raise Http404("unknown side")
+
+
 @require_GET
 def page(request, side):
-    return render(request, "monitor/camera.html", _context(side))
+    context = _context(side)
+    context["tab"] = "detections" if request.GET.get("tab") == "detections" else "live"
+    if context["tab"] == "detections":
+        context["det"] = get_reader().latest(_detections_folder(side))
+    return render(request, "monitor/camera.html", context)
+
+
+@require_GET
+def detections(request, side):
+    """The latest matched pair as JSON for the Detections tab (F66); its image: frame/<seq>.jpg."""
+    data = get_reader().latest(_detections_folder(side))
+    if data.get("available"):
+        data["image"] = f"/cameras/{side.upper()}/frame/{data['seq']}.jpg"
+    response = JsonResponse(data)
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@require_GET
+def frame(request, side, seq):
+    jpeg = get_reader().image(_detections_folder(side), int(seq))
+    if jpeg is None:
+        raise Http404("pair no longer kept")
+    response = HttpResponse(jpeg, content_type="image/jpeg")
+    response["Cache-Control"] = "private, max-age=60"       # a seq never changes
+    return response
 
 
 @require_GET

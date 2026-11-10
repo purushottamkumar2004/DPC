@@ -21,8 +21,34 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "dpc_ui.settings")
 LISTEN_HOST = "127.0.0.1"     # D-095: local only; never 0.0.0.0
 
 
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def setup_logging(cfg):
+    """The UI's own log <logs>/ui.log, rotated at midnight (F64, like the other workers); the
+    console, captured by the Supervisor as logs/workers/ui.log, keeps warnings and errors only."""
+    from logging.handlers import TimedRotatingFileHandler
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+    console = logging.StreamHandler()
+    console.setLevel(logging.WARNING)
+    console.setFormatter(logging.Formatter(LOG_FORMAT))
+    root.addHandler(console)
+    try:
+        os.makedirs(cfg.paths["logs"], exist_ok=True)
+        handler = TimedRotatingFileHandler(os.path.join(cfg.paths["logs"], "ui.log"), when="midnight",
+                                           backupCount=int(cfg["log"].get("backup_count") or 5))
+        handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        root.addHandler(handler)
+    except OSError as e:
+        console.setLevel(logging.INFO)
+        logging.getLogger("dpc.ui").warning("no ui.log (%s): logging to the console only", e)
+
+
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)   # until ui.json is read
     log = logging.getLogger("dpc.ui")
 
     from dpc_ui import ui_config
@@ -32,6 +58,7 @@ def main() -> int:
 
     import django
     django.setup()
+    setup_logging(cfg)          # after django.setup(): Django's LOGGING would replace the handlers
     from django.core.management import call_command
     call_command("migrate", interactive=False, verbosity=0)
 

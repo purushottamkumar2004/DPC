@@ -29,6 +29,8 @@ QUEUE_WARN = 20
 STALE_IMAGE_S = 15      # at ~4 fps the live image is replaced 4 times a second; the Supervisor
                         # restarts a capture only after 60 s stale (workers.yaml), the UI warns earlier
 RANK = {ERROR: 2, WARNING: 1}
+# A process exists in these states, so "since" is its start time (status started_at, F63).
+PROCESS_STATES = ("RUNNING", "STARTING", "UNHEALTHY")
 
 
 @dataclass
@@ -83,7 +85,12 @@ def programs(snapshot: dict, configured: list) -> list:
         entries.append({
             "id": w["id"], "type": wtype, "label": worker_label(w["id"], wtype), "enabled": w["enabled"],
             "status": payload, "value": effective_status(payload), "text": status_text(w["id"], payload),
-            "since_s": (now - cached["since"]) if cached and cached.get("since") else None,
+            # F63: "since" = now - started_at (local ISO, no zone, as the Supervisor writes it) while the
+            # process runs; otherwise how long the current state has lasted. The UI's own state-change
+            # record misses restarts that happen between two status messages, so it is not used for
+            # a running process.
+            "since_s": _since(payload, cached, now),
+            "state_for_s": (now - cached["since"]) if cached and cached.get("since") else None,
             "status_age_s": (now - cached["received_at"]) if cached else None,
             "restarts": (payload or {}).get("restart_count"),
             "last_restart_at": parse_iso((payload or {}).get("last_restart_at")),
@@ -95,6 +102,13 @@ def programs(snapshot: dict, configured: list) -> list:
             "message": mask(str((payload or {}).get("message") or ""))[:200],
         })
     return entries
+
+
+def _since(payload, cached, now):
+    if payload and payload.get("status") in PROCESS_STATES:
+        started = parse_iso(payload.get("started_at"))
+        return max(0.0, now - started) if started else None
+    return (now - cached["since"]) if cached and cached.get("since") else None
 
 
 def program_by_id(progs, worker_id):
@@ -131,6 +145,8 @@ def sides(cfg, progs, meter=None) -> list:
             "frames": meter.reading(cam["id"]) if meter else {"fps": None, "age_s": None},
             "inspection_fps": hb.get("fps"), "queue": hb.get("inf_queue_depth"),
             "last_frame_age_s": hb.get("last_frame_age_s"), "ms_per_image": hb.get("ms_per_image"),
+            "waiting_for_plate": hb.get("waiting_for_plate"),
+            "model": hb.get("model", "absent"),          # R6/F65: {name, version}; null while loading
             "roi": read_roi_status(cfg.paths["data"], side["side"]),
         })
     return result
@@ -147,7 +163,7 @@ def _program_problem(p, now):
         return None
     core = p["type"] in CORE_TYPES
     level = text.level if text.level in (ERROR, WARNING) else WARNING
-    if value in ("WAITING_RESTART", "UNHEALTHY") and core and (p["since_s"] or 0) > SLOW_RESTART_S:
+    if value in ("WAITING_RESTART", "UNHEALTHY") and core and (p["state_for_s"] or 0) > SLOW_RESTART_S:
         level = ERROR
     if value == "STOPPED" and not core and p["type"] == "mail":
         return None                        # mail stopped on purpose is shown on its tile, not as a problem

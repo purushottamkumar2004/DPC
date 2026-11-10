@@ -17,7 +17,7 @@
       <span>{{ cam.side }} <span class="muted">{{ cam.camera_id }}</span></span>
       {% include "monitor/partials/cam_fps.html" %}
     </a>
-    <a class="img" href="{{ cam.link }}" data-tip="Live image of the {{ cam.side }} camera{% if cam.overlay %} with detections drawn by inspection{% endif %}">
+    <a class="img" href="{{ cam.link }}" data-tip="Live image of the {{ cam.side }} camera; open the camera page to see detections">
       <img data-live="/live/{{ cam.camera_id }}.jpg" src="/live/{{ cam.camera_id }}.jpg" alt="{{ cam.side }} camera, live image">
       {% include "monitor/partials/cam_badges.html" %}
       <span class="nolive">No live image from the {{ cam.side }} camera</span>

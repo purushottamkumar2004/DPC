@@ -23,10 +23,19 @@ and no web fonts: htmx and every style are bundled in `static/`.
   - new alerts slide in highlighted;
   - sparklines (camera fps, inspection rate, GPU temperature, disk) are plain inline SVG from the UI's own
     samples (`monitor/state/samples.py`, every 10 s, last hour, kept in memory only).
-- Live overlay (F60): if `data/state/inspection_<side>/live_overlay.jpg` is younger than 10 s, it is shown
-  instead of `live/IMG_1.jpg`, with an "overlay" badge. A frozen image gets a red "Last image N s old"
-  badge.
-- Camera page per side (`/cameras/<SIDE>/`): large image, programs, rates, auto-ROI per class.
+- Dashboard image: the plain `live/IMG_1.jpg` only, read-only; no overlay, boxes or bands (F66). A frozen
+  image gets a red "Last image N s old" badge.
+- Camera page per side (`/cameras/<SIDE>/`) with two tabs:
+  - **Live**: the plain image.
+  - **Detections** (F66): `live_frame.jpg` plus an SVG layer drawn from `live_detections.json`
+    (inspection, F65, in `data/state/<inspection worker>/`).
+    - Class checkboxes start unticked; the choice is kept per browser.
+    - Only ticked classes are drawn, each with its auto-ROI band. Off-path boxes are red: "removed" in
+      filter mode, "would be removed" in observe.
+    - The view refreshes every 3 s.
+    - The image and the boxes are always one pair: the JSON's `frame_mtime_ns` must match the image,
+      and the last matched pairs are kept by `seq`.
+    - Until F65 writes the pair, the tab says "Detections not available yet".
 
 ## Pages
 | URL | Page | Refresh |
@@ -50,7 +59,10 @@ and no web fonts: htmx and every style are bundled in `static/`.
 | Supervisor online/offline | retained `dpc/supervisor/status` |
 | PLC connected, light, conveyor | retained `dpc/plc/status` |
 | Auto-ROI mode, drift, removed count | `data/state/inspection_<side>/roi_status.json` (sum of `classes.*.outside`) and `roi_drift` events |
-| Model version | not published yet: shown "—" (request: inspection heartbeat `model {name, version}`) |
+| Model version | inspection heartbeat `model {name, version}` (R6); null = "Loading"; missing = "—" |
+| ms per image, waiting for plate | inspection heartbeat `ms_per_image`, `waiting_for_plate` (F60) |
+| Programs "Since" | running: now - status `started_at` (F63); otherwise time in the current state |
+| Program log (F64) | the program's own log in `<logs>/`: `log.file_name` from its rendered JSON, else `FrameCapture_<CAM>.log`, `<inspection id>.log`, `cleanup.log`, `mail.log`, `plc.log`, `ui.log`. Tab "Start and crash output" = the Supervisor capture (status `log_file`). Older days = `<name>.YYYY-MM-DD[_HH-MM-SS]` |
 | Conveyor | `dpc/plc/status.conveyor_status`, shown as the raw value (its meaning is not documented) |
 | Disk | used / (used + free) of `paths.data`, graded by `cleanup.disk_percent` (same as cleanup and dpc-check) |
 | GPU | `nvidia-smi --query-gpu=...` (cached 5 s) |
@@ -81,7 +93,8 @@ becomes the program's plain name ("LEFT camera"). The overall banner rule is in 
 
 ## Run
 - **Production:** the Supervisor runs `python3 run_ui.py` (waitress, one process with 8 threads,
-  so there is one MQTT subscriber and one in-memory state). It applies its SQLite migrations at start,
+  so there is one MQTT subscriber and one in-memory state). The UI logs to `<logs>/ui.log`, rotated at
+  midnight; its console, which the Supervisor captures, keeps warnings and errors only. It applies its SQLite migrations at start,
   publishes its heartbeat on `dpc/worker/ui/health` every 10 s and stops on SIGTERM.
 - **Development:** `DPC_WORKER_CONFIG=<ui.json> python3 run_ui.py`, then open http://127.0.0.1:8080.
 - **Tests:** `cd ui && python3 manage.py test monitor` (no broker, MySQL, camera or GPU needed).

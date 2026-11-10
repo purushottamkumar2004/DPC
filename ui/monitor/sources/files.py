@@ -5,9 +5,8 @@
   STATUS F45). FrameCapture replaces it with os.replace, so a read always sees a whole file.
 * frame meter: stats the live file 10 times a second; each new inode/mtime is a new frame.
   Gives frames per second and frame age without a capture heartbeat (request R5).
-* live overlay (F60, D-098): data/state/inspection_<side>/live_overlay.jpg, an annotated copy
-  written by inspection. Shown instead of the plain live image while it is fresh
-  (OVERLAY_MAX_AGE_S); a stale overlay (inspection stopped) falls back to the plain image.
+* F66: the dashboard and the camera page "Live" tab show only this plain image; detections are
+  drawn on demand from the F65 pair (sources/detections.py), never burnt into the live image.
 * log tail: the last lines of a worker's log file, only inside paths.logs.
 * defect image: the `view_defect` path, only inside paths.data, with the box drawn.
 """
@@ -29,7 +28,6 @@ except ImportError:          # the UI still works; images are served unscaled, w
     np = None
 
 LIVE_WIDTH = 960
-OVERLAY_MAX_AGE_S = 10
 _live_cache = {}             # camera_id -> (key, width, jpeg bytes)
 _live_lock = threading.Lock()
 
@@ -64,26 +62,9 @@ def _scaled_jpeg(data: bytes, width: int, box=None, quality=75) -> bytes:
     return encoded.tobytes() if ok else data
 
 
-def overlay_path(data_dir: str, side: str) -> str:
-    return os.path.join(data_dir, "state", f"inspection_{side.lower()}", "live_overlay.jpg")
-
-
-def camera_source(frames_dir: str, data_dir: str, camera_id: str, side: str, now=None):
-    """(path, is_overlay): the fresh overlay if inspection writes one, else the live image."""
-    now = time.time() if now is None else now
-    overlay = overlay_path(data_dir, side) if side else None
-    if overlay:
-        try:
-            if now - os.stat(overlay).st_mtime <= OVERLAY_MAX_AGE_S:
-                return overlay, True
-        except OSError:
-            pass
-    return live_path(frames_dir, camera_id), False
-
-
-def live_image(frames_dir: str, camera_id: str, width: int = LIVE_WIDTH, path: str = None):
-    """Downscaled JPEG bytes of the current live frame (or of `path`), or None. Cached per frame."""
-    path = path or live_path(frames_dir, camera_id)
+def live_image(frames_dir: str, camera_id: str, width: int = LIVE_WIDTH):
+    """Downscaled JPEG bytes of the current live frame, or None. Cached per frame."""
+    path = live_path(frames_dir, camera_id)
     try:
         st = os.stat(path)
     except OSError:
