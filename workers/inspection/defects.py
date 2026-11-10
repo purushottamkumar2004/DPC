@@ -9,7 +9,7 @@ docs/reference/inspection_defect_pattern_checkWheelMissing.py):
        -> otherwise images to REPEATED/<date>/<wheel>/
 
 File names are exactly those of LeftAlgorithm.py L:714-759 / L:1935-1996.
-The SQL text is kept as in LeftAlgorithm.py (f-strings, B14 in INSPECTION.md 11).
+The dedupe SELECT text is kept as in LeftAlgorithm.py (f-string, B14); the INSERT uses parameters (F60).
 """
 
 import datetime
@@ -54,12 +54,15 @@ class DefectStore:
             self.log.error(f"checkIsDefectAlreadyGenerated() Exception is: {e}")
             return False
 
+    INSERT_SQL = ("insert into defects_table(defect_side, defect_type, view_defect, wheel_no, xmin, xmax, ymin, ymax) "
+                  "values(%s, %s, %s, %s, %s, %s, %s, %s)")
+
     def insert(self, defect_type, view_defect, wheel_no, xmin, xmax, ymin, ymax):
-        """L:366-376. Raises on a DB error (the program then exits and is restarted, D-073 D7)."""
-        query = (f"insert into defects_table(defect_side, defect_type, view_defect, wheel_no, xmin, xmax, ymin, ymax) "
-                 f"values('{self.s.defect_side}','{defect_type}','{view_defect}','{wheel_no}', "
-                 f"'{xmin}', '{xmax}', '{ymin}', '{ymax}');")
-        self.cur.execute(query)
+        """L:366-376, with parameters since F60 (the driver quotes the values; a quote in a path or
+        name can no longer break the statement). wheel_no as text (varchar column), as before.
+        Raises on a DB error (the program then exits and is restarted, D-073 D7)."""
+        self.cur.execute(self.INSERT_SQL, (self.s.defect_side, defect_type, view_defect, str(wheel_no),
+                                           xmin, xmax, ymin, ymax))
         self.conn.commit()
 
     def write_live_wheel_count(self, wheel_count):

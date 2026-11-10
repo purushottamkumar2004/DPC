@@ -272,9 +272,18 @@ class DefectStoreTest(Base):
         img = np.zeros((20, 20, 3), np.uint8)
         self.assertEqual(store.record("WheelMissing", 4, (1, 2, 3, 4), img, []), INSERTED)
         insert = cur.queries[-1]
-        self.assertIn("'Right','WheelMissing'", insert)
+        self.assertIn("'Right', 'WheelMissing'", insert)
         boxed = insert.split("'")[5]
         self.assertTrue(os.path.isfile(boxed) and "/DEFECTIVE/RIGHT/" in boxed, boxed)
+
+    def test_insert_uses_parameters(self):
+        """F60: the values travel as parameters; a quote in a value cannot break the statement."""
+        store, cur = self.store()
+        store.insert("Wheel_Skidding", "/x/it's here.jpg", 7, 1, 2, 3, 4)
+        sql, params = cur.calls[-1]
+        self.assertNotIn("Wheel_Skidding", sql)
+        self.assertEqual(sql.count("%s"), 8)
+        self.assertEqual(params, ("Right", "Wheel_Skidding", "/x/it's here.jpg", "7", 1, 2, 3, 4))
 
     def test_duplicate_and_gate_go_to_repeated(self):
         store, cur = self.store(found=True)

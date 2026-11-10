@@ -39,6 +39,7 @@ from check_skidding import SkiddingCheck               # noqa: E402
 from check_wheel_missing import WheelMissingCheck      # noqa: E402
 from defects import DefectStore                        # noqa: E402
 from heartbeat import Heartbeat, LoopStats, code_version   # noqa: E402
+from live_overlay import LiveOverlay                   # noqa: E402
 from last_error import write_last_error                # noqa: E402
 from settings import config_secrets, settings_from_env  # noqa: E402
 from tracking import PlateTracker, WheelCounter        # noqa: E402
@@ -141,6 +142,8 @@ class Inspection:
         # P13 auto-ROI: learns on request, checks (observe) or removes (filter) off-path detections
         self.roi = AutoRoi(settings, logger, events, getattr(package, "name", settings.model_name),
                            getattr(package, "version", ""))
+        self.overlay = LiveOverlay(self.roi.dir, logger)     # F60: data/state/<worker_id>/live_overlay.jpg
+        self._overlay_input = None
         self.wheels = WheelCounter(settings.motion, settings.tracker.new_wheel_jump_px, logger)
         self.plates = PlateTracker(settings.motion, settings.tracker.new_plate_jump_px, logger)
         # D-085: a check that is switched off is not built (None) and not run.
@@ -156,15 +159,29 @@ class Inspection:
         self.wheel_present = []                 # WHEEL_PRESENT_LIST: grows forever (B9, kept)
 
     def process(self, frame_path):
+        """One frame, then (every few seconds) the live overlay for the UI (F60)."""
+        self._overlay_input = None
+        self._process(frame_path)
+        if self._overlay_input is not None:
+            clean, raw = self._overlay_input
+            paths = self.roi.paths
+            if paths is not None and (clean.shape[1], clean.shape[0]) != paths.frame_size:
+                paths = None                     # ROI ignored for another frame size (auto_roi logs it)
+            self.overlay.maybe_write(clean, raw, self.roi.last_outside, paths,
+                                     {"side": self.s.side, "mode": self.s.auto_roi.mode,
+                                      "wheel": self.wheel_counter, "waiting_for_plate": not self.plate_found})
+
+    def _process(self, frame_path):
         image = cv2.imread(frame_path)
         if image is None:
             logger.error(f"Failed to load image: {frame_path}. Skipping...")
             return
         clean = image.copy()                     # skidding gets a frame without boxes
-        by_class = group_by_class(self.detector.detect(image), self.detector.label)
+        raw = group_by_class(self.detector.detect(image), self.detector.label)
         # Before anything uses the detections: learning sees them all; filter mode removes the
         # off-path ones from here on (D-092). observe/off leave by_class unchanged.
-        by_class = self.roi.process(by_class, clean, frame_path)
+        by_class = self.roi.process(raw, clean, frame_path)
+        self._overlay_input = (clean, raw)
         repeated_list = []                       # repeated-defects lookup disabled (L:2340-2341)
 
         for det in by_class.get("wheel_stand", []):
@@ -259,8 +276,10 @@ def run(inspection, settings, stats):
             except OSError as e:
                 logger.warning(f"Failed to remove invalid image: {frame} | {e}")
             continue
+        started = time.perf_counter()
         inspection.process(frame)
-        stats.frame_done()
+        stats.frame_done(ms=(time.perf_counter() - started) * 1000,
+                         waiting_for_plate=not inspection.plate_found)
 
 
 def _where_to_report(settings):

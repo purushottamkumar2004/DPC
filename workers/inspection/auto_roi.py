@@ -420,6 +420,7 @@ class AutoRoi:
         self.previews = sorted(n for n in os.listdir(self.dir) if n.startswith(PREVIEW_PREFIX) and n.endswith(".jpg"))
         self.outside_lines = self._count_outside_lines()
         self.frames = 0
+        self.last_outside = []
         self._load()
 
     # ---- start -------------------------------------------------------------
@@ -535,6 +536,7 @@ class AutoRoi:
 
     # ---- observe / filter -------------------------------------------------------
     def _check(self, by_class, image, frame_path, moving):
+        self.last_outside = []                   # F60: [(class, detection)] of this frame, for the overlay
         if self.cfg.mode == "off" or self.paths is None:
             return by_class
         if (image.shape[1], image.shape[0]) != self.paths.frame_size:
@@ -558,6 +560,7 @@ class AutoRoi:
                 if moving and not self.stationary.stationary(cls, box_of(det)):
                     self._drift(cls, outside)
                 if outside:
+                    self.last_outside.append((cls, det))
                     self._record_outside(cls, det, distance, image, frame_path)
                 if not outside or self.cfg.mode != "filter":
                     keep.append(det)

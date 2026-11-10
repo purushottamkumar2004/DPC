@@ -52,10 +52,17 @@ def frame_name(second, ms=0):
 
 
 class FakeCursor:
+    """Records each statement. With parameters (the INSERT since F60) `queries` gets a rendered copy
+    with every value in single quotes, so tests read the values as before; `calls` keeps the raw
+    (sql, params) pairs."""
+
     def __init__(self, found=False):
-        self.found, self.queries = found, []
+        self.found, self.queries, self.calls = found, [], []
 
     def execute(self, query, params=None):
+        self.calls.append((query.strip(), params))
+        if params is not None:
+            query = query % tuple("'" + str(p) + "'" for p in params)
         self.queries.append(query.strip())
 
     def fetchall(self):
