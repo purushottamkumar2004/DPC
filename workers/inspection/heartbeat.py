@@ -41,6 +41,7 @@ class LoopStats:
         self._frame_times = deque()
         self._frame_ms = deque()               # (time, ms) per processed frame, same window as fps
         self.waiting_for_plate = True          # F60: no inspection until the first plate
+        self.model = None                      # R6: {name, version} once the model is loaded
 
     def tick(self, inf_queue_depth=None):
         self.last_tick = time.monotonic()
@@ -87,6 +88,8 @@ def heartbeat_payload(worker_id, stats: LoopStats, version, config_hash, now=Non
     # F60, appended (D-034 payloads only grow): null until a frame was processed in the window
     payload["ms_per_image"] = stats.ms_per_image()
     payload["waiting_for_plate"] = stats.waiting_for_plate
+    # R6, appended: the running model; null while it is still loading
+    payload["model"] = stats.model
     return payload
 
 

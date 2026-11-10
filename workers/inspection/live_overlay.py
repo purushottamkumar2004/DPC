@@ -1,4 +1,4 @@
-"""Live overlay for the UI (STATUS F60, D-098 item 6).
+"""Live overlay for the UI (STATUS F60, D-098 item 6) and the live frame + detections pair (F65).
 
 Every OVERLAY_INTERVAL_S seconds inspection writes `<root>/data/state/<worker_id>/live_overlay.jpg`
 (atomic): the frame it just processed, downscaled to OVERLAY_WIDTH, with
@@ -6,6 +6,16 @@ Every OVERLAY_INTERVAL_S seconds inspection writes `<root>/data/state/<worker_id
   - the auto-ROI band (top and bottom line) of each class present in the frame,
   - off-path detections in red: removed in `filter` mode, only marked in `observe` mode,
   - a small legend: side, wheel number, auto-ROI mode, counts, waiting for plate, time.
+F65: at the same moment, as a matching pair, so the UI can draw only the classes a person selects:
+  live_frame.jpg        the same frame downscaled to OVERLAY_WIDTH, no drawing
+  live_detections.json  {frame, time, seq, size [w, h] of live_frame.jpg, frame_mtime_ns,
+                         boxes [{class, box [x1, y1, x2, y2] in live_frame pixels, score, off_path}],
+                         bands {class: [[x, y_min, y_max], ...] in live_frame pixels}, auto_roi_mode}
+  Boxes are the detections BEFORE auto-ROI filtering; off_path marks the ones filter mode removes.
+  Bands: every learned class over the full width (D-094), when a roi.json for this frame size exists.
+  Order: live_frame.jpg is replaced first, live_detections.json last (each atomically). The JSON
+  holds the image file's mtime_ns: a reader that sees a different mtime on live_frame.jpg has caught
+  the next pair halfway and simply reads again.
 Read-only for inspection: it draws on a copy and never changes a detection or a defect. Any error
 is logged and skipped; inspection continues.
 """
@@ -17,9 +27,10 @@ import time
 import cv2
 import numpy as np
 
-from auto_roi import atomic_write_jpg
+from auto_roi import atomic_write_jpg, atomic_write_json
 
 OVERLAY_FILE = "live_overlay.jpg"
+FRAME_FILE, DETECTIONS_FILE = "live_frame.jpg", "live_detections.json"      # F65
 OVERLAY_INTERVAL_S = 3.0          # "every few seconds" (F60); the UI refreshes the image on its own
 OVERLAY_WIDTH = 960               # px; height keeps the camera's aspect ratio
 RED = (60, 60, 240)               # off-path, BGR (D-098 red family)
@@ -87,9 +98,37 @@ def draw_overlay(image, raw_by_class, outside, roi_paths, info):
     return out
 
 
+def downscale(image):
+    h, w = image.shape[:2]
+    scale = OVERLAY_WIDTH / w
+    return cv2.resize(image, (OVERLAY_WIDTH, max(1, int(round(h * scale)))), interpolation=cv2.INTER_AREA), scale
+
+
+def live_detections(raw_by_class, outside, roi_paths, full_size, small_size, info):
+    """The F65 JSON content (without frame_mtime_ns / seq). full_size, small_size: (w, h)."""
+    sx, sy = small_size[0] / full_size[0], small_size[1] / full_size[1]
+    off_ids = {id(det) for _, det in outside}
+    boxes = []
+    for cls in sorted(raw_by_class):
+        for det in raw_by_class[cls]:
+            boxes.append({"class": cls,
+                          "box": [round(det[3] * sx, 1), round(det[1] * sy, 1), round(det[4] * sx, 1), round(det[2] * sy, 1)],
+                          "score": round(float(det[0]), 3), "off_path": id(det) in off_ids})
+    bands = {}
+    if roi_paths is not None:
+        for cls in sorted(roi_paths.paths):
+            xs = sorted({0.0, float(full_size[0])} | {float(x) for x in roi_paths.paths[cls][0]})
+            bands[cls] = [[round(x * sx, 1)] + [round(v * sy, 1) for v in roi_paths.band(cls, x)] for x in xs]
+    return {"frame": info.get("frame"), "time": datetime.datetime.now().isoformat(timespec="milliseconds"),
+            "size": list(small_size), "boxes": boxes, "bands": bands, "auto_roi_mode": info.get("mode", "off")}
+
+
 class LiveOverlay:
     def __init__(self, folder, logger, interval_s=OVERLAY_INTERVAL_S, clock=time.monotonic):
         self.path = os.path.join(folder, OVERLAY_FILE)
+        self.frame_path = os.path.join(folder, FRAME_FILE)
+        self.detections_path = os.path.join(folder, DETECTIONS_FILE)
+        self.seq = 0
         self.log, self.interval, self.clock = logger, interval_s, clock
         self.last = None
         os.makedirs(folder, exist_ok=True)
@@ -101,7 +140,18 @@ class LiveOverlay:
         self.last = now
         try:
             atomic_write_jpg(self.path, draw_overlay(image, raw_by_class, outside, roi_paths, info))
+            self.write_pair(image, raw_by_class, outside, roi_paths, info)
             return True
         except Exception:
             self.log.exception("live overlay: not written (inspection continues)")
             return False
+
+    def write_pair(self, image, raw_by_class, outside, roi_paths, info):
+        """F65: live_frame.jpg first, then live_detections.json naming its mtime (module doc)."""
+        small, _ = downscale(image)
+        atomic_write_jpg(self.frame_path, small)
+        self.seq += 1
+        data = live_detections(raw_by_class, outside, roi_paths, (image.shape[1], image.shape[0]),
+                               (small.shape[1], small.shape[0]), info)
+        data.update(seq=self.seq, frame_mtime_ns=os.stat(self.frame_path).st_mtime_ns)
+        atomic_write_json(self.detections_path, data)
