@@ -127,6 +127,7 @@ Rules: INF file name `YYYY_MM_DD_HH_MM_SS_ffffff.jpg`; algorithm consumes the **
 **[PROPOSED]** every path derived from one `site_root`.
 
 ## 5. Database [EXISTING; seed reconciled with the live Tadipatri DB 2026-10-12] (D-043, D-045)
+- **Since F75 (PR #53):** the live wheel number is written as an upsert on `wheel_counter_table` ID 1 (`INSERT ... ON DUPLICATE KEY UPDATE`) by the side with `writes_live_wheel_counter`, so an unseeded DB gets the row on the first write; `ID` must be the primary key.
 - **Since D-084:** `CAMERA_PLC_STATUS.PLC` is written by the PLC service ('True' when the PLC answers, 'False' otherwise).
 - **Since D-083 (P14):** `is_alert_sent` is read and written by `workers/mail/mail_worker.py` (0 pending, 1 sent after confirmation, 2 ignored: duplicate, older than `mail.max_alert_age_hours`, or held by the flood breaker); the old senders are retired at P14-site. Sent journal: `data/state/mail/sent_ids.json` (written only by mail).
 - **Since P7 (D-076):** `wheel_counter_table` row ID 1 is written by the inspection side whose rendered file has `writes_live_wheel_counter: true` (Tadipatri RIGHT). `defects_table.defect_type` gains `Wheel_Skidding`, `WheelMissing`, `Batch_Wheels_Missing` (next to the bolt type); both sides insert rows (`defect_side` Left / Right).
