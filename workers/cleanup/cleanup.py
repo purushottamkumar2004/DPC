@@ -19,6 +19,11 @@ One pass, every `cleanup.interval_seconds`:
        defective  DEFECTIVE/<SIDE>, images/RAW/<SIDE>: per date folder <= defective.days old keep the newest defective.items
   5. one INFO line with the files and MB removed per folder
 
+Heartbeat (F68, D-034, common/heartbeat.py): dpc/worker/cleanup/health every 10 s with the last
+pass: last_pass_at, disk_percent, deleted_files, deleted_mb. healthy = a pass finished within
+3 x interval_seconds (counted from the start until the first pass). Off without an `mqtt` block
+in cleanup.json or without paho-mqtt; cleanup itself never depends on the broker.
+
 Errors inside a pass are logged and the pass goes on (as before). A config error or anything
 that escapes the loop writes <root>/run/cleanup.last_error.json and exits 1; the Supervisor
 restarts the program. SIGTERM / SIGINT: the current pass ends, exit 0.
@@ -32,12 +37,20 @@ import signal
 import sys
 import time
 
-import cleanup_rules as rules
-from cleanup_last_error import write_last_error
-from cleanup_settings import (ConfigError, WORKER_ID, config_path_from_env, load_settings,
-                              root_from_code_location)
-from disk_mail import GraphMailer, daily_report, threshold_alert
-from rotating_log import SizeAndTimeRotatingFileHandler
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(HERE))          # <root>/code
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+import cleanup_rules as rules                                # noqa: E402
+from cleanup_last_error import write_last_error             # noqa: E402
+from cleanup_settings import (ConfigError, WORKER_ID, config_path_from_env,  # noqa: E402
+                              load_settings, root_from_code_location)
+from common.heartbeat import Heartbeat                       # noqa: E402
+from disk_mail import GraphMailer, daily_report, threshold_alert   # noqa: E402
+from rotating_log import SizeAndTimeRotatingFileHandler      # noqa: E402
+
+HEALTHY_PASS_INTERVALS = 3      # healthy = a pass finished within 3 x interval_seconds (F68)
 
 logger = logging.getLogger("cleanup")
 _stop_requested = False
@@ -57,14 +70,28 @@ def disk_used_percent(path, disk_usage=shutil.disk_usage) -> float:
 class Cleaner:
     """One cleanup pass at a time. Clock, disk measure and mailer are injectable for tests."""
 
-    def __init__(self, settings, mailer, disk_usage=shutil.disk_usage, clock=datetime.datetime.now, log=logger):
+    def __init__(self, settings, mailer, disk_usage=shutil.disk_usage, clock=datetime.datetime.now,
+                 log=logger, monotonic=time.monotonic):
         self.s = settings
         self.mailer = mailer
         self.disk_usage = disk_usage
         self.clock = clock
         self.log = log
+        self.monotonic = monotonic
         self.threshold_alert_sent = False
         self.last_daily_report_date = None
+        # Last finished pass, read by the heartbeat thread: replaced as a whole, never edited.
+        self.last_pass = {"last_pass_at": None, "disk_percent": None, "deleted_files": 0, "deleted_mb": 0.0}
+        self.last_pass_finished = monotonic()      # the start counts until the first pass ends
+
+    # ---------- heartbeat (F68) ----------
+    def heartbeat_fields(self) -> dict:
+        return dict(self.last_pass)
+
+    def is_healthy(self) -> bool:
+        """A pass finished within HEALTHY_PASS_INTERVALS x interval_seconds."""
+        limit = HEALTHY_PASS_INTERVALS * self.s.interval_seconds
+        return self.monotonic() - self.last_pass_finished <= limit
 
     # ---------- mails (old check_and_send_daily_report / check_and_send_threshold_alert) ----------
     def check_daily_report(self, used, now):
@@ -132,7 +159,9 @@ class Cleaner:
         return f"Deletion run: {total.files} files {total.bytes / 1e6:.1f} MB removed ({detail})"
 
     def run_once(self):
-        """One pass. Every error inside is logged and the pass ends normally (old behaviour)."""
+        """One pass. Every error inside is logged and the pass ends normally (old behaviour).
+        The pass counts as finished for the heartbeat either way: the loop is turning."""
+        now, used, total = None, None, rules.Removed()
         try:
             now = self.clock()
             try:
@@ -146,11 +175,24 @@ class Cleaner:
             if used > self.s.disk_percent.delete:
                 self.log.info(f"Disk usage is {used:.2f}% (> {self.s.disk_percent.delete}%). "
                               f"Initiating deletion process.")
-                self.log.info(self.summary_line(self.delete(used, now)))
+                removed = self.delete(used, now)
+                for r in removed.values():
+                    total.add(r)
+                self.log.info(self.summary_line(removed))
             else:
                 self.log.info(f"Disk usage is {used:.2f}% (<= {self.s.disk_percent.delete}%). Skipping deletion.")
         except Exception:
             self.log.exception("Error in main run loop")
+        self._record_pass(now, used, total)
+
+    def _record_pass(self, now, used, total):
+        self.last_pass = {
+            "last_pass_at": (now or self.clock()).isoformat(timespec="seconds"),
+            "disk_percent": None if used is None else round(used, 2),
+            "deleted_files": total.files,
+            "deleted_mb": round(total.bytes / 1e6, 1),
+        }
+        self.last_pass_finished = self.monotonic()
 
 
 def setup_logger(settings):
@@ -184,12 +226,13 @@ def main() -> int:
     config_path = config_path_from_env()
     root, worker_id = _where_to_report(config_path)
     secrets = ()
+    heartbeat = None
     try:
         stale = os.path.join(root, "run", f"{worker_id}.last_error.json")
         if os.path.exists(stale):
             os.remove(stale)          # the file always describes the last exit of this program
         settings = load_settings(config_path)
-        root, worker_id, secrets = settings.root, settings.worker_id, settings.mail.secrets()
+        root, worker_id, secrets = settings.root, settings.worker_id, settings.secrets()
         setup_logger(settings)
         for warning in settings.warnings:
             logger.warning(warning)
@@ -200,10 +243,14 @@ def main() -> int:
         signal.signal(signal.SIGTERM, _request_stop)
         signal.signal(signal.SIGINT, _request_stop)
         cleaner = Cleaner(settings, GraphMailer(settings.mail, logger))
+        heartbeat = Heartbeat(worker_id, mqtt=settings.mqtt, extra=cleaner.heartbeat_fields,
+                              healthy=cleaner.is_healthy, logger=logger)
+        heartbeat.start()
         while not _stop_requested:
             cleaner.run_once()
             _sleep(settings.interval_seconds)
         logger.info("Stop requested: exiting.")
+        heartbeat.stop()
         return 0
     except Exception as e:
         if isinstance(e, ConfigError):
@@ -213,6 +260,8 @@ def main() -> int:
         logger.exception(message) if logger.handlers else print(f"{message}: {e}", file=sys.stderr)
         path = write_last_error(root, worker_id, e, secrets)
         print(f"cleanup: {type(e).__name__}, details in {path}", file=sys.stderr)
+        if heartbeat is not None:
+            heartbeat.stop()
         return 1
 
 

@@ -19,6 +19,8 @@ Date folders older than their `days` are never deleted (old behaviour).
 
 Mails (Microsoft Graph, `graph` + `mail` from the JSON): threshold alert once when disk % >= `mail` (re-armed below it); daily reminder at `disk_report_time` (default 09:00) while >= `mail`.
 
+Heartbeat (F68, `common/heartbeat.py`): `dpc/worker/cleanup/health` every 10 s with `last_pass_at`, `disk_percent`, `deleted_files`, `deleted_mb` of the last pass; `healthy` = a pass finished within 3 x `interval_seconds` (from the start until the first pass). Off (one warning) without an `mqtt` block in cleanup.json or without paho-mqtt.
+
 Crash: config error or an error escaping the loop -> `<root>/run/cleanup.last_error.json`, exit 1 (D-073 D7). SIGTERM: exit 0. Log: `<root>/logs/cleanup.log`, 200 MB or midnight rotation, `log.backup_count` days; one `Deletion run:` line per pass with files and MB per folder.
 
 | File | What |
