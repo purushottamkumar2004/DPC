@@ -326,8 +326,10 @@ class LastErrorTests(TempRoot):
         proc = subprocess.Popen([sys.executable, os.path.join(WORKER_DIR, "cleanup.py")], env=env)
         log_file = os.path.join(self.root, "logs", "cleanup.log")
         for _ in range(100):
-            if os.path.exists(log_file) and "Current Disk Usage" in open(log_file).read():
-                break
+            if os.path.exists(log_file):
+                with open(log_file) as f:
+                    if "Current Disk Usage" in f.read():
+                        break
             import time; time.sleep(0.1)
         proc.terminate()
         self.assertEqual(proc.wait(timeout=10), 0)
@@ -336,6 +338,104 @@ class LastErrorTests(TempRoot):
             text = f.read()
         self.assertIn("Started: data", text)
         self.assertIn("disk mail is OFF", text)
+        self.assertIn("Heartbeat off", text)                 # no mqtt block in this JSON
+
+
+# ------------------------------------------------------------------ heartbeat (F68)
+class FakeClock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+class FakeMqttClient:
+    def __init__(self):
+        self.published = []
+
+    def username_pw_set(self, user, password):
+        self.login = (user, password)
+
+    def connect_async(self, host, port, keepalive):
+        pass
+
+    def loop_start(self):
+        pass
+
+    def publish(self, topic, payload, qos=0):
+        self.published.append((topic, json.loads(payload)))
+
+
+class HeartbeatTests(TempRoot):
+    def cleaner_at(self, percent, monotonic):
+        cleaner = self.cleaner(self.settings(), percent)
+        cleaner.monotonic = monotonic
+        cleaner.last_pass_finished = monotonic()
+        return cleaner
+
+    def test_fields_of_a_deletion_pass(self):
+        plate = self.folder("plate")
+        for days in (11, 12):
+            touch(os.path.join(plate, frame_name(NOW - datetime.timedelta(days=days))), size=300_000)
+        cleaner = self.cleaner(self.settings(), 76)
+        self.assertEqual(cleaner.heartbeat_fields()["last_pass_at"], None)
+        cleaner.run_once()
+        self.assertEqual(cleaner.heartbeat_fields(), {"last_pass_at": "2026-10-28T12:00:00", "disk_percent": 76.0,
+                                                      "deleted_files": 2, "deleted_mb": 0.6})
+
+    def test_fields_of_a_pass_without_deletion(self):
+        cleaner = self.cleaner(self.settings(), 50)
+        cleaner.run_once()
+        fields = cleaner.heartbeat_fields()
+        self.assertEqual((fields["disk_percent"], fields["deleted_files"], fields["deleted_mb"]), (50.0, 0, 0.0))
+
+    def test_healthy_means_a_pass_within_three_intervals(self):
+        clock = FakeClock()
+        cleaner = self.cleaner_at(50, clock)                 # interval_seconds 10 -> limit 30 s
+        clock.t += 30
+        self.assertTrue(cleaner.is_healthy())                # from the start until the first pass
+        clock.t += 1
+        self.assertFalse(cleaner.is_healthy())
+        cleaner.run_once()
+        self.assertTrue(cleaner.is_healthy())
+        clock.t += 31
+        self.assertFalse(cleaner.is_healthy())
+
+    def test_a_pass_with_an_error_still_counts_as_finished(self):
+        clock = FakeClock()
+        cleaner = self.cleaner_at(50, clock)
+        cleaner.disk_usage = lambda path: (_ for _ in ()).throw(RuntimeError("boom"))
+        clock.t += 100
+        cleaner.run_once()
+        self.assertTrue(cleaner.is_healthy())
+        self.assertIsNone(cleaner.heartbeat_fields()["disk_percent"])
+
+    def test_payload_on_the_health_topic(self):
+        data = full_json(self.root)
+        data["mqtt"] = {"host": "localhost", "port": 1883, "user": "dpc", "password": FAKE_SECRET}
+        settings = S.load_settings(self.write_json(data))
+        self.assertIn(FAKE_SECRET, settings.secrets())
+        cleaner = self.cleaner(settings, 76)
+        cleaner.run_once()
+        client = FakeMqttClient()
+        hb = C.Heartbeat(settings.worker_id, mqtt=settings.mqtt, version="test",
+                         extra=cleaner.heartbeat_fields, healthy=cleaner.is_healthy,
+                         logger=log, client_factory=lambda worker_id: client)
+        self.assertTrue(hb.publish_now())
+        topic, payload = client.published[0]
+        self.assertEqual(topic, "dpc/worker/cleanup/health")
+        self.assertTrue(payload["healthy"])
+        for key in ("worker_id", "pid", "version", "time", "last_pass_at", "disk_percent",
+                    "deleted_files", "deleted_mb"):
+            self.assertIn(key, payload)
+        self.assertNotIn(FAKE_SECRET, json.dumps(payload))
+
+    def test_wrong_mqtt_type_is_a_config_error(self):
+        data = full_json(self.root)
+        data["mqtt"] = "localhost"
+        with self.assertRaisesRegex(S.ConfigError, "'mqtt'"):
+            S.load_settings(self.write_json(data))
 
 
 if __name__ == "__main__":

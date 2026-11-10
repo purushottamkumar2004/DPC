@@ -7,7 +7,8 @@ Until CONFIG renders cleanup.json (STATUS F29), the program still runs:
   (<root>/code/workers/cleanup, CONTRACTS 4.1); nothing site-specific is hardcoded;
 - every missing key gets a built-in default equal to the Tadipatri value, with ONE warning
   per key (same approach as inspection's F22). The defaults live only in DEFAULTS below;
-- without `graph` and mail addresses the disk mail is off (one warning).
+- without `graph` and mail addresses the disk mail is off (one warning);
+- without `mqtt` the heartbeat is off (common/heartbeat.py says so once, F68).
 A key that is present but has the wrong type stops the program with the key's name.
 """
 
@@ -100,7 +101,13 @@ class Settings:
     report_minute: int
     folders: Dict[str, List[str]]
     mail: MailSettings
+    mqtt: Optional[dict] = None          # {host, port, user, password} for the heartbeat, None = off
     warnings: List[str] = field(default_factory=list)
+
+    def secrets(self):
+        """Values never written to a log or last_error.json."""
+        mqtt_password = (self.mqtt or {}).get("password")
+        return self.mail.secrets() + [mqtt_password]
 
 
 class _Reader:
@@ -193,6 +200,16 @@ def _mail(r: _Reader) -> MailSettings:
                         client_secret=graph["client_secret"])
 
 
+def _mqtt(r: _Reader) -> Optional[dict]:
+    """The rendered `mqtt` block (CONTRACTS 13) or None. No fallback: no broker login is guessed."""
+    mqtt = r.raw("mqtt")
+    if mqtt is None:
+        return None
+    if not isinstance(mqtt, dict):
+        raise ConfigError("'mqtt' must be an object {host, port, user, password}")
+    return mqtt
+
+
 def check_folders(data_dir: str, folders: Dict[str, List[str]]) -> None:
     """Safety (rule 12, P9 item 7): every folder lies inside <root>/data and is never a
     capture-owned folder (live, _tmp, UI). Raises ConfigError otherwise."""
@@ -259,7 +276,7 @@ def load_settings(path: Optional[str]) -> Settings:
         plate_days=r.get("cleanup.plate_days", int),
         defective=KeepLimit(r.get("cleanup.defective.days", int), r.get("cleanup.defective.items", int)),
         disk_percent=disk, report_hour=hour, report_minute=minute,
-        folders=folders, mail=_mail(r),
+        folders=folders, mail=_mail(r), mqtt=_mqtt(r),
     )
     check_folders(data_dir, folders)
     settings.warnings = warnings + r.warnings
