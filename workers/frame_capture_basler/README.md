@@ -38,6 +38,14 @@ Stop the Supervisor's copy first: two processes cannot open the same camera.
   (OK when frames flow, NOK when the camera is lost), otherwise at most every `health_interval_s`.
   Rows are counted as matched, not changed (`CLIENT.FOUND_ROWS`, F7), so "matched no row" really means the
   row is missing. A DB outage is logged and never stops capture. The row must already exist.
+- **Heartbeat** (D-034, `common/heartbeat.py`): every 10 s on `dpc/worker/<worker_id>/health` with
+  `fps` (frames published in the last 10 s), `last_frame_age_s` (null before the first frame) and
+  `camera_connected`; `healthy` = camera connected and a frame younger than 5 s. It needs an `mqtt` block in
+  the rendered file and paho-mqtt; without them it is off (one warning) and capture runs as normal.
+- **Crash report** (F21, `common/last_error.py`): an unexpected error writes
+  `<root>/run/<worker_id>.last_error.json` (type, message, file:line, short traceback, passwords replaced
+  by `***`) and exits 1; a config error writes it too and exits 2. The file of an earlier run is removed
+  at start.
 - Repeating problems are logged at most once per minute, with a repeat count.
 - SIGTERM / Ctrl+C: the current frame is finished, the camera is closed, `_tmp` is left empty.
 

@@ -15,7 +15,16 @@ Robustness:
   - only a grab retrieved in the current loop iteration is ever published;
   - each camera setting is set by feature name, with one log line per setting;
   - SIGTERM/SIGINT finish the current frame and stop cleanly (so _tmp is left empty).
+
+Reporting to the Supervisor:
+  - heartbeat every 10 s on dpc/worker/<worker_id>/health (common/heartbeat.py, D-034) with
+    fps (measured over the last 10 s), last_frame_age_s and camera_connected;
+    healthy = camera connected and a frame younger than 5 s. Off (one warning) when the
+    rendered file has no `mqtt` block or paho-mqtt is not installed: capture never needs it;
+  - an unexpected error writes <root>/run/<worker_id>.last_error.json (common/last_error.py,
+    F21, D-079) before the program exits; the file from an earlier run is removed at start.
 """
+import collections
 import errno
 import json
 import logging
@@ -24,6 +33,7 @@ import re
 import shutil
 import signal
 import sys
+import threading
 import time
 import traceback
 from datetime import datetime
@@ -34,6 +44,13 @@ import pymysql
 from pymysql.constants import CLIENT
 from pypylon import genicam, pylon
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(HERE))       # <root>/code
+sys.path.insert(0, REPO_ROOT)                             # for common.heartbeat, common.last_error
+
+from common.heartbeat import Heartbeat                    # noqa: E402
+from common.last_error import clear_last_error, write_last_error   # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Timing constants. These are the same on every site, so they are not config.
 # ---------------------------------------------------------------------------
@@ -42,6 +59,8 @@ NO_FRAME_REOPEN_S = 15           # no good frame for this long -> treat the came
 REOPEN_RETRY_S = 2               # pause between reopen attempts (keeps recovery well under 30 s)
 LOG_REPEAT_S = 60                # a repeating problem is logged at most once per this period
 DB_CONNECT_TIMEOUT_S = 3         # a DB outage must not stall capture for long
+FPS_WINDOW_S = 10                # the heartbeat's fps counts the frames of the last 10 s
+HEALTHY_MAX_FRAME_AGE_S = 5      # heartbeat healthy = camera connected and a frame younger than this
 
 CONFIG_ENV = "DPC_WORKER_CONFIG"
 DEFAULT_HEALTH_INTERVAL_S = 600  # used when the JSON has no health_interval_s (same rhythm as the old code)
@@ -118,9 +137,11 @@ def load_worker_config(path):
     if not serial:
         raise ValueError("camera.serial is empty")
 
+    mqtt = data.get("mqtt") if isinstance(data.get("mqtt"), dict) else {}
     return {
         "config_path": path,
         "worker_id": _require(data, "worker_id", ""),
+        "root": _require(paths, "root", "paths"),
         # folders (paths.raw_images is not used by capture; inspection moves frames there)
         "logs_dir": _require(paths, "logs", "paths"),
         "live_dir": _require(paths, "live", "paths"),
@@ -144,9 +165,11 @@ def load_worker_config(path):
         "db_user": _require(db, "user", "db"),
         "db_password": _require(db, "password", "db"),
         "health_table": _validated_table_name(_require(db, "health_table", "db")),
-        # optional; not rendered yet (see README)
+        # optional top-level key (rendered from site.yaml capture.health_interval_s)
         "health_interval_s": _validated_health_interval(
             data.get("health_interval_s", DEFAULT_HEALTH_INTERVAL_S)),
+        # only to scrub them out of last_error.json; the heartbeat reads its login from the file
+        "secrets": [v for v in (db.get("password"), mqtt.get("password")) if isinstance(v, str) and v],
     }
 
 
@@ -365,6 +388,73 @@ class HealthReporter:
 
 
 # ===========================================================================
+# What the heartbeat reports (D-034)
+# ===========================================================================
+class FrameStats:
+    """Measured fps, age of the last frame and camera state. The capture loop writes,
+    the heartbeat thread reads, so every access holds the lock."""
+
+    def __init__(self, window_s=FPS_WINDOW_S, clock=time.monotonic):
+        self.window_s = window_s
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._frame_times = collections.deque()   # publish times inside the window
+        self._last_frame = None
+        self._started = clock()
+        self._connected = False
+
+    def frame_published(self):
+        now = self.clock()
+        with self._lock:
+            self._frame_times.append(now)
+            self._last_frame = now
+            self._drop_old(now)
+
+    def set_connected(self, connected):
+        with self._lock:
+            self._connected = bool(connected)
+
+    def _drop_old(self, now):
+        while self._frame_times and now - self._frame_times[0] > self.window_s:
+            self._frame_times.popleft()
+
+    def fps(self):
+        """Frames per second over the last window. Right after start the window is the
+        time since start, so the first heartbeats are not reported too low."""
+        now = self.clock()
+        with self._lock:
+            self._drop_old(now)
+            span = min(self.window_s, now - self._started)
+            return len(self._frame_times) / span if span > 0 else 0.0
+
+    def last_frame_age_s(self):
+        """Seconds since the last published frame; None before the first one."""
+        with self._lock:
+            last = self._last_frame
+        return None if last is None else self.clock() - last
+
+    def camera_connected(self):
+        with self._lock:
+            return self._connected
+
+    def healthy(self):
+        age = self.last_frame_age_s()
+        return self.camera_connected() and age is not None and age < HEALTHY_MAX_FRAME_AGE_S
+
+    def heartbeat_fields(self):
+        age = self.last_frame_age_s()
+        return {"fps": round(self.fps(), 2),
+                "last_frame_age_s": None if age is None else round(age, 1),
+                "camera_connected": self.camera_connected()}
+
+
+def make_heartbeat(config_path, stats, **kwargs):
+    """Heartbeat with the capture's fields; worker_id and MQTT login come from the rendered file."""
+    return Heartbeat.from_rendered_config(config_path, extra=stats.heartbeat_fields,
+                                          healthy=stats.healthy, logger=logger, **kwargs)
+
+
+# ===========================================================================
 # Camera handling
 # ===========================================================================
 def open_camera(serial):
@@ -449,7 +539,8 @@ class BaslerCam:
     STOPPED = "stopped"
     LOST = "lost"
 
-    def __init__(self):
+    def __init__(self, stats=None):
+        self.stats = stats or FrameStats()
         self.serial = cfg["serial"]
         self.rotate_deg = cfg["rotate_deg"]
         self.health = HealthReporter()
@@ -465,6 +556,7 @@ class BaslerCam:
                 camera = open_camera(self.serial)
                 apply_camera_settings(camera)
                 camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+                self.stats.set_connected(True)
                 if was_lost:
                     logger.critical(f"Camera {self.serial} REOPENED after {failed_attempts} "
                                     f"failed attempt(s); grabbing again")
@@ -477,6 +569,7 @@ class BaslerCam:
                 log_throttled("open_failed", logging.ERROR,
                               f"Camera {self.serial} open attempt {failed_attempts} failed: {e}")
             finally:
+                self.stats.set_connected(False)
                 close_camera(camera)
 
             if outcome == self.LOST and not _stop_requested:
@@ -546,8 +639,18 @@ class BaslerCam:
                           f"Publishing a frame failed: {traceback.format_exc()}")
             return
         self.frame_count += 1
+        self.stats.frame_published()
         logger.info(f"Frame {name} published in {int((time.monotonic() - start) * 1000)} ms")
         self.health.report("OK")
+
+
+def where_to_report(config_path):
+    """(<root>, <worker_id>) for last_error.json before the config could be read: both come
+    from the file's place, <root>/config/rendered/<worker_id>.json (CONTRACTS 13)."""
+    rendered = os.path.dirname(os.path.abspath(config_path))
+    if os.path.basename(rendered) == "rendered" and os.path.basename(os.path.dirname(rendered)) == "config":
+        return os.path.dirname(os.path.dirname(rendered)), os.path.splitext(os.path.basename(config_path))[0]
+    return None, None
 
 
 def main():
@@ -556,7 +659,11 @@ def main():
         print(f"FrameCapture_Basler: cannot start: env {CONFIG_ENV} is not set. The Supervisor sets it; "
               f"to run by hand: {CONFIG_ENV}=<root>/config/rendered/frame_capture_cam1.json "
               f"python3 FrameCapture_Basler.py", file=sys.stderr)
-        sys.exit(2)
+        return 2
+
+    root, worker_id = where_to_report(path)
+    if root:
+        clear_last_error(root, worker_id)     # the file always describes this program's last exit
     try:
         cfg.update(load_worker_config(path))
         initializeLogger()
@@ -564,12 +671,29 @@ def main():
         # Exit non-zero so the Supervisor sees a failure; the message names the problem
         # (never a value: the file holds the DB password).
         print(f"FrameCapture_Basler: cannot start: {path}: {e}", file=sys.stderr)
-        sys.exit(2)
+        if root:
+            write_last_error(root, worker_id, e)
+        return 2
 
-    install_signal_handlers()
-    prepare_directories()     # create folders, clear stale _tmp, check filesystem
-    BaslerCam().run()
+    heartbeat = None
+    try:
+        clear_last_error(cfg["root"], cfg["worker_id"])
+        install_signal_handlers()
+        prepare_directories()     # create folders, clear stale _tmp, check filesystem
+        stats = FrameStats()
+        heartbeat = make_heartbeat(path, stats)
+        heartbeat.start()
+        BaslerCam(stats).run()
+        return 0
+    except Exception as exc:
+        logger.error("Unexpected error, exiting (the Supervisor restarts the capture)", exc_info=True)
+        record = write_last_error(cfg["root"], cfg["worker_id"], exc, secrets=cfg["secrets"])
+        print(f"FrameCapture_Basler stopped: {type(exc).__name__}: details in {record}", file=sys.stderr)
+        return 1
+    finally:
+        if heartbeat is not None:
+            heartbeat.stop()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
