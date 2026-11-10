@@ -191,7 +191,7 @@ For every type, in this order:
 
 The mail sender sends every unsent row of any type, so all of them are now mailed. The INSERT uses parameters since F60 (the driver quotes the values); the dedupe SELECT text is unchanged (f-string, B14). Boxes accumulate on the frame when one frame has several defects (B12).
 
-**Live wheel number (D3):** the side with `writes_live_wheel_counter: true` runs `UPDATE wheel_counter_table SET WHEEL_COUNT = %s WHERE ID = 1` whenever its counter changes, including 0 at each plate, as R:2782-2803 and R:3093-3095. Tadipatri: Right.
+**Live wheel number (D3):** the side with `writes_live_wheel_counter: true` writes row ID 1 with `INSERT INTO wheel_counter_table (ID, WHEEL_COUNT) VALUES (1, %s) ON DUPLICATE KEY UPDATE WHEEL_COUNT = VALUES(WHEEL_COUNT)` (F75: an upsert, so a DB without row 1 gets it; before, an `UPDATE ... WHERE ID = 1` changed nothing on Tadipatri's unseeded DB) whenever its counter changes, including 0 at each plate, as R:2782-2803 and R:3093-3095. Tadipatri: Right.
 
 **Daily wheel report (D4, both sides):**
 - For every `wheel` detection, the frame becomes the best image of the previous frame's wheel number (as R:2957-3015) when the wheel centre is inside `tracker.best_image_band_x`, or when the previous best image is gone.
@@ -231,7 +231,7 @@ The mail sender sends every unsent row of any type, so all of them are now maile
 - **New observation, kept:** a frame is deleted as invalid when it is less than 0.03 s old (L:503-526, `is_valid_image`). With the atomic hand-off (D-031) a fresh `INF` link can be that young, so a frame can be lost. It is rare at 4 fps. Fix: skip the frame instead of deleting it; developer decision.
 
 ## 11. Tests
-- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 84 tests.
+- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 87 tests; the 2 real-DB tests of `test_live_counter.py` run only with `DPC_TEST_DB=host:port:user:password` (scratch database `dpc_f75_test`, created and dropped), otherwise they are skipped.
   - Settings from the real renderer: Tadipatri per-side values; a missing key is named.
   - Wheel counter in both directions; plate tracker: one plate crossing = one new plate, on both sides (D-077).
   - D-077 through the real frame flow: a plate crossing the Left camera with a wheel in view gives one reset and no `Batch_Wheels_Missing`; the next plate gives one, with the right count. (With the old B5 rule the same test gives 4 resets and a false restart at wheel 1.)
