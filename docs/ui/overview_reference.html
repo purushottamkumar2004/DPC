@@ -1,0 +1,58 @@
+<!-- REFERENCE LAYOUT for the Level 1 Overview (D-101, ISA-101 level 1). Static, no data, no external files.
+     Data only: no camera images, no defect list. Values are examples. Replaces dashboard_reference.html for the overview. -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>DPC overview reference (D-101)</title>
+<style>
+:root{--bg:#0f1216;--card:#171b21;--line:#2a3038;--row:#232a32;--text:#e6e8eb;--muted:#8b949e;--ok:#4cc38a;--warn:#e3b341;--err:#f0605d;--off:#8b949e}
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,sans-serif}
+.app{display:grid;grid-template-columns:64px 1fr;height:100vh}
+.sb{display:flex;flex-direction:column;align-items:center;gap:22px;padding-top:18px;border-right:0.5px solid var(--line)}
+.sb a{width:40px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--muted);text-decoration:none;font-size:11px}
+.sb a.on{background:#12301f;color:var(--ok)}
+.main{display:grid;grid-template-rows:auto auto 1fr auto;gap:12px;padding:12px 16px;min-width:0;height:100vh}
+.card{background:var(--card);border:0.5px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0}
+.top{display:flex;justify-content:space-between;align-items:center;gap:16px}
+.site{font-size:18px;font-weight:600}.muted{color:var(--muted);font-size:12px}
+.pill{display:inline-flex;align-items:center;gap:8px;padding:5px 14px;border-radius:999px;font-size:14px;background:#12301f;color:var(--ok)}
+.prog{width:300px}.bar{height:8px;background:var(--row);border-radius:4px;margin-top:5px}.bar>div{height:8px;background:var(--ok);border-radius:4px}
+.sides{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.h{display:flex;justify-content:space-between;font-weight:600;margin-bottom:6px}
+.row{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:0.5px solid var(--row)}.row:last-child{border:0}
+.fn{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:6px;background:#12161b;font-size:13px;margin:6px 6px 0 0}
+.dot{width:8px;height:8px;border-radius:50%}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.err{color:var(--err)}.off{color:var(--off)}
+.lower{display:grid;grid-template-columns:1.1fr 1fr;gap:12px;min-height:0}
+.scroll{overflow:auto;min-height:0;max-height:100%}
+.strip{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
+a{color:inherit;text-decoration:none}
+</style></head><body><div class="app">
+<nav class="sb" aria-label="Pages"><a class="on" href="#" title="Overview (level 1)">Over</a><a href="#" title="LEFT side (level 2)">LEFT</a><a href="#" title="RIGHT side (level 2)">RIGHT</a><a href="#" title="Defects">Def</a><a href="#" title="System: programs, logs, health, alert history (levels 3-4)">Sys</a><a href="#" title="Site setup (wizard, later)">Setup</a></nav>
+<main class="main">
+<header class="card top"><div><div class="site">Tadipatri DPC</div><div class="muted">Tue 10 Nov, 14:02:11</div></div>
+<span class="pill">● All systems running</span>
+<div class="prog"><div class="muted">Cycle: wheel 137 of 190 · last plate 11 min ago</div><div class="bar"><div style="width:72%"></div></div></div></header>
+<section class="sides">
+<a class="card" href="#" title="Open the LEFT side page"><div class="h"><span>LEFT side</span><span class="ok">Inspecting</span></div>
+<div class="row"><span class="muted">Camera</span><span class="ok">4.0 fps · frame 0 s</span></div>
+<div class="row"><span class="muted">Inspection</span><span class="ok">85 ms/img · queue 3</span></div>
+<div class="row"><span class="muted">Model</span><span>dpc_maskrcnn_left 2026.10.29</span></div>
+<div class="row"><span class="muted">Auto-ROI</span><span class="ok">Filter · 0 removed in the last hour</span></div>
+<div><span class="fn"><span class="dot" style="background:var(--ok)"></span>Bolt check</span><span class="fn"><span class="dot" style="background:var(--ok)"></span>Skidding</span><span class="fn"><span class="dot" style="background:var(--ok)"></span>Wheel missing</span><span class="fn"><span class="dot" style="background:var(--ok)"></span>Cycle restart</span></div></a>
+<a class="card" href="#" title="Open the RIGHT side page"><div class="h"><span>RIGHT side</span><span class="ok">Inspecting</span></div>
+<div class="row"><span class="muted">Camera</span><span class="ok">4.0 fps · frame 0 s</span></div>
+<div class="row"><span class="muted">Inspection</span><span class="warn">160 ms/img · queue 7</span></div>
+<div class="row"><span class="muted">Model</span><span>dpc_maskrcnn_right 2026.10.29</span></div>
+<div class="row"><span class="muted">Auto-ROI</span><span class="warn">Filter · 116 removed in the last hour</span></div>
+<div><span class="fn"><span class="dot" style="background:var(--ok)"></span>Bolt check</span><span class="fn"><span class="dot" style="background:var(--ok)"></span>Skidding</span><span class="fn"><span class="dot" style="background:var(--off)"></span><span class="off">Wheel missing off</span></span><span class="fn"><span class="dot" style="background:var(--ok)"></span>Cycle restart</span></div></a>
+</section>
+<section class="lower">
+<div class="card scroll"><div class="h"><span>Services</span><span class="muted">7 running · 1 off</span></div>
+<div class="row"><span>Camera LEFT</span><span class="ok">Running · heartbeat 2 s</span></div><div class="row"><span>Camera RIGHT</span><span class="ok">Running · heartbeat 2 s</span></div>
+<div class="row"><span>Inspection LEFT</span><span class="ok">Running · heartbeat 3 s</span></div><div class="row"><span>Inspection RIGHT</span><span class="ok">Running · heartbeat 3 s</span></div>
+<div class="row"><span>Cleanup</span><span class="ok">Running · last pass 8 s ago</span></div><div class="row"><span>PLC service</span><span class="ok">Running · connected</span></div>
+<div class="row"><span>Mail sender</span><span class="off">Switched off</span></div><div class="row"><span>Monitoring screen</span><span class="ok">Running</span></div></div>
+<div class="card scroll"><div class="h"><span>Alerts</span><span class="muted">newest first · scrolls</span></div>
+<div class="row"><span class="warn">▲ GPU 73 °C (warm)</span><span class="muted">13:58</span></div><div class="row"><span class="ok">↻ RIGHT inspection restarted</span><span class="muted">12:40</span></div>
+<div class="row"><span class="err">✕ Camera RIGHT lost, recovered</span><span class="muted">09:05</span></div><div class="row"><span class="off">• Mail switched off</span><span class="muted">yesterday</span></div></div>
+</section>
+<section class="card strip"><div><div class="muted">PLC</div><div class="ok">Connected</div></div><div><div class="muted">Light</div><div class="ok">On</div></div><div><div class="muted">Conveyor</div><div class="ok">Running</div></div><div><div class="muted">Disk</div><div>62 %</div></div><div><div class="muted">GPU</div><div class="warn">73 °C</div></div><div><div class="muted">Database</div><div class="ok">OK</div></div><div><div class="muted">MQTT</div><div class="ok">OK</div></div></section>
+</main></div></body></html>
