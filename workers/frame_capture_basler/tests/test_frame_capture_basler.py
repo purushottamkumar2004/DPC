@@ -1,5 +1,6 @@
 """Tests for FrameCapture_Basler.py (STATUS P6): config from the rendered JSON (CONTRACTS 13),
-camera recovery, frame hand-off, health. A fake pypylon stands in for the camera.
+camera recovery, frame hand-off, health, heartbeat (F61) and last_error (F21).
+A fake pypylon stands in for the camera.
 
 Run from the repo root:
     python3 -m unittest discover -s workers/frame_capture_basler/tests -t . -v
@@ -133,9 +134,7 @@ class Main(Base):
         if env_value is not None:
             os.environ[F.CONFIG_ENV] = env_value
         try:
-            with self.assertRaises(SystemExit) as ctx:
-                F.main()
-            return ctx.exception.code
+            return F.main()
         finally:
             os.environ.pop(F.CONFIG_ENV, None)
             if old is not None:
@@ -181,7 +180,16 @@ class Run(Base):
         self.start(data)
         pylon.reset(["frame"] * 6 + ["timeout", "failed"] + ["frame"] * 2 + ["remove"] + ["frame"] * 5)
         pylon.STATE["on_empty"] = lambda: setattr(F, "_stop_requested", True)
-        F.BaslerCam().run()
+        self.stats = F.FrameStats()
+        self.connected_seen = []
+        set_connected = self.stats.set_connected
+
+        def record(value):
+            if not self.connected_seen or self.connected_seen[-1] != bool(value):
+                self.connected_seen.append(bool(value))
+            set_connected(value)
+        self.stats.set_connected = record
+        F.BaslerCam(self.stats).run()
         frames = os.path.join(self.root, "data", "frames", data["camera"]["id"])
         inf = sorted(os.listdir(os.path.join(frames, "INF")))
         hashes = []
@@ -203,6 +211,8 @@ class Run(Base):
         self.assertEqual(pylon.STATE["opens"], 2)
         self.assertEqual(self.health, ["OK", "NOK", "OK"])
         self.assertNotIn("secret-pw", log)
+        self.assertFalse(self.stats.camera_connected())                     # closed at stop
+        self.assertEqual(self.connected_seen, [True, False, True, False])    # open, lost, reopened, closed
 
     def test_settings_come_from_the_json(self):
         """What the CAM2 exposure check on site proves: the JSON value reaches the camera."""
@@ -261,6 +271,143 @@ class Health(Base):
         finally:
             F.update_health_status = saved
         self.assertEqual(calls, ["OK", "OK", "NOK"])
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+class HeartbeatFields(unittest.TestCase):                                       # F61
+    def setUp(self):
+        self.clock = FakeClock()
+        self.stats = F.FrameStats(clock=self.clock)
+
+    def frames(self, count, every_s):
+        for _ in range(count):
+            self.clock.now += every_s
+            self.stats.frame_published()
+
+    def test_before_the_first_frame(self):
+        self.assertEqual(self.stats.heartbeat_fields(),
+                         {"fps": 0.0, "last_frame_age_s": None, "camera_connected": False})
+        self.stats.set_connected(True)
+        self.assertFalse(self.stats.healthy())          # connected, but no frame yet
+
+    def test_fps_over_the_last_10_s(self):
+        self.stats.set_connected(True)
+        self.frames(80, 0.25)                           # 20 s at 4 fps
+        self.assertAlmostEqual(self.stats.fps(), 4.0, delta=0.11)
+        self.clock.now += 5                             # 5 s without frames: half the window empty
+        self.assertAlmostEqual(self.stats.fps(), 2.0, delta=0.11)
+        self.clock.now += 6
+        self.assertEqual(self.stats.fps(), 0.0)
+
+    def test_first_seconds_are_not_reported_too_low(self):
+        self.frames(8, 0.25)                            # 2 s after start
+        self.assertAlmostEqual(self.stats.fps(), 4.0, delta=0.01)
+
+    def test_healthy_rule(self):
+        self.stats.set_connected(True)
+        self.frames(1, 0.25)
+        self.clock.now += 4.9
+        self.assertTrue(self.stats.healthy())
+        self.assertEqual(self.stats.heartbeat_fields()["last_frame_age_s"], 4.9)
+        self.clock.now += 0.2                           # frame now 5.1 s old
+        self.assertFalse(self.stats.healthy())
+        self.frames(1, 0.0)
+        self.stats.set_connected(False)                 # fresh frame, but the camera was just lost
+        self.assertFalse(self.stats.healthy())
+
+
+class HeartbeatWiring(Base):
+    def test_payload_from_the_rendered_file(self):
+        data = capture_json(self.root)
+        data["mqtt"] = {"host": "localhost", "port": 1883, "user": "dpc", "password": "mqtt-pw"}
+        stats = F.FrameStats()
+        stats.set_connected(True)
+        stats.frame_published()
+        published = []
+
+        class FakeClient:
+            def username_pw_set(self, user, password): published.append(("login", user))
+            def connect_async(self, host, port, keepalive): pass
+            def loop_start(self): pass
+            def loop_stop(self): pass
+            def disconnect(self): pass
+            def publish(self, topic, payload, qos): published.append((topic, json.loads(payload)))
+
+        hb = F.make_heartbeat(self.write(data), stats, version="test",
+                              client_factory=lambda worker_id: FakeClient())
+        self.assertTrue(hb.publish_now())
+        topic, payload = published[-1]
+        self.assertEqual(topic, "dpc/worker/frame_capture_cam1/health")
+        self.assertEqual((payload["worker_id"], payload["healthy"], payload["camera_connected"]),
+                         ("frame_capture_cam1", True, True))
+        self.assertIn("fps", payload)
+        self.assertIn("last_frame_age_s", payload)
+        self.assertNotIn("mqtt-pw", json.dumps(published))
+
+    def test_no_mqtt_block_means_heartbeat_off(self):
+        """Today's capture file has no mqtt block: capture must still run."""
+        hb = F.make_heartbeat(self.write(capture_json(self.root)), F.FrameStats(), version="test")
+        self.assertFalse(hb.start())
+
+
+class LastError(Base):                                                          # F21
+    """The rendered file sits where the Supervisor puts it: <root>/config/rendered/<worker_id>.json."""
+
+    def setUp(self):
+        super().setUp()
+        rendered = os.path.join(self.root, "config", "rendered")
+        os.makedirs(rendered)
+        self.path = os.path.join(rendered, "frame_capture_cam1.json")
+        self.error_file = os.path.join(self.root, "run", "frame_capture_cam1.last_error.json")
+        self._saved = (F.BaslerCam.run, F.make_heartbeat, F.install_signal_handlers)
+        F.install_signal_handlers = lambda: None
+        F.make_heartbeat = lambda path, stats: type("NoHeartbeat", (), {"start": lambda s: False,
+                                                                        "stop": lambda s: None})()
+        os.environ[F.CONFIG_ENV] = self.path
+
+    def tearDown(self):
+        F.BaslerCam.run, F.make_heartbeat, F.install_signal_handlers = self._saved
+        os.environ.pop(F.CONFIG_ENV, None)
+        super().tearDown()
+
+    def test_crash_writes_the_file_without_secrets(self):
+        self.write(capture_json(self.root))
+
+        def crash(cam):
+            raise RuntimeError("DB login refused for password secret-pw")
+        F.BaslerCam.run = crash
+        self.assertEqual(F.main(), 1)
+        with open(self.error_file) as f:
+            record = json.load(f)
+        self.assertEqual(record["type"], "RuntimeError")
+        self.assertIn("in crash", record["where"])
+        self.assertNotIn("secret-pw", json.dumps(record))
+        self.assertIn("***", record["message"])
+        self.assertEqual(os.stat(self.error_file).st_mode & 0o777, 0o600)
+
+    def test_config_error_writes_the_file(self):
+        data = capture_json(self.root)
+        data["camera"]["rotate"] = 45
+        self.write(data)
+        self.assertEqual(F.main(), 2)
+        with open(self.error_file) as f:
+            self.assertIn("camera.rotate", json.load(f)["message"])
+
+    def test_old_file_removed_at_a_clean_start(self):
+        self.write(capture_json(self.root))
+        os.makedirs(os.path.dirname(self.error_file))
+        with open(self.error_file, "w") as f:
+            f.write("{}")
+        F.BaslerCam.run = lambda cam: None
+        self.assertEqual(F.main(), 0)
+        self.assertFalse(os.path.exists(self.error_file))
 
 
 if __name__ == "__main__":
