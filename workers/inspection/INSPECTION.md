@@ -25,6 +25,7 @@ The logic is that of `LeftAlgorithm.py`, the reference (D-069). Changes are only
 | `model_selftest.py` | model self-test before a switch (F47, section 12); read-only, not part of the running program |
 | `auto_roi.py` | auto region of interest: learning on request, path check, observe / filter, out-of-bound list, drift (P13, section 13) |
 | `roi_offline.py` | learns the ROI from saved frames into a chosen folder (P13, section 13); not part of the running program |
+| `live_overlay.py` | annotated preview for the UI every few seconds (F60, section 14) |
 | `tests/` | unit tests and the old-vs-new equivalence test (no GPU needed) |
 
 ## 2. Flow
@@ -81,6 +82,9 @@ flowchart TD
 - **`last_error.json`:** `{at, type, message, where, traceback (last 12 lines)}`. `where` is the deepest line in this program's own code, e.g. `defects.py:62 in insert`, not a line inside pymysql. The DB and MQTT passwords are replaced by `***`. Written atomically.
 - **Heartbeat:** `dpc/worker/<worker_id>/health` every 10 s.
   - Fields: `worker_id`, `healthy`, `pid`, `version` (`git describe`), `config_hash` (first 12 hex of `_generated.sha256`), `fps` (frames processed per second over the last 60 s), `inf_queue_depth`, `last_frame_age_s`.
+  - Appended in F60 (append-only, D-034):
+    - `ms_per_image`: mean time to process one frame, model plus every check, over the last 60 s; null until a frame was processed.
+    - `waiting_for_plate`: true until the first plate after a start, while frames are inferred but not inspected.
   - `healthy` is false when the main loop has not turned for 60 s, for example a hung GPU call. An empty `INF` still turns the loop.
   - The broker comes from the JSON `mqtt` block (F25; `user`/`password` null = no login). A file without the block (rendered before F25), or no paho-mqtt, means the program logs "Heartbeat off" once and runs without a heartbeat. Inspection never depends on the broker (D-034).
 
@@ -184,7 +188,7 @@ For every type, in this order:
 | `WheelMissing` | wheel missing | yes | no, images only | yes (D9) |
 | `Batch_Wheels_Missing` | cycle restart | yes | no, image `RESTART_AT_<n>.jpg` | yes (D9) |
 
-The mail sender sends every unsent row of any type, so all of them are now mailed. SQL text is unchanged (f-strings, B14). Boxes accumulate on the frame when one frame has several defects (B12).
+The mail sender sends every unsent row of any type, so all of them are now mailed. The INSERT uses parameters since F60 (the driver quotes the values); the dedupe SELECT text is unchanged (f-string, B14). Boxes accumulate on the frame when one frame has several defects (B12).
 
 **Live wheel number (D3):** the side with `writes_live_wheel_counter: true` runs `UPDATE wheel_counter_table SET WHEEL_COUNT = %s WHERE ID = 1` whenever its counter changes, including 0 at each plate, as R:2782-2803 and R:3093-3095. Tadipatri: Right.
 
@@ -222,11 +226,11 @@ The mail sender sends every unsent row of any type, so all of them are now maile
   - **R2:** the best-image crash is fixed (D4).
   - **R7/R8:** gone; both sides run the same code.
   - **B5:** fixed by D-077 (P7-fix): the plate tracker follows `motion`.
-- **Kept on purpose** (developer instruction, P7): B2, B3, B4, B6, B7 (`is_reported`, D9 note), B9, B10, B11, B12, B14, B17 (log texts), B19 (each frame decoded twice).
+- **Kept on purpose** (developer instruction, P7): B2, B3, B4, B6, B7 (`is_reported`, D9 note), B9, B10, B11, B12, B14 (dedupe SELECT only; the INSERT uses parameters since F60), B17 (log texts), B19 (each frame decoded twice).
 - **New observation, kept:** a frame is deleted as invalid when it is less than 0.03 s old (L:503-526, `is_valid_image`). With the atomic hand-off (D-031) a fresh `INF` link can be that young, so a frame can be lost. It is rare at 4 fps. Fix: skip the frame instead of deleting it; developer decision.
 
 ## 11. Tests
-- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 74 tests.
+- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 80 tests.
   - Settings from the real renderer: Tadipatri per-side values; a missing key is named.
   - Wheel counter in both directions; plate tracker: one plate crossing = one new plate, on both sides (D-077).
   - D-077 through the real frame flow: a plate crossing the Left camera with a wheel in view gives one reset and no `Batch_Wheels_Missing`; the next plate gives one, with the right count. (With the old B5 rule the same test gives 4 resets and a false restart at wheel 1.)
@@ -349,3 +353,14 @@ On the conveyor every object of a class travels along a fixed path: at a given x
   - The preview band covers the full width.
 - **Drift on moving detections (F55):** off-path detections moving with the chain raise drift once; a stationary off-path object is counted and listed, but never drifts. Without F55 that test fails.
 - **Pair previews (F56):** file names for 2 classes per image and for 1 per image; old previews removed; two distinct colours; lines plus a light fill; a frame showing both classes preferred.
+
+## 14. Live overlay for the UI (F60, D-098 item 6)
+Every 3 s (`live_overlay.OVERLAY_INTERVAL_S`) inspection writes `<root>/data/state/inspection_<side>/live_overlay.jpg`, atomically (temp file, then rename). It is the frame just processed, downscaled to 960 px wide (camera aspect ratio kept), with:
+- **Detection boxes** in their class colour, with the class name. Colours are fixed and clearly different for the main classes (wheel white, bucket_clip yellow, half_bucket_clip orange, nut_bolt magenta, wheel_magnet green, …) and never red.
+- **The auto-ROI band** (top and bottom line) of each class present in the frame, when a `roi.json` for this frame size exists.
+- **Off-path detections in red**, thicker: removed in `filter` mode, only marked in `observe` mode. The legend says which.
+- **A legend:** side, wheel number, auto-ROI mode, time, number of detections and how many off path, and "WAITING FOR PLATE" before the first plate.
+
+The overlay uses the detections before auto-ROI filtering plus the frame's off-path list, drawn on a copy, so it never changes a detection or a defect. Cost: one downscale and a few rectangles every 3 s. Any error is logged and skipped.
+
+Tests (`tests/test_live_overlay.py`, 5): heartbeat fields (null before frames, mean after, append-only order); drawing (red off-path box, class colour box, band line, legend, 960 × 540 output, no red among class colours, main classes distinct); writer interval and atomic file; the real frame flow writes the overlay with the off-path box in red. The parameterised INSERT has its own test in `test_inspection.py`.

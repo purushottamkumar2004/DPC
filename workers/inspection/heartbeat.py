@@ -39,17 +39,32 @@ class LoopStats:
         self.last_frame_done = None          # monotonic time the last frame finished
         self.inf_queue_depth = 0
         self._frame_times = deque()
+        self._frame_ms = deque()               # (time, ms) per processed frame, same window as fps
+        self.waiting_for_plate = True          # F60: no inspection until the first plate
 
     def tick(self, inf_queue_depth=None):
         self.last_tick = time.monotonic()
         if inf_queue_depth is not None:
             self.inf_queue_depth = inf_queue_depth
 
-    def frame_done(self):
+    def frame_done(self, ms=None, waiting_for_plate=None):
         now = time.monotonic()
         self.last_frame_done = now
         self._frame_times.append(now)
+        if ms is not None:
+            self._frame_ms.append((now, ms))
+        if waiting_for_plate is not None:
+            self.waiting_for_plate = waiting_for_plate
         self.tick()
+
+    def ms_per_image(self):
+        """F60: mean time to process one frame (inference and all checks), last FPS_WINDOW_S."""
+        now = time.monotonic()
+        while self._frame_ms and now - self._frame_ms[0][0] > FPS_WINDOW_S:
+            self._frame_ms.popleft()
+        if not self._frame_ms:
+            return None
+        return round(sum(ms for _, ms in self._frame_ms) / len(self._frame_ms), 1)
 
     def fps(self) -> float:
         now = time.monotonic()
@@ -69,6 +84,9 @@ def heartbeat_payload(worker_id, stats: LoopStats, version, config_hash, now=Non
                "inf_queue_depth": stats.inf_queue_depth}
     if stats.last_frame_done is not None:
         payload["last_frame_age_s"] = round(now - stats.last_frame_done, 1)
+    # F60, appended (D-034 payloads only grow): null until a frame was processed in the window
+    payload["ms_per_image"] = stats.ms_per_image()
+    payload["waiting_for_plate"] = stats.waiting_for_plate
     return payload
 
 
