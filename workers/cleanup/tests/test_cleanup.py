@@ -49,7 +49,7 @@ def touch(path, size=10, mtime=None):
 def full_json(root, **cleanup_overrides):
     cams = [{"id": "CAM1", "side": "LEFT"}, {"id": "CAM2", "side": "RIGHT"}]
     cleanup = {"raw_image_hours": 20, "interval_seconds": 10, "repeated": {"days": 20, "items": 3},
-               "plate_days": 10, "defective": {"days": 10, "items": 2},
+               "plate_days": 10, "plate_max_items": 4000, "defective": {"days": 10, "items": 2},
                "disk_percent": {"delete": 75, "raw_delete": 85, "mail": 90, "inference_delete": 95},
                "disk_report_time": "09:00"}
     cleanup.update(cleanup_overrides)
@@ -339,6 +339,98 @@ class LastErrorTests(TempRoot):
         self.assertIn("Started: data", text)
         self.assertIn("disk mail is OFF", text)
         self.assertIn("Heartbeat off", text)                 # no mqtt block in this JSON
+
+
+# ------------------------------------------------------------------ PLATE cap (F72, D-100)
+class PlateCapTests(TempRoot):
+    def plate_frames(self, folder, count, subfolder_every=0):
+        """`count` frames one second apart, newest = NOW; every n-th one in a date subfolder."""
+        paths = []
+        for i in range(count):
+            when = NOW - datetime.timedelta(seconds=count - i)
+            directory = folder
+            if subfolder_every and i % subfolder_every == 0:
+                directory = os.path.join(folder, when.strftime("%Y%m%d"))
+            paths.append(touch(os.path.join(directory, frame_name(when)), size=1))
+        return paths                                   # oldest first
+
+    def existing(self, paths):
+        return [p for p in paths if os.path.exists(p)]
+
+    def test_4100_files_leave_the_newest_4000_below_the_disk_threshold(self):
+        left = self.plate_frames(self.folder("plate", 0), 4100, subfolder_every=7)
+        cleaner = self.cleaner(self.settings(), 10)     # far below delete (75)
+        cleaner.run_once()
+        self.assertEqual(self.existing(left), left[100:])
+        self.assertEqual(cleaner.heartbeat_fields()["deleted_files"], 100)
+
+    def test_order_follows_the_frame_name_not_the_mtime(self):
+        folder = self.folder("plate", 0)
+        paths = self.plate_frames(folder, 4010)
+        for i, path in enumerate(paths):               # mtimes reversed: newest name = oldest mtime
+            os.utime(path, (10_000 - i, 10_000 - i))
+        self.cleaner(self.settings(), 10).run_once()
+        self.assertEqual(self.existing(paths), paths[10:])
+
+    def test_both_sides_are_independent(self):
+        left = self.plate_frames(self.folder("plate", 0), 4100)
+        right = self.plate_frames(self.folder("plate", 1), 3000)
+        self.cleaner(self.settings(), 10).run_once()
+        self.assertEqual(len(self.existing(left)), 4000)
+        self.assertEqual(self.existing(right), right)
+
+    def test_files_without_a_frame_time_are_kept_and_not_counted(self):
+        folder = self.folder("plate", 1)
+        odd = touch(os.path.join(folder, "snapshot.jpg"))
+        other = touch(os.path.join(folder, "notes.txt"))
+        right = self.plate_frames(folder, 4001)
+        self.cleaner(self.settings(), 10).run_once()
+        self.assertEqual(self.existing(right), right[1:])
+        self.assertTrue(os.path.exists(odd) and os.path.exists(other))
+
+    def test_plate_days_rule_still_runs_above_the_threshold(self):
+        folder = self.folder("plate", 0)
+        old = touch(os.path.join(folder, frame_name(NOW - datetime.timedelta(days=11))))
+        young = touch(os.path.join(folder, frame_name(NOW - datetime.timedelta(days=9))))
+        self.cleaner(self.settings(), 10).run_once()   # below: under the cap, nothing goes
+        self.assertTrue(os.path.exists(old))
+        self.cleaner(self.settings(), 76).run_once()
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(young))
+
+    def test_cap_only_touches_plate(self):
+        raw = self.plate_frames(self.folder("raw_images", 0), 4100)
+        magnet = self.plate_frames(os.path.join(self.folder("magnet", 0), "20261028"), 4100)
+        self.cleaner(self.settings(), 10).run_once()
+        self.assertEqual(self.existing(raw), raw)
+        self.assertEqual(self.existing(magnet), magnet)
+
+    def test_missing_key_defaults_to_4000_with_one_warning(self):
+        data = full_json(self.root)
+        del data["cleanup"]["plate_max_items"]
+        s = S.load_settings(self.write_json(data))
+        self.assertEqual(s.plate_max_items, 4000)
+        self.assertEqual(s.warnings, ["cleanup.json: 'cleanup.plate_max_items' missing, using default 4000"])
+
+    def test_out_of_range_is_a_config_error(self):
+        for bad in (99, 1_000_001):
+            with self.assertRaisesRegex(S.ConfigError, "cleanup.plate_max_items"):
+                self.settings(plate_max_items=bad)
+
+    def test_summary_line_logged_below_the_threshold_only_when_the_cap_deleted(self):
+        records = []
+        handler = logging.Handler()
+        handler.emit = lambda record: records.append(record.getMessage())
+        log.addHandler(handler)
+        self.addCleanup(log.removeHandler, handler)
+        log.setLevel(logging.INFO)
+        self.cleaner(self.settings(), 10).run_once()
+        self.assertFalse(any(m.startswith("Deletion run:") for m in records))
+        self.plate_frames(self.folder("plate", 0), 4005)
+        self.cleaner(self.settings(), 10).run_once()
+        lines = [m for m in records if m.startswith("Deletion run:")]
+        self.assertEqual(len(lines), 1)
+        self.assertIn(os.path.join("images", "PLATE", "LEFT") + " 5 files", lines[0])
 
 
 # ------------------------------------------------------------------ heartbeat (F68)

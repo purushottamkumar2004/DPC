@@ -17,7 +17,8 @@ One pass, every `cleanup.interval_seconds`:
        repeated   REPEATED/<SIDE>: per date folder <= repeated.days old keep the newest repeated.items (recursive)
        plate      PLATE/<SIDE>, MAGNET/<SIDE>: frame time older than plate_days
        defective  DEFECTIVE/<SIDE>, images/RAW/<SIDE>: per date folder <= defective.days old keep the newest defective.items
-  5. one INFO line with the files and MB removed per folder
+  5. PLATE cap (D-100, every pass, any disk %): keep the newest plate_max_items per side
+  6. one INFO line with the files and MB removed per folder (when step 4 ran or step 5 deleted)
 
 Heartbeat (F68, D-034, common/heartbeat.py): dpc/worker/cleanup/health every 10 s with the last
 pass: last_pass_at, disk_percent, deleted_files, deleted_mb. healthy = a pass finished within
@@ -147,6 +148,11 @@ class Cleaner:
                                                            now, self.log, recursive=False))
         return removed
 
+    def cap_plate(self) -> dict:
+        """D-100: PLATE/<SIDE> keeps at most plate_max_items files, on every pass. {folder: Removed}"""
+        return {folder: rules.keep_newest_by_frame_time(folder, self.s.plate_max_items, self.log)
+                for folder in self.s.folders["plate"]}
+
     def summary_line(self, removed: dict) -> str:
         total = rules.Removed()
         parts = []
@@ -155,7 +161,7 @@ class Cleaner:
             if r.files:
                 rel = os.path.relpath(folder, self.s.data)
                 parts.append(f"{rel} {r.files} files {r.bytes / 1e6:.1f} MB")
-        detail = "; ".join(parts) if parts else "nothing old enough"
+        detail = "; ".join(parts) if parts else "nothing to delete"
         return f"Deletion run: {total.files} files {total.bytes / 1e6:.1f} MB removed ({detail})"
 
     def run_once(self):
@@ -172,15 +178,21 @@ class Cleaner:
             self.log.info(f"Current Disk Usage: {used:.2f}%")
             self.check_daily_report(used, now)
             self.check_threshold_alert(used, now)
-            if used > self.s.disk_percent.delete:
+            removed = {}
+            above = used > self.s.disk_percent.delete
+            if above:
                 self.log.info(f"Disk usage is {used:.2f}% (> {self.s.disk_percent.delete}%). "
                               f"Initiating deletion process.")
                 removed = self.delete(used, now)
-                for r in removed.values():
-                    total.add(r)
-                self.log.info(self.summary_line(removed))
             else:
                 self.log.info(f"Disk usage is {used:.2f}% (<= {self.s.disk_percent.delete}%). Skipping deletion.")
+            capped = self.cap_plate()
+            for folder, r in capped.items():
+                removed.setdefault(folder, rules.Removed()).add(r)
+            for r in removed.values():
+                total.add(r)
+            if above or any(r.files for r in capped.values()):
+                self.log.info(self.summary_line(removed))
         except Exception:
             self.log.exception("Error in main run loop")
         self._record_pass(now, used, total)

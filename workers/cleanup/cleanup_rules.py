@@ -10,6 +10,8 @@ Old function -> rule here:
   delete_extra_files          -> delete_all_files (INF)
   delete_repeated_defects_dirs-> keep_newest_in_date_folders (recursive)
   delete_defective_defects_dirs-> keep_newest_in_date_folders (top level only)
+New (D-100, F72):
+  PLATE count cap             -> keep_newest_by_frame_time
 """
 
 import datetime
@@ -139,4 +141,35 @@ def keep_newest_in_date_folders(parent, days: int, items: int, now, log, recursi
             continue
         for path in files[:len(files) - items]:
             _remove(path, removed, log)
+    return removed
+
+
+def keep_newest_by_frame_time(folder, max_items: int, log, time_of=frame_time) -> Removed:
+    """D-100: keep at most `max_items` .jpg files in the folder (date subfolders count too) and
+    delete the oldest beyond that, oldest by the time in the frame name. A .jpg whose name has
+    no frame time is neither counted nor deleted; one ERROR line per folder says how many."""
+    removed = Removed()
+    if not os.path.isdir(folder):
+        log.error(f"Directory '{folder}' does not exist.")
+        return removed
+    timed, unnamed = [], 0
+    try:
+        for directory, _, names in os.walk(folder):
+            for name in names:
+                if not name.lower().endswith(".jpg"):
+                    continue
+                try:
+                    timed.append((time_of(name), os.path.join(directory, name)))
+                except (ValueError, IndexError):
+                    unnamed += 1
+    except OSError as e:
+        log.error(f"Error iterating directory '{folder}': {e}")
+        return removed
+    if unnamed:
+        log.error(f"{unnamed} file(s) in '{folder}' have no frame time in their name: kept, not counted")
+    if len(timed) <= max_items:
+        return removed
+    timed.sort()
+    for _, path in timed[:len(timed) - max_items]:
+        _remove(path, removed, log)
     return removed

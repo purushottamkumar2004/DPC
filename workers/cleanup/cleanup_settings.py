@@ -27,6 +27,7 @@ DEFAULTS = {
     "cleanup.repeated.days": 20,
     "cleanup.repeated.items": 200,
     "cleanup.plate_days": 10,
+    "cleanup.plate_max_items": 4000,          # D-100 (F72); rendered by CONFIG in F73
     "cleanup.defective.days": 10,
     "cleanup.defective.items": 200,
     "cleanup.disk_percent.delete": 75,
@@ -37,6 +38,8 @@ DEFAULTS = {
     "log.backup_count": 5,
     "site.name": "DPC site",
 }
+PLATE_MAX_ITEMS_RANGE = (100, 1_000_000)  # D-100 / F73 bounds
+
 # Fallback camera list (CONTRACTS 4.1: CAM1 -> LEFT, CAM2 -> RIGHT).
 DEFAULT_CAMERAS = [{"id": "CAM1", "side": "LEFT"}, {"id": "CAM2", "side": "RIGHT"}]
 
@@ -95,6 +98,7 @@ class Settings:
     interval_seconds: int
     repeated: KeepLimit
     plate_days: int
+    plate_max_items: int
     defective: KeepLimit
     disk_percent: DiskPercent
     report_hour: int
@@ -200,6 +204,14 @@ def _mail(r: _Reader) -> MailSettings:
                         client_secret=graph["client_secret"])
 
 
+def _plate_max_items(r: _Reader) -> int:
+    value = r.get("cleanup.plate_max_items", int)
+    low, high = PLATE_MAX_ITEMS_RANGE
+    if not low <= value <= high:
+        raise ConfigError(f"'cleanup.plate_max_items' must be {low}..{high}, got {value}")
+    return value
+
+
 def _mqtt(r: _Reader) -> Optional[dict]:
     """The rendered `mqtt` block (CONTRACTS 13) or None. No fallback: no broker login is guessed."""
     mqtt = r.raw("mqtt")
@@ -274,6 +286,7 @@ def load_settings(path: Optional[str]) -> Settings:
         interval_seconds=r.get("cleanup.interval_seconds", int),
         repeated=KeepLimit(r.get("cleanup.repeated.days", int), r.get("cleanup.repeated.items", int)),
         plate_days=r.get("cleanup.plate_days", int),
+        plate_max_items=_plate_max_items(r),
         defective=KeepLimit(r.get("cleanup.defective.days", int), r.get("cleanup.defective.items", int)),
         disk_percent=disk, report_hour=hour, report_minute=minute,
         folders=folders, mail=_mail(r), mqtt=_mqtt(r),

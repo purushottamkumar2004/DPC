@@ -12,9 +12,10 @@ Tests (repo root, no network, temp folders only): `python3 -m unittest discover 
 | `data/frames/<CAM>/INF` | every file | > `inference_delete` |
 | `data/images/REPEATED/<SIDE>` | per date folder at most `repeated.days` old: keep the newest `repeated.items` files (recursive, by mtime) | > `delete` |
 | `data/images/PLATE/<SIDE>`, `data/images/MAGNET/<SIDE>` | frame-name time older than `plate_days` (MAGNET: time after the first `_`, date subfolders) | > `delete` |
+| `data/images/PLATE/<SIDE>` (D-100) | count cap: keep the newest `plate_max_items` (default 4,000) by frame-name time, date subfolders included; names without a frame time are kept and not counted | every pass, any disk % |
 | `data/images/DEFECTIVE/<SIDE>`, `data/images/RAW/<SIDE>` | per date folder at most `defective.days` old: keep the newest `defective.items` files (top level only) | > `delete` |
 
-Order per pass: raw, INF, repeated, plate/magnet, defective/defect RAW. Never touched: `live`, `_tmp`, `UI`, `ui_live`, `state`, `models`, `wheel_status`, `images/TEMP`; every folder must lie inside `<root>/data` (checked at start).
+Order per pass: raw, INF, repeated, plate/magnet, defective/defect RAW (only above `delete`), then the PLATE cap (always). The `Deletion run:` line is logged when the disk-gated rules ran or the cap deleted something. Never touched: `live`, `_tmp`, `UI`, `ui_live`, `state`, `models`, `wheel_status`, `images/TEMP`; every folder must lie inside `<root>/data` (checked at start).
 Date folders older than their `days` are never deleted (old behaviour).
 
 Mails (Microsoft Graph, `graph` + `mail` from the JSON): threshold alert once when disk % >= `mail` (re-armed below it); daily reminder at `disk_report_time` (default 09:00) while >= `mail`.
