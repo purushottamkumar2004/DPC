@@ -171,8 +171,6 @@ class Tadipatri(Site):                                               # P4 done w
                 continue
             for section in ("graph", "mail", "cleanup", "transfer"):
                 self.assertNotIn(f'"{section}"', text)
-            if worker.startswith("frame_capture"):
-                self.assertNotIn('"mqtt"', text)                     # only inspection gets the broker (D-076)
 
     def test_object_sizes_per_side(self):
         self.data["inspection"]["sides"]["RIGHT"]["object_sizes"]["wheel_w"] = 600
@@ -344,7 +342,7 @@ class F25(Site):                                                     # D-076: mq
         self.render()
         self.assertEqual(self.load("inspection_right")["mqtt"],
                          {"host": "localhost", "port": 1883, "user": "dpc_broker", "password": "s3cret-mqtt-Kp3"})
-        self.assertNotIn("s3cret-mqtt", json.dumps(self.load("frame_capture_cam1")))
+        self.assertEqual(self.load("frame_capture_cam1")["mqtt"]["user"], "dpc_broker")   # every program (F70)
 
     def test_best_image_band_default_and_per_side(self):
         self.render()
@@ -380,7 +378,7 @@ class F25(Site):                                                     # D-076: mq
 
 
 class CleanupFile(Site):                                             # F29, D-082
-    KEYS = {"worker_id", "site", "cameras", "paths", "log", "cleanup", "mail", "graph"}
+    KEYS = {"worker_id", "site", "cameras", "paths", "log", "cleanup", "mail", "graph", "mqtt"}
 
     def cleanup_settings(self):
         """workers/cleanup/cleanup_settings.py, used read-only to prove the file is what it reads."""
@@ -473,7 +471,7 @@ class CleanupFile(Site):                                             # F29, D-08
 
 
 class MailFile(Site):                                                # F36, D-083
-    KEYS = {"worker_id", "site", "paths", "log", "db", "mail", "graph"}
+    KEYS = {"worker_id", "site", "paths", "log", "db", "mail", "graph", "mqtt"}
     MAIL_KEYS = {"sender", "sender_address", "project_name", "to", "cc", "smtp", "report_url",
                  "max_alert_age_hours", "flood"}
 
@@ -805,6 +803,51 @@ class UiFile(Site):                                                  # F58, D-09
         doc = self.load("ui")
         self.assertEqual([c["id"] for c in doc["cameras"]], ["CAM1"])
         self.assertEqual(doc["sides"], [{"side": "LEFT", "camera_id": "CAM1", "inspection_worker": "inspection_left"}])
+
+
+class MqttEverywhereF70(Site):                                       # F70, D-099
+    NO_LOGIN = {"host": "localhost", "port": 1883, "user": None, "password": None}
+
+    def test_every_rendered_worker_file_has_the_mqtt_block(self):   # F70 done when
+        self.render()
+        for worker in WORKERS:
+            mqtt = self.load(worker)["mqtt"]
+            self.assertEqual({k: mqtt[k] for k in ("host", "port", "user", "password")}, self.NO_LOGIN, worker)
+
+    def test_login_reaches_capture_cleanup_and_mail(self):
+        self.data["mqtt"].update(user="dpc_broker", password="s3cret-mqtt-F70")
+        self.write()
+        self.render()
+        login = {"host": "localhost", "port": 1883, "user": "dpc_broker", "password": "s3cret-mqtt-F70"}
+        for worker in ("frame_capture_cam1", "frame_capture_cam2", "cleanup", "mail"):
+            self.assertEqual(self.load(worker)["mqtt"], login, worker)
+
+    def test_the_programs_read_it(self):
+        """Read-only use of each program's own settings reader: the heartbeat finds its login."""
+        self.data["mqtt"].update(user="dpc_broker", password="s3cret-mqtt-F70")
+        self.write()
+        self.render()
+        sys.path.insert(0, CLEANUP_SETTINGS)
+        try:
+            import cleanup_settings
+        finally:
+            sys.path.pop(0)
+        cleanup = cleanup_settings.load_settings(os.path.join(self.rendered, "cleanup.json"))
+        self.assertEqual((cleanup.mqtt["user"], cleanup.warnings), ("dpc_broker", []))
+        sys.path.insert(0, MAIL_WORKER)
+        try:
+            import mail_worker
+        finally:
+            sys.path.pop(0)
+        with open(os.path.join(self.rendered, "mail.json"), encoding="utf-8") as f:
+            mail = mail_worker.build_settings(json.load(f))
+        self.assertEqual((mail.mqtt["user"], mail.warnings), ("dpc_broker", []))
+
+    def test_a_broker_change_rewrites_every_file(self):
+        self.render()
+        self.data["mqtt"]["port"] = 1884
+        self.write()
+        self.assertEqual({w for w, s in self.render().items() if s == "written"}, set(WORKERS))
 
 
 if __name__ == "__main__":
