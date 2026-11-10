@@ -22,6 +22,9 @@ UPDATE; at start any IDs left there (crash between send and UPDATE) are marked 1
 Settings come ONLY from the rendered JSON in env DPC_WORKER_CONFIG
 (<root>/config/rendered/mail.json, CONTRACTS 13). Until CONFIG renders it, safe keys get a
 default with ONE warning each; a recipient, a secret or the DB name is never defaulted.
+Heartbeat (D-034, STATUS F69): common/heartbeat.py publishes dpc/worker/mail/health every 10 s
+with last_poll_at, pending_rows, sent_today and flood_active; healthy = a poll finished within
+3 x POLL_SECONDS. Without an `mqtt` block in mail.json the heartbeat is off (one warning).
 Any unexpected error (config, DB) writes <root>/run/mail.last_error.json (secrets scrubbed)
 and exits 1; the Supervisor restarts the program (D-073 D7, D-079). SIGTERM / SIGINT: exit 0.
 """
@@ -51,10 +54,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(HERE))          # <root>/code
 sys.path.insert(0, REPO_ROOT)
 
+from common.heartbeat import Heartbeat                               # noqa: E402
 from common.last_error import clear_last_error, write_last_error   # noqa: E402
 
 WORKER_ID = "mail"
 POLL_SECONDS = 10                       # as before
+HEALTHY_POLL_AGE_S = 3 * POLL_SECONDS    # heartbeat: healthy while a poll finished this recently
 
 # Dedupe, exactly as the old senders (D-044).
 DEDUPE_HOURS = 24
@@ -109,6 +114,7 @@ class Settings:
     report_url: Optional[str]
     max_alert_age_hours: Optional[float]  # None = off
     flood: Optional[Flood]               # None = off
+    mqtt: Optional[dict] = None          # heartbeat broker {host, port, user, password}; None = off
     graph_tenant_id: str = ""
     graph_client_id: str = ""
     graph_client_secret: str = ""
@@ -118,8 +124,9 @@ class Settings:
     warnings: List[str] = field(default_factory=list)
 
     def secrets(self) -> List[str]:
+        mqtt_password = (self.mqtt or {}).get("password") or ""
         return [self.db_password, self.graph_tenant_id, self.graph_client_id,
-                self.graph_client_secret, self.smtp_password]
+                self.graph_client_secret, self.smtp_password, mqtt_password]
 
 
 _MISSING = object()
@@ -149,7 +156,8 @@ def read_raw_config() -> dict:
 def secrets_in(raw: dict) -> List[str]:
     """Secret values from the raw file, so even a config error never shows them."""
     found = []
-    for section, keys in (("db", ("password",)), ("graph", ("tenant_id", "client_id", "client_secret"))):
+    for section, keys in (("db", ("password",)), ("graph", ("tenant_id", "client_id", "client_secret")),
+                          ("mqtt", ("password",))):
         part = raw.get(section) or {}
         if isinstance(part, dict):
             found += [str(part[k]) for k in keys if part.get(k)]
@@ -222,6 +230,16 @@ def _flood(r: _Reader) -> Optional[Flood]:
     return Flood(limit, hours, internal)
 
 
+def _mqtt(r: _Reader) -> Optional[dict]:
+    """The heartbeat broker, as rendered for the other workers. Missing or null = heartbeat off
+    (common/heartbeat.py says so once); never a config error, mail works without a broker."""
+    block = r.lookup("mqtt")
+    if not isinstance(block, dict):
+        return None
+    return {"host": block.get("host") or "localhost", "port": int(block.get("port") or 1883),
+            "user": block.get("user") or None, "password": block.get("password") or None}
+
+
 def build_settings(raw: dict) -> Settings:
     r = _Reader(raw)
     root = r.get("paths.root", str, root_from_code_location(), shown="<root> from the code location")
@@ -254,6 +272,7 @@ def build_settings(raw: dict) -> Settings:
         report_url=r.get("mail.report_url", str, None, nullable=True, shown="none (link line left out)"),
         max_alert_age_hours=age,
         flood=_flood(r),
+        mqtt=_mqtt(r),
     )
     if sender == "graph":
         s.graph_tenant_id = r.get("graph.tenant_id", str)
@@ -594,7 +613,70 @@ def replay_journal(s: Settings, cur, log):
 
 
 # =================================================================================
-# 7. ONE POLL
+# 7. HEARTBEAT FIELDS (written by the poll loop, read by the heartbeat thread)
+# =================================================================================
+
+class PollStats:
+    """What the heartbeat reports (D-034 extra fields, STATUS F69).
+
+    last_poll_at  local time the last poll finished (None until the first one)
+    pending_rows  rows still unsent (is_alert_sent = 0) after the last poll; > 0 means a send failed
+    sent_today    rows mailed today (from the DB at start, then counted; back to 0 at midnight)
+    flood_active  the flood breaker would send a new defect to the internal list only right now
+    healthy       a poll finished within HEALTHY_POLL_AGE_S (counted from the start before the first)
+    """
+
+    def __init__(self, clock=time.monotonic, today=datetime.date.today):
+        self._clock = clock
+        self._today = today
+        self._started = clock()
+        self._last_poll_mono = None
+        self.last_poll_at = None
+        self.pending_rows = 0
+        self.sent_today = 0
+        self.flood_active = False
+        self._day = today()
+
+    def _roll_day(self):
+        if self._today() != self._day:
+            self._day = self._today()
+            self.sent_today = 0
+
+    def start_day(self, sent_so_far: int):
+        self._day = self._today()
+        self.sent_today = sent_so_far
+
+    def poll_done(self, pending_rows: int, sent_rows: int, flood_active: bool):
+        self._roll_day()
+        self.sent_today += sent_rows
+        self.pending_rows = pending_rows
+        self.flood_active = flood_active
+        self.last_poll_at = datetime.datetime.now().isoformat(timespec="seconds")
+        self._last_poll_mono = self._clock()
+
+    def fields(self) -> dict:
+        self._roll_day()
+        return {"last_poll_at": self.last_poll_at, "pending_rows": self.pending_rows,
+                "sent_today": self.sent_today, "flood_active": self.flood_active}
+
+    def healthy(self) -> bool:
+        since = self._last_poll_mono if self._last_poll_mono is not None else self._started
+        return (self._clock() - since) <= HEALTHY_POLL_AGE_S
+
+
+def flood_active_now(s: Settings, cur, now) -> bool:
+    """True when one more defect would already go to the internal list only (sent >= limit)."""
+    if s.flood is None:
+        return False
+    return count_sent_since(cur, now - datetime.timedelta(hours=s.flood.window_hours)) >= s.flood.max_per_window
+
+
+def midnight(now):
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+# =================================================================================
+# 8. ONE POLL
 # =================================================================================
 
 def describe(rows) -> str:
@@ -604,15 +686,18 @@ def describe(rows) -> str:
     return f"{len(rows)} [{shown}{more}]"
 
 
-def poll_once(s: Settings, cur, log, now=None) -> Sorted:
+def poll_once(s: Settings, cur, log, now=None, stats: Optional[PollStats] = None) -> Sorted:
     now = now or datetime.datetime.now()
     rows = fetch_unsent(cur)
     if not rows:
+        if stats is not None:
+            stats.poll_done(pending_rows=0, sent_rows=0, flood_active=flood_active_now(s, cur, now))
         return Sorted()
     result = sort_rows(rows, now, s.max_alert_age_hours, lambda r: is_db_duplicate(cur, r, log))
     mark_rows(cur, [row_id(r) for r in result.duplicates + result.too_old], STATUS_IGNORED)
 
     parts = []
+    sent_rows = 0
     if result.to_send:
         restricted, already_sent = flood_restricted(s, cur, len(result.to_send), now)
         if send_alert(s, result.to_send, restricted, log):
@@ -620,6 +705,7 @@ def poll_once(s: Settings, cur, log, now=None) -> Sorted:
             write_journal(s, ids)
             mark_rows(cur, ids, STATUS_SENT)
             clear_journal(s)
+            sent_rows = len(ids)
             if restricted:
                 parts.append(f"sent RESTRICTED to {len(s.flood.internal_to)} internal address(es) "
                              f"(flood: {already_sent} in {_number(s.flood.window_hours)} h + "
@@ -634,11 +720,14 @@ def poll_once(s: Settings, cur, log, now=None) -> Sorted:
         parts.append(f"ignored older than {_number(s.max_alert_age_hours)} h {describe(result.too_old)}")
     if parts:
         log.info("poll: " + "; ".join(parts))
+    if stats is not None:
+        pending = len(rows) - len(result.duplicates) - len(result.too_old) - sent_rows
+        stats.poll_done(pending_rows=pending, sent_rows=sent_rows, flood_active=flood_active_now(s, cur, now))
     return result
 
 
 # =================================================================================
-# 8. PROGRAM
+# 9. PROGRAM
 # =================================================================================
 
 _stop = False
@@ -663,21 +752,36 @@ def setup_logging(logs_dir, backup_count) -> logging.Logger:
     return log
 
 
+def start_heartbeat(s: Settings, stats: PollStats, log, **heartbeat_kwargs) -> Heartbeat:
+    """heartbeat_kwargs: for tests only (a fake MQTT client, a short interval)."""
+    heartbeat = Heartbeat(WORKER_ID, mqtt=s.mqtt, extra=stats.fields, healthy=stats.healthy, logger=log,
+                          **heartbeat_kwargs)
+    heartbeat.start()           # off (one warning) without an mqtt block or without paho-mqtt
+    return heartbeat
+
+
 def run(s: Settings, log):
     conn = connect_db(s)
     cur = conn.cursor()
+    stats = PollStats()
+    heartbeat = None
     try:
         replay_journal(s, cur, log)
+        now = datetime.datetime.now()
+        stats.start_day(count_sent_since(cur, midnight(now)))
+        heartbeat = start_heartbeat(s, stats, log)
         log.info(f"mail started: sender {s.sender}, {len(s.to)} + {len(s.cc)} cc addresses, "
                  f"flood breaker {'on' if s.flood else 'off'}, max age "
                  f"{_number(s.max_alert_age_hours) if s.max_alert_age_hours else 'off'} h")
         while not _stop:
-            poll_once(s, cur, log)
+            poll_once(s, cur, log, stats=stats)
             deadline = time.monotonic() + POLL_SECONDS
             while not _stop and time.monotonic() < deadline:
                 time.sleep(0.5)
         log.info("stop signal: mail stopped")
     finally:
+        if heartbeat is not None:
+            heartbeat.stop()
         try:
             cur.close()
             conn.close()
