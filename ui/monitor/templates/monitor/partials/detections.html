@@ -8,11 +8,11 @@
       <input type="checkbox" value="{{ c.name }}"><span class="sw" style="background: {{ c.colour }}"></span>{{ c.name }}</label>
     {% endfor %}
   </div>
-  <p class="note" id="det-message"{% if det.available %} hidden{% endif %}>{{ det.reason|default:"Detections not available yet." }}</p>
+  <p class="note" id="det-message"{% if det.available %} hidden{% endif %}>{{ det.reason }}</p>
   <div class="det-stage img"{% if not det.available %} hidden{% endif %} style="--ar: {{ det.size.0|default:960 }} / {{ det.size.1|default:540 }}">
     <img id="det-img" alt="{{ cam.side }} camera, last inspected frame"{% if det.available %} src="/cameras/{{ cam.side }}/frame/{{ det.seq }}.jpg"{% endif %}>
     <svg id="det-svg" viewBox="0 0 {{ det.size.0|default:960 }} {{ det.size.1|default:540 }}" preserveAspectRatio="none" aria-hidden="true"></svg>
   </div>
-  <div class="det-legend" id="det-legend"></div>
+  <div class="det-legend" id="det-legend">{% if det.available %}<span class="muted">Tick a class to draw it</span>{% endif %}</div>
   <p class="tech" id="det-info"></p>
 </div>

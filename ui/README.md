@@ -37,15 +37,24 @@ and no web fonts: htmx and every style are bundled in `static/`.
       and the last matched pairs are kept by `seq`.
     - Until F65 writes the pair, the tab says "Detections not available yet".
 
-## Pages
-| URL | Page | Refresh |
+## Pages (D-101, after the ISA-101 display hierarchy)
+Sidebar, 6 entries: Overview, LEFT, RIGHT, Defects, System, Setup (greyed: "Site setup wizard: coming").
+
+| URL | Level | Content |
 |---|---|---|
-| `/` | Dashboard (D-098 reference layout) | 2 s, one poll (images 1 s) |
-| `/cameras/<SIDE>/` | Camera page: large image, programs, rates, auto-ROI per class | 2 s |
-| `/alerts/` | Alerts and errors: what is wrong **now**, then the stored history, newest first; technical details behind "Details" | 2 s |
-| `/programs/`, `/programs/<id>/` | Every program: state, since, restarts, heartbeat age, last error; last 200 log lines with text and level filters | 2 s / 5 s |
-| `/health/` | Disk, GPU, CPU/RAM, database, MQTT, Supervisor, PLC, cameras; "Run dpc-check" | 2 s |
-| `/defects/` | Filter by date, side, type, wheel; defect image; CSV export | on request |
+| `/` | 1 Overview | data only, no images, no defect list (`docs/ui/overview_reference.html`); one screen 1920 x 1080 |
+| `/side/LEFT/`, `/side/RIGHT/` | 2 side | header with the side's two programs; image (Live / Detections, whole frame); functions; auto-ROI (counts, previews, out-of-bound crops); model; camera |
+| `/defects/` | | filter, image, CSV |
+| `/system/programs/`, `/system/health/`, `/system/alerts/` | 3-4 System | programs with logs (F63/F64), health with dpc-check, alert history |
+
+Older addresses (`/programs/`, `/alerts/`, `/health/`, `/cameras/<SIDE>/`) still work.
+
+Overview, top to bottom:
+- top bar: site, clock, status pill (worst state in plain words), "Cycle: wheel N of T" with a bar, and the
+  last plate;
+- one card per side: a one-word state, camera, inspection, model and auto-ROI rows, and function chips;
+- Services (every program: state, one key value, heartbeat age) and Alerts (scrolls inside its card);
+- device strip: PLC, light, conveyor, disk, GPU, database, MQTT.
 
 ## Where every value comes from
 | Shown | Source |
@@ -61,6 +70,14 @@ and no web fonts: htmx and every style are bundled in `static/`.
 | Auto-ROI mode, drift, removed count | `data/state/inspection_<side>/roi_status.json` (sum of `classes.*.outside`) and `roi_drift` events |
 | Model version | inspection heartbeat `model {name, version}` (R6); null = "Loading"; missing = "—" |
 | ms per image, waiting for plate | inspection heartbeat `ms_per_image`, `waiting_for_plate` (F60) |
+| Function chips / side functions | `checks` in the rendered `inspection_<side>.json` (bucket_clip = bolt check, skidding, wheel_missing, cycle_restart) |
+| Camera row (overview) | capture heartbeat `fps`, `last_frame_age_s`, `camera_connected` (F61); else measured from `live/IMG_1.jpg` |
+| Removed in the last hour | rise of `roi_status.json` outside counts over the UI's own samples (restarts handled) |
+| Last plate | the UI notes when the live wheel number starts again (no heartbeat field for it yet) |
+| Wheel "no value yet" | `wheel_counter_table` row ID 1 missing or empty; the writer side from `writes_live_wheel_counter` |
+| Side page model | `<models_dir>/<name>/` (installed versions, `current`, `pinned`), read-only |
+| Side page camera | rendered `frame_capture_<camn>.json` `camera` {serial, exposure_us, fps, rotate}, read-only |
+| Auto-ROI images | `roi_preview_*.jpg` listed in `roi_status.json` `roi.previews`, crops listed in `roi_outside.jsonl`; only those names are served |
 | Programs "Since" | running: now - status `started_at` (F63); otherwise time in the current state |
 | Program log (F64) | the program's own log in `<logs>/`: `log.file_name` from its rendered JSON, else `FrameCapture_<CAM>.log`, `<inspection id>.log`, `cleanup.log`, `mail.log`, `plc.log`, `ui.log`. Tab "Start and crash output" = the Supervisor capture (status `log_file`). Older days = `<name>.YYYY-MM-DD[_HH-MM-SS]` |
 | Conveyor | `dpc/plc/status.conveyor_status`, shown as the raw value (its meaning is not documented) |

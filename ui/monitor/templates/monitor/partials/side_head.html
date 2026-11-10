@@ -1,0 +1,10 @@
+{% load monitor_tags %}<header class="card top sidehead" id="side-head"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div><div class="site">{{ s.side }} side <span class="{{ s.level|lvl }} stateword">{{ s.state }}</span></div><div class="muted"><span>{{ site_name }}</span> · <span class="clock-slot">{% now "D j M, H:i" %}</span></div></div>
+  <div class="progs">{% for x in s.programs %}
+    <a class="prow" href="/system/programs/{{ x.p.id }}/" data-tip="{{ x.p.text.sentence }}{% if x.p.text.action %} {{ x.p.text.action }}{% endif %}">
+      <span class="lamp lvl-{{ x.p.text.level }}"></span><span>{{ x.p.label }}</span>
+      <span class="muted">{{ x.p.value|title }}{% if x.p.heartbeat_age_s is not None %} · heartbeat {{ x.p.heartbeat_age_s|age }}{% endif %}</span>
+      {% if x.spark %}{% spark x.spark 70 16 %}{% endif %}</a>{% endfor %}
+  </div>
+  <div class="facts">{% for r in s.rows %}<div data-tip="{{ r.tip }}"><div class="muted">{{ r.label }}</div><div class="{{ r.level|lvl }}">{{ r.text }}</div></div>{% endfor %}</div>
+</header>

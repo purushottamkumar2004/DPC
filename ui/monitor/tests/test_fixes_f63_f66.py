@@ -150,15 +150,16 @@ class DetectionsTests(ViewTestBase):
         self.addCleanup(set_reader, PairReader())
 
     def test_live_tab_is_the_default_and_plain(self):
-        html = self.client.get("/cameras/LEFT/").content.decode()
+        html = self.client.get("/side/LEFT/").content.decode()
         self.assertIn('data-live="/live/CAM1.jpg', html)
         self.assertNotIn('id="det"', html)
         self.assertIn("?tab=detections", html)
+        self.assertEqual(self.client.get("/cameras/LEFT/").url, "/side/LEFT/")         # old address
 
     def test_not_available_before_f65(self):
-        self.assertContains(self.client.get("/cameras/LEFT/?tab=detections"), "Detections not available yet")
+        self.assertContains(self.client.get("/side/LEFT/?tab=detections"), "it needs the F65 version")
         data = self.client.get("/cameras/LEFT/detections.json").json()
-        self.assertEqual(data, {"available": False, "reason": "Detections not available yet."})
+        self.assertEqual(data, {"available": False, "reason": det_src.NOT_WRITTEN})
 
     def test_pair_json_classes_unticked_and_off_path_red(self):
         folder, frame = write_pair(self.root)
@@ -176,7 +177,7 @@ class DetectionsTests(ViewTestBase):
                 self.assertEqual(b["note"], "")
         with open(frame, "rb") as f:
             self.assertEqual(self.client.get("/cameras/LEFT/frame/1.jpg").content, f.read())
-        page = self.client.get("/cameras/LEFT/?tab=detections").content.decode()
+        page = self.client.get("/side/LEFT/?tab=detections").content.decode()
         boxes = re.findall(r'<input type="checkbox"[^>]*>', page)
         self.assertEqual(len(boxes), 2)
         self.assertFalse(any("checked" in b for b in boxes))          # nothing drawn until ticked
@@ -224,19 +225,21 @@ class CameraCardTests(ViewTestBase):
         self.cache.handle("dpc/worker/inspection_left/health", payload)
 
     def test_model_from_heartbeat(self):
+        """UI-1c: on the overview side card (was the dashboard camera tile)."""
         self.heartbeat(model={"name": "left", "version": "2026.10.29"}, ms_per_image=85)
-        html = self.client.get("/part/side/LEFT/").content.decode()
-        self.assertIn("left 2026.10.29", html)
-        self.assertIn("85 ms/img · 2 waiting", html)
+        html = self.client.get("/part/overview/").content.decode()
+        left = re.search(r'id="side-LEFT".*?</a>', html, re.S).group(0)
+        self.assertIn("left 2026.10.29", left)
+        self.assertIn("85 ms/img · queue 2", left)
         self.heartbeat(model=None)
-        self.assertIn(">Loading<", self.client.get("/part/side/LEFT/").content.decode())
-        self.assertIn("does not publish its model", self.client.get("/part/side/RIGHT/").content.decode())
+        self.assertIn(">loading<", self.client.get("/part/overview/").content.decode())
+        self.assertIn("does not publish its model", self.client.get("/part/overview/").content.decode())
 
     def test_waiting_for_plate(self):
         self.heartbeat(waiting_for_plate=True)
-        html = self.client.get("/part/side/LEFT/").content.decode()
-        self.assertIn("Waiting for plate", html)
-        self.assertRegex(html, r'c-warn">Waiting for plate')
+        html = self.client.get("/part/overview/").content.decode()
+        self.assertRegex(html, r'(?s)id="side-LEFT".*?c-warn">Waiting for plate')
+        self.assertIn("waiting for plate", html)                    # cycle in the top bar
 
 
 class TemplateTextTests(ViewTestBase):
@@ -247,7 +250,7 @@ class TemplateTextTests(ViewTestBase):
 
     def test_no_template_comment_or_tag_leaks_onto_a_page(self):
         write_pair(self.root)
-        for url in ("/", "/cameras/LEFT/", "/cameras/LEFT/?tab=detections", "/cameras/RIGHT/?tab=detections",
+        for url in ("/", "/side/LEFT/", "/side/LEFT/?tab=detections", "/side/RIGHT/?tab=detections", "/system/programs/",
                     "/alerts/", "/programs/", "/programs/inspection_left/", "/health/", "/defects/", "/defects/7/"):
             html = self.client.get(url).content.decode()
             for marker in ("{#", "#}", "{%", "%}", "{{"):

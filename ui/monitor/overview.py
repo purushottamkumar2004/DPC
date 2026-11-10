@@ -159,7 +159,7 @@ def _program_problem(p, now):
         if value == "RUNNING" and p["last_restart_at"] and now - p["last_restart_at"] < RECENT_RESTART_S:
             when = datetime.datetime.fromtimestamp(p["last_restart_at"]).strftime("%H:%M")
             return Problem(WARNING, f"{p['label']} was restarted at {when}.",
-                           "Nothing to do if it stays running.", f"/programs/{p['id']}/")
+                           "Nothing to do if it stays running.", f"/system/programs/{p['id']}/")
         return None
     core = p["type"] in CORE_TYPES
     level = text.level if text.level in (ERROR, WARNING) else WARNING
@@ -171,7 +171,7 @@ def _program_problem(p, now):
         level = WARNING
     if value == "PAUSED":
         level = WARNING
-    return Problem(level, text.sentence, text.action, f"/programs/{p['id']}/")
+    return Problem(level, text.sentence, text.action, f"/system/programs/{p['id']}/")
 
 
 def problems(snapshot, progs, side_views, disk, plc_expected=True, drift_events=0) -> list:
@@ -179,16 +179,16 @@ def problems(snapshot, progs, side_views, disk, plc_expected=True, drift_events=
     found = []
     if not snapshot["connected"]:
         found.append(Problem(ERROR, "The screen has no connection to the status service (MQTT); "
-                                    "everything shown may be old.", "Check that mosquitto is running.", "/health/"))
+                                    "everything shown may be old.", "Check that mosquitto is running.", "/system/health/"))
     sup = snapshot.get("supervisor")
     sup_state = ((sup or {}).get("payload") or {}).get("status")
     if snapshot["connected"] and sup_state != "online":
         found.append(Problem(ERROR, "The Supervisor is not running: programs are not watched or restarted.",
                              "Restart the computer, or ask the developer to start the dpc-supervisor service.",
-                             "/programs/"))
+                             "/system/programs/"))
     elif sup and now - sup["received_at"] > STALE_STATUS_S:
         found.append(Problem(WARNING, "No news from the Supervisor for "
-                             f"{age_text(now - sup['received_at'])}; the status may be old.", "", "/programs/"))
+                             f"{age_text(now - sup['received_at'])}; the status may be old.", "", "/system/programs/"))
     for p in progs:
         problem = _program_problem(p, now)
         if problem:
@@ -199,30 +199,30 @@ def problems(snapshot, progs, side_views, disk, plc_expected=True, drift_events=
         if camera.get("value") == "RUNNING" and age is not None and age > STALE_IMAGE_S:
             found.append(Problem(WARNING, f"{s['side']} camera: the newest image is {age_text(age)} old.",
                                  "The system restarts the camera program if this lasts a minute. "
-                                 "If it repeats, check the camera cable and power.", "/health/"))
+                                 "If it repeats, check the camera cable and power.", "/system/health/"))
         if s["queue"] is not None and s["queue"] >= QUEUE_WARN:
             found.append(Problem(WARNING, f"{s['side']} inspection is behind: {s['queue']} images are waiting.",
                                  "It normally catches up; if the number keeps growing, check the GPU on System health.",
-                                 "/health/"))
+                                 "/system/health/"))
         roi = s["roi"] or {}
         if roi.get("drifting"):
             found.append(Problem(WARNING, f"{s['side']} inspection: detections of {', '.join(roi['drifting'])} are often "
                                           "outside their learned area. The camera may have moved.",
-                                 "Check the camera position.", "/alerts/"))
+                                 "Check the camera position.", "/system/alerts/"))
     if drift_events and not any("learned area" in p.sentence for p in found):
         found.append(Problem(WARNING, "Auto-ROI reported detections outside their learned area in the last hour.",
-                             "Check the camera position.", "/alerts/"))
+                             "Check the camera position.", "/system/alerts/"))
     plc = (snapshot.get("plc") or {}).get("payload")
     if plc_expected:
         text = plc_text(plc)
         if text.level in (ERROR, WARNING):
-            found.append(Problem(text.level, text.sentence, text.action, "/health/"))
+            found.append(Problem(text.level, text.sentence, text.action, "/system/health/"))
     if disk.get("level") == "mail":
         found.append(Problem(ERROR, f"The disk is {disk['percent']} % full and almost out of space.",
-                             "Tell the developer; inspection stops when the disk is full.", "/health/"))
+                             "Tell the developer; inspection stops when the disk is full.", "/system/health/"))
     elif disk.get("level") == "delete":
         found.append(Problem(WARNING, f"The disk is {disk['percent']} % full; old images are being deleted.",
-                             "No action needed unless it keeps rising.", "/health/"))
+                             "No action needed unless it keeps rising.", "/system/health/"))
     found.sort(key=lambda p: -RANK.get(p.level, 0))
     return found
 

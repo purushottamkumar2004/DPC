@@ -4,15 +4,12 @@ from dpc_ui.ui_config import get_config
 
 # The sidebar (D-098 4). Pages of later stages are shown greyed with what they will bring.
 NAV_PAGES = [
-    ("dashboard", "/", "layout-dashboard", "Dashboard", True, "Dashboard: everything on one screen"),
-    ("alerts", "/alerts/", "bell", "Alerts and errors", True, "Alerts and errors"),
+    ("overview", "/", "layout-dashboard", "Overview", True, "Overview: the situation at a glance"),
+    ("side-LEFT", "/side/LEFT/", "camera", "LEFT", True, "LEFT side: image, detections, functions, auto-ROI, model, camera"),
+    ("side-RIGHT", "/side/RIGHT/", "camera", "RIGHT", True, "RIGHT side: image, detections, functions, auto-ROI, model, camera"),
     ("defects", "/defects/", "scan-search", "Defects", True, "Defects: filter, image, CSV"),
-    ("cameras", "/cameras/LEFT/", "camera", "Cameras", True, "Cameras: live image and status per side"),
-    ("settings", "#", "sliders-horizontal", "Inspection settings", False, "Inspection settings (comes with UI-3)"),
-    ("programs", "/programs/", "list-checks", "Programs", True, "Programs: state, restarts, logs"),
-    ("models", "#", "box", "Models", False, "Models (comes with UI-4)"),
-    ("roi", "#", "scan", "Auto-ROI", False, "Auto-ROI (comes with UI-4)"),
-    ("health", "/health/", "activity", "System health", True, "System health: disk, GPU, database, devices"),
+    ("system", "/system/programs/", "list-checks", "System", True, "System: programs and logs, health, alert history"),
+    ("setup", "#", "sliders-horizontal", "Setup", False, "Site setup wizard: coming"),
 ]
 
 
@@ -21,6 +18,7 @@ def site(request):
     return {
         "site_name": cfg["site"].get("name") or cfg["site"].get("id") or "DPC",
         "refresh_seconds": cfg["ui"].get("refresh_seconds", 2),
+        "system_pages": ("programs", "health", "alerts"),
         "nav_pages": [{"key": k, "url": u, "icon": i, "title": t, "ready": r, "tip": tip}
                       for k, u, i, t, r, tip in NAV_PAGES],
     }

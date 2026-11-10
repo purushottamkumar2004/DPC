@@ -47,8 +47,20 @@ class Watchers:
                         log.exception("background check '%s' failed", name)
 
     def take_samples(self):
+        from monitor.overview import read_roi_status
+        from monitor.sources.sitedb import SiteDBError, get_sitedb
         disk = system.disk(self.cfg.paths["data"], self.cfg["cleanup"]["disk_percent"])
-        samples.take(self.cfg, get_cache().snapshot(), files.get_meter(), system.gpu(), disk)
+        roi = {}
+        for side in self.cfg["sides"]:
+            status = read_roi_status(self.cfg.paths["data"], side["side"])
+            if status is not None:
+                roi[side["side"]] = status.get("outside", 0)
+        try:
+            wheel = get_sitedb().live_wheel()
+        except SiteDBError:
+            wheel = None
+        samples.take(self.cfg, get_cache().snapshot(), files.get_meter(), system.gpu(), disk,
+                     wheel=wheel, roi_outside=roi)
 
     def check_disk(self):
         disk = system.disk(self.cfg.paths["data"], self.cfg["cleanup"]["disk_percent"])

@@ -30,13 +30,8 @@ TABS = (("program", "Program log"), ("start", "Start and crash output"))
 
 
 def _rendered(cfg, worker_id):
-    path = os.path.join(cfg.paths["config"], "rendered", f"{worker_id}.json")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    from monitor.sources.rendered import rendered
+    return rendered(cfg, worker_id)
 
 
 def program_log_path(cfg, worker_id: str, wtype: str) -> str:

@@ -68,7 +68,7 @@ def camera_cards(state, cfg):
                         f"/cameras/{side}/", samples.values(f"fps:{cam_id}"))
 
         insp = _program_cell("Inspection", inspection,
-                             f"/programs/{inspection['id']}/" if inspection else "/programs/")
+                             f"/system/programs/{inspection['id']}/" if inspection else "/system/programs/")
         queue = s["queue"]
         if inspection and inspection["value"] == "RUNNING":
             rate = (f"{s['ms_per_image']:.0f} ms/img" if s["ms_per_image"] is not None
@@ -86,7 +86,7 @@ def camera_cards(state, cfg):
             if queue is not None and queue >= overview.QUEUE_WARN:
                 insp.level = WARNING
             insp.spark = samples.values(f"ms:{side}") or samples.values(f"ips:{side}")
-        model = _model_cell(s["model"], f"/programs/{inspection['id']}/" if inspection else "/programs/")
+        model = _model_cell(s["model"], f"/system/programs/{inspection['id']}/" if inspection else "/system/programs/")
         stale = age is not None and age > overview.STALE_IMAGE_S
         cards.append({"side": side, "camera_id": cam_id, "fps": fps_cell, "camera": camera,
                       "stale_text": f"Last image {overview.age_text(age)} old" if stale else "",
@@ -130,35 +130,35 @@ def device_strip(state):
     plc, expected = state["plc"], state["plc_expected"]
     cells = []
     if not expected:
-        cells += [Cell("PLC", "None", OFF, "No PLC service on this site.", "/health/"),
-                  Cell("Light", "—", OFF, "No PLC service on this site.", "/health/"),
-                  Cell("Conveyor", "—", OFF, "No PLC service on this site.", "/health/")]
+        cells += [Cell("PLC", "None", OFF, "No PLC service on this site.", "/system/health/"),
+                  Cell("Light", "—", OFF, "No PLC service on this site.", "/system/health/"),
+                  Cell("Conveyor", "—", OFF, "No PLC service on this site.", "/system/health/")]
     elif not plc:
-        cells += [Cell("PLC", "No status", WARNING, plc_text(None).sentence, "/health/"),
-                  Cell("Light", "—", NEUTRAL, "Unknown until the PLC service reports.", "/health/"),
-                  Cell("Conveyor", "—", NEUTRAL, "Unknown until the PLC service reports.", "/health/")]
+        cells += [Cell("PLC", "No status", WARNING, plc_text(None).sentence, "/system/health/"),
+                  Cell("Light", "—", NEUTRAL, "Unknown until the PLC service reports.", "/system/health/"),
+                  Cell("Conveyor", "—", NEUTRAL, "Unknown until the PLC service reports.", "/system/health/")]
     else:
         text = plc_text(plc)
         connected = bool(plc.get("connected"))
         cells.append(Cell("PLC", "Connected" if connected else "Disconnected", OK if connected else ERROR,
-                          text.sentence + (" " + text.action if text.action else ""), "/health/"))
+                          text.sentence + (" " + text.action if text.action else ""), "/system/health/"))
         light_ok = plc.get("light_ok")
         cells.append(Cell("Light", "On" if light_ok else ("Not confirmed" if light_ok is False else "—"),
                           OK if light_ok else (WARNING if light_ok is False else NEUTRAL),
-                          "The conveyor light; the PLC service switches it on and checks it every minute.", "/health/"))
+                          "The conveyor light; the PLC service switches it on and checks it every minute.", "/system/health/"))
         value = plc.get("conveyor_status")
         cells.append(Cell("Conveyor", f"value {value}" if value is not None else "—", NEUTRAL,
-                          "Raw conveyor status register from the PLC; its meaning is not confirmed yet.", "/health/"))
+                          "Raw conveyor status register from the PLC; its meaning is not confirmed yet.", "/system/health/"))
     disk = state["disk"]
     if disk.get("ok"):
         level = ERROR if disk["level"] == "mail" else WARNING if disk["level"] == "delete" else NEUTRAL
         thr = disk["thresholds"]
         cells.append(Cell("Disk", f"{disk['percent']:.0f} %", level,
                           f"Data disk {disk['percent']:.0f} % used, {disk['free_gb']:.0f} GB free; the cleanup deletes "
-                          f"old images above {thr.get('delete')} %, alarm at {thr.get('mail')} %.", "/health/",
+                          f"old images above {thr.get('delete')} %, alarm at {thr.get('mail')} %.", "/system/health/",
                           samples.values("disk")))
     else:
-        cells.append(Cell("Disk", "—", WARNING, f"Disk usage cannot be read: {disk.get('error')}", "/health/"))
+        cells.append(Cell("Disk", "—", WARNING, f"Disk usage cannot be read: {disk.get('error')}", "/system/health/"))
     gpu = system.gpu()
     if gpu.get("ok") and gpu.get("gpus"):
         g = gpu["gpus"][0]
@@ -166,14 +166,14 @@ def device_strip(state):
         level = NEUTRAL if temp is None else ERROR if temp >= GPU_ERROR_C else WARNING if temp >= GPU_WARN_C else OK
         cells.append(Cell("GPU", f"{temp:.0f} °C" if temp is not None else "—", level,
                           f"GPU temperature; load {g.get('load_percent') or 0:.0f} %, "
-                          f"attention from {GPU_WARN_C} °C.", "/health/", samples.values("gpu_temp")))
+                          f"attention from {GPU_WARN_C} °C.", "/system/health/", samples.values("gpu_temp")))
     else:
-        cells.append(Cell("GPU", "—", WARNING, gpu.get("error") or "No GPU reading.", "/health/"))
+        cells.append(Cell("GPU", "—", WARNING, gpu.get("error") or "No GPU reading.", "/system/health/"))
     mail = overview.program_by_id(state["programs"], "mail")
     if mail is None:
-        cells.append(Cell("Mail", "None", OFF, "No defect mail program on this site.", "/programs/"))
+        cells.append(Cell("Mail", "None", OFF, "No defect mail program on this site.", "/system/programs/"))
     else:
-        cell = _program_cell("Mail", mail, "/programs/mail/")
+        cell = _program_cell("Mail", mail, "/system/programs/mail/")
         if cell.level == OFF:
             cell.text = "Off"
         cells.append(cell)
@@ -184,11 +184,11 @@ def top_bar(state, wheel, wheel_error, total):
     banner = state["banner"]
     if banner["level"] == OK:
         pill = Cell("status", "All systems running", OK, banner["headline"] + " All programs and devices are OK.",
-                    "/alerts/")
+                    "/system/alerts/")
     else:
         more = f" (+{banner['count'] - 1})" if banner["count"] > 1 else ""
         pill = Cell("status", banner["headline"] + more, banner["level"],
-                    banner["headline"] + " Click for all current problems.", "/alerts/")
+                    banner["headline"] + " Click for all current problems.", "/system/alerts/")
     try:
         number = int(str(wheel).strip())
     except (TypeError, ValueError):
@@ -210,7 +210,7 @@ def recent_alerts(state):
     rows = []
     for p in state["problems"][:ALERT_ROWS]:
         rows.append({"id": None, "level": p.level, "text": p.sentence, "tip": p.action or p.sentence,
-                     "when": "now", "link": p.link or "/alerts/", "icon": "circle-x" if p.level == ERROR else "triangle-alert"})
+                     "when": "now", "link": p.link or "/system/alerts/", "icon": "circle-x" if p.level == ERROR else "triangle-alert"})
     active = {r["text"] for r in rows}
     if len(rows) < ALERT_ROWS:
         since = datetime.datetime.now() - datetime.timedelta(days=7)
@@ -222,7 +222,7 @@ def recent_alerts(state):
             icon = "circle-x" if e.severity == "error" else "rotate-ccw" if "restart" in e.name else "triangle-alert"
             rows.append({"id": e.id, "level": e.severity, "text": e.message, "tip": e.action or e.message,
                          "when": e.received_at.strftime("%H:%M") if e.received_at.date() == datetime.date.today()
-                         else e.received_at.strftime("%d %b"), "link": f"/alerts/#e{e.id}", "icon": icon})
+                         else e.received_at.strftime("%d %b"), "link": f"/system/alerts/#e{e.id}", "icon": icon})
     return rows
 
 

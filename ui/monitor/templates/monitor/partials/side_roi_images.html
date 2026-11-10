@@ -1,0 +1,12 @@
+{% if s.roi.previews or s.roi.outside %}<section class="card" id="side-roi-images">
+  <div class="h"><span>Auto-ROI images</span><span class="muted">previews of the learned bands · detections outside them</span></div>
+  {% if s.roi.previews %}
+  <h3>Pair previews</h3>
+  <div class="gallery">{% for p in s.roi.previews %}<a href="/side/{{ s.side }}/roi/{{ p }}" data-tip="{{ p }}"><img src="/side/{{ s.side }}/roi/{{ p }}" alt="{{ p }}" loading="lazy"></a>{% endfor %}</div>{% endif %}
+  {% if s.roi.outside %}
+  <h3>Out of bound <span class="muted">last {{ s.roi.outside|length }}, newest first</span></h3>
+  <div class="gallery crops">{% for e in s.roi.outside %}
+    <figure data-tip="{{ e.class }} · score {{ e.score }} · {{ e.distance_px }} px off · frame {{ e.frame }}">
+      {% if e.crop_ok %}<img src="/side/{{ s.side }}/roi/{{ e.crop }}" alt="{{ e.class }}" loading="lazy">{% else %}<div class="nocrop">no crop</div>{% endif %}
+      <figcaption>{{ e.class }}<br><span class="muted">{{ e.time|slice:"11:19" }} · {{ e.distance_px }} px</span></figcaption></figure>{% endfor %}</div>{% endif %}
+</section>{% endif %}

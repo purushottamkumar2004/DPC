@@ -8,8 +8,8 @@
     {% with c=cam.model %}{% include "monitor/partials/cell.html" %}{% endwith %}
   </div>
   <p class="figs"><span>camera {{ view.camera_id }}</span>
-    {% if view.camera %}<a href="/programs/{{ view.camera.id }}/">camera program and log</a>{% endif %}
-    {% if view.inspection %}<a href="/programs/{{ view.inspection.id }}/">inspection program and log</a>{% endif %}</p>
+    {% if view.camera %}<a href="/system/programs/{{ view.camera.id }}/">camera program and log</a>{% endif %}
+    {% if view.inspection %}<a href="/system/programs/{{ view.inspection.id }}/">inspection program and log</a>{% endif %}</p>
 </div>
 <div class="card">
   <h3>Auto-ROI</h3>
