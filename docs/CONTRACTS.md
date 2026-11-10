@@ -54,7 +54,7 @@ Statuses: STARTING, RUNNING, UNHEALTHY, WAITING_RESTART, STOPPED, FAILED. Events
 - mail (F69): `last_poll_at`, `pending_rows`, `sent_today`, `flood_active`; healthy = a poll within 3 x the poll interval;
 - cleanup (F68): `last_pass_at`, `disk_percent`, `deleted_files`, `deleted_mb`; healthy = a pass within 3 x interval_seconds;
 - plc and ui: as built (PLC service D-084, UI D-096).
-Capture, cleanup and mail need the `mqtt` block in their rendered files (F70); without it their heartbeat is off with one warning.
+Since F70 every rendered worker file has `mqtt` {host, port, user, password} (user/password null = no login; ui additionally `topic_prefix`); a broker change in `site.yaml` therefore rewrites, and restarts, every worker.
 **[BUILT, UI-1]** `dpc/worker/ui/health` heartbeat every 10 s. The UI keeps its own event history in `data/state/ui/ui.sqlite3` (UI-owned folder, written only by the UI, not cleaned).
 **[BUILT, P13]** auto-ROI events on `dpc/worker/inspection_<side>/event`: `roi_learned` {learned, not_learned}, `roi_learn_failed` {result, reason}, `roi_drift` {side, class, ratio, window}.
 **[BUILT, P11, D-087]** model events on `dpc/supervisor/event`, published by the `model` command (best effort): `model_switched` / `model_rolled_back` {model, from, to, sides, workers, restarted, pending, not_running}; `model_switch_failed` {model, action: switch|rollback, to, reason}; `model_pinned` {model, version, previous_pin, current}; `model_unpinned` {model, version}. Reload channel requests may carry `action: restart_workers` + `workers` + `reason`.
