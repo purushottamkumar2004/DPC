@@ -31,6 +31,7 @@ import mail_worker as M               # noqa: E402
 
 TEST_DB = "dpc_mail_test"
 FAKE_SECRET = "s3cr3t-graph-value"
+MQTT_SECRET = "mqtt-pass-for-test"
 DB_PASSWORD_SECRET = "db-pass-for-test"
 
 log = logging.getLogger("mail-test")
@@ -71,6 +72,7 @@ def mail_json(root, db=None, **mail_overrides):
                  "report_url": "https://example.com/report", "max_alert_age_hours": 24,
                  "flood": {"max_per_window": 8, "window_hours": 5, "internal_to": ["internal@example.com"]}},
         "graph": {"tenant_id": "tenant-x", "client_id": "client-x", "client_secret": FAKE_SECRET},
+        "mqtt": {"host": "localhost", "port": 1883, "user": "dpc_broker", "password": MQTT_SECRET},
     }
     data["mail"].update(mail_overrides)
     return data
@@ -141,6 +143,19 @@ class SettingsTests(unittest.TestCase):
         s = M.build_settings(mail_json("/tmp/r", flood=None, max_alert_age_hours=None, report_url=None))
         self.assertEqual((s.flood, s.max_alert_age_hours, s.report_url, s.warnings), (None, None, None, []))
 
+    def test_mqtt_block_is_read_and_its_password_is_a_secret(self):
+        s = M.build_settings(mail_json("/tmp/r"))
+        self.assertEqual(s.mqtt, {"host": "localhost", "port": 1883, "user": "dpc_broker", "password": MQTT_SECRET})
+        self.assertIn(MQTT_SECRET, s.secrets())
+        self.assertIn(MQTT_SECRET, M.secrets_in(mail_json("/tmp/r")))
+
+    def test_no_mqtt_block_means_heartbeat_off_not_a_config_error(self):
+        raw = mail_json("/tmp/r")
+        del raw["mqtt"]
+        s = M.build_settings(raw)
+        self.assertIsNone(s.mqtt)
+        self.assertEqual(s.warnings, [])
+
     def test_wrong_type_names_the_key(self):
         with self.assertRaises(M.ConfigError) as ctx:
             M.build_settings(mail_json("/tmp/r", to="a@example.com"))
@@ -199,6 +214,104 @@ class ContentTests(unittest.TestCase):
         self.assertEqual(names[:2], ["img0.jpg", "img1.jpg"])
         many = M.collect_images(rows, max_bytes=10 ** 6, log=log)
         self.assertEqual(len(many), M.MAX_ATTACH_FILES)
+
+
+# ---------------------------------------------------------------------------------------------
+# Heartbeat fields and the heartbeat itself (STATUS F69)
+# ---------------------------------------------------------------------------------------------
+class FakeClock:
+    def __init__(self):
+        self.t = 1000.0
+        self.day = datetime.date(2026, 11, 10)
+
+    def __call__(self):
+        return self.t
+
+    def today(self):
+        return self.day
+
+
+class PollStatsTests(unittest.TestCase):
+    def setUp(self):
+        self.clock = FakeClock()
+        self.stats = M.PollStats(clock=self.clock, today=self.clock.today)
+
+    def test_healthy_from_start_until_three_poll_intervals_without_a_poll(self):
+        self.assertTrue(self.stats.healthy())
+        self.clock.t += M.HEALTHY_POLL_AGE_S
+        self.assertTrue(self.stats.healthy())
+        self.clock.t += 1
+        self.assertFalse(self.stats.healthy())
+        self.stats.poll_done(pending_rows=0, sent_rows=0, flood_active=False)
+        self.assertTrue(self.stats.healthy())
+        self.clock.t += M.HEALTHY_POLL_AGE_S + 1
+        self.assertFalse(self.stats.healthy())
+        self.assertEqual(M.HEALTHY_POLL_AGE_S, 3 * M.POLL_SECONDS)
+
+    def test_fields_and_sent_today_back_to_zero_at_midnight(self):
+        self.assertEqual(self.stats.fields(), {"last_poll_at": None, "pending_rows": 0,
+                                               "sent_today": 0, "flood_active": False})
+        self.stats.start_day(5)
+        self.stats.poll_done(pending_rows=2, sent_rows=3, flood_active=True)
+        f = self.stats.fields()
+        self.assertEqual((f["pending_rows"], f["sent_today"], f["flood_active"]), (2, 8, True))
+        self.assertIsNotNone(f["last_poll_at"])
+        self.clock.day = datetime.date(2026, 11, 11)
+        self.assertEqual(self.stats.fields()["sent_today"], 0)
+        self.stats.poll_done(pending_rows=0, sent_rows=1, flood_active=False)
+        self.assertEqual(self.stats.fields()["sent_today"], 1)
+
+
+class FakeMqttClient:
+    def __init__(self):
+        self.published = []
+        self.got_one = __import__("threading").Event()
+
+    def username_pw_set(self, user, password):
+        self.login = (user, password)
+
+    def reconnect_delay_set(self, min_delay, max_delay):
+        pass
+
+    def connect_async(self, host, port, keepalive):
+        pass
+
+    def loop_start(self):
+        pass
+
+    def loop_stop(self):
+        pass
+
+    def disconnect(self):
+        pass
+
+    def publish(self, topic, body, qos=0):
+        self.published.append((topic, json.loads(body)))
+        self.got_one.set()
+
+
+class HeartbeatTests(unittest.TestCase):
+    def test_heartbeat_carries_the_mail_fields_and_healthy(self):
+        s = M.build_settings(mail_json("/tmp/r"))
+        stats = M.PollStats()
+        stats.poll_done(pending_rows=1, sent_rows=2, flood_active=True)
+        client = FakeMqttClient()
+        hb = M.start_heartbeat(s, stats, log, client_factory=lambda worker_id: client, version="test")
+        self.addCleanup(hb.stop)
+        self.assertTrue(client.got_one.wait(5))
+        topic, body = client.published[0]
+        self.assertEqual(topic, "dpc/worker/mail/health")
+        self.assertEqual(client.login, ("dpc_broker", MQTT_SECRET))
+        for key, value in {"worker_id": "mail", "healthy": True, "pending_rows": 1,
+                           "sent_today": 2, "flood_active": True, "version": "test"}.items():
+            self.assertEqual(body[key], value)
+        self.assertIsNotNone(body["last_poll_at"])
+
+    def test_no_mqtt_block_heartbeat_is_off(self):
+        raw = mail_json("/tmp/r")
+        del raw["mqtt"]
+        hb = M.start_heartbeat(M.build_settings(raw), M.PollStats(), log, version="test")
+        self.assertIsNone(hb._thread)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -322,6 +435,41 @@ class PollTests(unittest.TestCase):
         M.poll_once(self.s, self.cur, log)
         self.assertTrue(self.graph.mails[0]["subject"].startswith("!! CRITICAL ALERT"))
 
+    def test_poll_updates_heartbeat_fields(self):
+        stats = M.PollStats()
+        M.poll_once(self.s, self.cur, log, stats=stats)                         # empty poll
+        self.assertIsNotNone(stats.last_poll_at)
+        self.assertEqual(stats.fields()["pending_rows"], 0)
+        self.insert("WheelMissing", "Left", "12")
+        self.insert("WheelMissing", "Left", "12")                                # duplicate, marked 2
+        self.insert("Wheel_Skidding", "Right", "40")
+        self.graph.send_status = 500
+        M.poll_once(self.s, self.cur, log, stats=stats)
+        self.assertEqual((stats.pending_rows, stats.sent_today), (2, 0))      # send failed: 2 stay unsent
+        self.graph.send_status = 202
+        M.poll_once(self.s, self.cur, log, stats=stats)
+        self.assertEqual((stats.pending_rows, stats.sent_today, stats.flood_active), (0, 2, False))
+
+    def test_flood_active_when_the_window_is_full(self):
+        stats = M.PollStats()
+        for wheel in range(7):
+            self.insert("WheelMissing", "Left", str(100 + wheel), status=1, age_hours=1)
+        M.poll_once(self.s, self.cur, log, stats=stats)
+        self.assertFalse(stats.flood_active)                                    # 7 < 8
+        self.insert("WheelMissing", "Right", "1")
+        M.poll_once(self.s, self.cur, log, stats=stats)                         # 7 + 1 = 8, to clients
+        self.assertTrue(self.graph.mails[-1]["subject"].startswith("!! CRITICAL ALERT"))
+        self.assertTrue(stats.flood_active)                                     # the next one is restricted
+
+    def test_sent_today_starts_from_the_db(self):
+        self.insert("WheelMissing", "Left", "1", status=1)
+        self.insert("WheelMissing", "Left", "2", status=1)
+        self.insert("WheelMissing", "Left", "3", status=2)
+        now = datetime.datetime.now()
+        if now.hour == 0 and now.minute < 2:
+            self.skipTest("too close to midnight")
+        self.assertEqual(M.count_sent_since(self.cur, M.midnight(now)), 2)
+
     def test_journal_replay_marks_sent_without_mailing(self):
         row = self.insert()
         M.write_journal(self.s, [row])                  # mailed, then crashed before the UPDATE
@@ -358,7 +506,7 @@ class CrashTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stderr)
         text = read_text(record)
         self.assertIn("OperationalError", text)
-        for secret in (DB_PASSWORD_SECRET, FAKE_SECRET):
+        for secret in (DB_PASSWORD_SECRET, FAKE_SECRET, MQTT_SECRET):
             self.assertNotIn(secret, text)
             self.assertNotIn(secret, read_text(os.path.join(self.root, "logs", "mail.log")))
 
