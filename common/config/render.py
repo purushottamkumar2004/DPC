@@ -43,6 +43,12 @@ class Change:
 # What each worker gets
 # ======================================================================
 
+def _mqtt(cfg: SiteConfig) -> Dict[str, Any]:
+    """The broker login every worker's heartbeat uses (D-034, D-099); user/password null = no login."""
+    m = cfg.mqtt
+    return {"host": m.host, "port": m.port, "user": m.user, "password": m.password}
+
+
 def _db(cfg: SiteConfig) -> Dict[str, Any]:
     db = cfg.db
     return {"host": db.host, "port": db.port, "name": db.name, "user": db.user, "password": db.password,
@@ -66,6 +72,7 @@ def capture_config(cfg: SiteConfig, camera) -> Dict[str, Any]:
         "camera": cam,
         "health_interval_s": cfg.capture.health_interval_s,     # P4d; the capture reads it at top level
         "db": _db(cfg),
+        "mqtt": _mqtt(cfg),                                      # heartbeat (F61, F70)
     }
 
 
@@ -117,7 +124,7 @@ def inspection_config(cfg: SiteConfig, camera) -> Dict[str, Any]:
         "checks": asdict(side_cfg.checks),           # D-085: per-side value already applied
         "db": _db(cfg),
         # heartbeat transport (D-076); user/password null when the broker has no login
-        "mqtt": {"host": cfg.mqtt.host, "port": cfg.mqtt.port, "user": cfg.mqtt.user, "password": cfg.mqtt.password},
+        "mqtt": _mqtt(cfg),
         "plc": plc,
     }
 
@@ -156,6 +163,7 @@ def cleanup_config(cfg: SiteConfig) -> Dict[str, Any]:
         # to: disk_report_to, else recipients (the loader already falls back); cc empty on purpose
         "mail": {"sender_address": cfg.mail.sender_address, "to": list(cfg.mail.disk_report_to), "cc": []},
         "graph": graph,
+        "mqtt": _mqtt(cfg),                                      # heartbeat (F68, F70)
     }
 
 
@@ -186,6 +194,7 @@ def mail_config(cfg: SiteConfig) -> Dict[str, Any]:
                  "to": list(m.recipients), "cc": list(m.cc), "smtp": smtp, "report_url": m.report_url,
                  "max_alert_age_hours": m.max_alert_age_hours, "flood": flood},
         "graph": graph,
+        "mqtt": _mqtt(cfg),                                      # heartbeat (F69, F70)
     }
 
 
@@ -207,7 +216,7 @@ def plc_config(cfg: SiteConfig) -> Dict[str, Any]:
                 "status_interval_seconds": plc.status_interval_seconds,
                 "cleaning_cooldown_seconds": plc.cleaning_cooldown_seconds,
                 "auto_cleaning": plc.auto_cleaning},
-        "mqtt": {"host": cfg.mqtt.host, "port": cfg.mqtt.port, "user": cfg.mqtt.user, "password": cfg.mqtt.password},
+        "mqtt": _mqtt(cfg),
         "db": {"host": db.host, "port": db.port, "name": db.name, "user": db.user, "password": db.password},
     }
 
