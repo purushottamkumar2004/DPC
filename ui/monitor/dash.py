@@ -74,22 +74,35 @@ def camera_cards(state, cfg):
             rate = (f"{s['ms_per_image']:.0f} ms/img" if s["ms_per_image"] is not None
                     else f"{s['inspection_fps']:.1f} img/s" if s["inspection_fps"] is not None else "—")
             insp.text = rate + (f" · {queue} waiting" if queue is not None else "")
+            if s.get("waiting_for_plate"):
+                insp.text = "Waiting for plate" + (f" · {queue} waiting" if queue is not None else "")
+                insp.level = WARNING
             insp.tip = (inspection["text"].sentence + " "
                         + ("Processing time per image" if s["ms_per_image"] is not None
                            else "Images inspected per second (ms per image is not published yet)")
-                        + (f"; {queue} images are waiting in the queue." if queue is not None else "."))
+                        + (f"; {queue} images are waiting in the queue." if queue is not None else ".")
+                        + (" Inspection is paused until the next plate starts a new cycle (after a start or "
+                           "restart this takes up to one revolution)." if s.get("waiting_for_plate") else ""))
             if queue is not None and queue >= overview.QUEUE_WARN:
                 insp.level = WARNING
             insp.spark = samples.values(f"ms:{side}") or samples.values(f"ips:{side}")
-        model = Cell("Model", "—", NEUTRAL, "The model version is not published by inspection yet.",
-                     f"/programs/{inspection['id']}/" if inspection else "")
+        model = _model_cell(s["model"], f"/programs/{inspection['id']}/" if inspection else "/programs/")
         stale = age is not None and age > overview.STALE_IMAGE_S
         cards.append({"side": side, "camera_id": cam_id, "fps": fps_cell, "camera": camera,
                       "stale_text": f"Last image {overview.age_text(age)} old" if stale else "",
                       "inspection": insp, "model": model, "roi": _roi_cell(s, side),
-                      "overlay": files.camera_source(cfg.paths["frames"], cfg.paths["data"], cam_id, side)[1],
                       "link": f"/cameras/{side}/"})
     return cards
+
+
+def _model_cell(model, link):
+    """R6 (F65): the inspection heartbeat's model {name, version}; null while the model loads."""
+    if model == "absent" or (model is not None and not isinstance(model, dict)):
+        return Cell("Model", "—", NEUTRAL, "This inspection does not publish its model yet.", link)
+    if model is None:
+        return Cell("Model", "Loading", NEUTRAL, "Inspection is loading its model.", link)
+    name, version = model.get("name") or "?", model.get("version") or "?"
+    return Cell("Model", f"{name} {version}", NEUTRAL, f"Model {name}, version {version} (from inspection).", link)
 
 
 def _roi_cell(s, side):

@@ -80,17 +80,19 @@ class DashboardLayoutTests(ViewTestBase):
 
 
 class LiveImageTests(ViewTestBase):
-    def test_fresh_overlay_replaces_live_image_with_badge(self):
-        overlay = files.overlay_path(self.cfg.paths["data"], "LEFT")
+    def test_dashboard_ignores_the_overlay(self):
+        """F66 (reverses UI-1b): even a fresh live_overlay.jpg is not shown; plain live image only."""
+        overlay = os.path.join(self.cfg.paths["data"], "state", "inspection_left", "live_overlay.jpg")
         os.makedirs(os.path.dirname(overlay), exist_ok=True)
         write_jpeg(overlay, 800, 450)
-        r = self.client.get("/live/CAM1.jpg")
-        self.assertEqual(r["X-DPC-Overlay"], "1")
-        self.assertIn(">overlay<", self.client.get("/part/dash/").content.decode())
-        old = time.time() - files.OVERLAY_MAX_AGE_S - 5               # inspection stopped writing
-        os.utime(overlay, (old, old))
-        self.assertEqual(self.client.get("/live/CAM1.jpg")["X-DPC-Overlay"], "0")
-        self.assertNotIn(">overlay<", self.client.get("/part/dash/").content.decode())
+        r = self.client.get("/live/CAM1.jpg?w=1920")
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn("X-DPC-Overlay", r)
+        expected = files.live_image(self.cfg.paths["frames"], "CAM1", 1920)
+        self.assertEqual(r.content, expected)                    # the plain IMG_1.jpg
+        html = self.client.get("/").content.decode() + self.client.get("/part/dash/").content.decode()
+        self.assertNotIn(">overlay<", html)
+        self.assertNotIn("live_overlay", html)
 
     def test_frozen_image_gets_a_badge(self):
         files.get_meter().sample()

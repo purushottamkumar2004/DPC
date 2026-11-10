@@ -17,6 +17,8 @@ urlpatterns = [
 
     path("cameras/<str:side>/", cameras.page, name="camera"),
     path("part/cameras/<str:side>/", cameras.part, name="part-camera"),
+    path("cameras/<str:side>/detections.json", cameras.detections, name="camera-detections"),
+    path("cameras/<str:side>/frame/<int:seq>.jpg", cameras.frame, name="camera-frame"),
 
     path("alerts/", alerts.page, name="alerts"),
     path("part/alerts/", alerts.part, name="part-alerts"),

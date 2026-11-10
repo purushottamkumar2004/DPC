@@ -1,17 +1,29 @@
 {% extends "monitor/base.html" %}
+{% load static %}
 {% block content %}
 {% with title=cam.side|add:" camera" %}{% include "monitor/partials/page_top.html" %}{% endwith %}
-<nav class="tabs">{% for s in sides %}<a href="/cameras/{{ s }}/" class="{% if s == cam.side %}on{% endif %}">{{ s }}</a>{% endfor %}</nav>
+<div class="tabrow">
+  <nav class="tabs">{% for s in sides %}<a href="/cameras/{{ s }}/{% if tab == 'detections' %}?tab=detections{% endif %}" class="{% if s == cam.side %}on{% endif %}">{{ s }}</a>{% endfor %}</nav>
+  <nav class="tabs">
+    <a href="?tab=live" class="{% if tab == 'live' %}on{% endif %}" data-tip="The plain camera image, as it is taken">Live</a>
+    <a href="?tab=detections" class="{% if tab == 'detections' %}on{% endif %}" data-tip="The last inspected frame with the classes you tick drawn on it">Detections</a>
+  </nav>
+</div>
 <section class="campage">
   <div class="card">
+  {% if tab == "detections" %}
+    {% include "monitor/partials/detections.html" %}
+  {% else %}
     <a class="img big-img" href="/live/{{ cam.camera_id }}.jpg?w=1920" data-tip="Open the full-size image">
       <img data-live="/live/{{ cam.camera_id }}.jpg?w=1600" src="/live/{{ cam.camera_id }}.jpg?w=1600" alt="{{ cam.side }} camera, live image">
       {% include "monitor/partials/cam_badges.html" %}
       <span class="nolive">No live image from the {{ cam.side }} camera</span>
     </a>
+  {% endif %}
   </div>
   <div hx-get="/part/cameras/{{ cam.side }}/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="innerHTML">
     {% include "monitor/partials/camera_body.html" %}
   </div>
 </section>
+{% if tab == "detections" %}<script src="{% static 'monitor/detections.js' %}" defer></script>{% endif %}
 {% endblock %}

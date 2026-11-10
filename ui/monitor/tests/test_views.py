@@ -150,16 +150,16 @@ class ProgramsTests(ViewTestBase):
         r = self.client.get("/programs/inspection_left/")
         self.assertContains(r, "<summary>Details</summary>", html=False)
         self.assertContains(r, "check.py:5 in run")
-        r = self.client.get("/part/programs/inspection_left/log/?level=ERROR")
+        r = self.client.get("/part/programs/inspection_left/log/?log=start&level=ERROR")   # F64: capture tab
         self.assertContains(r, "ERROR boom ********")
         self.assertNotContains(r, "slow frame")
-        r = self.client.get("/part/programs/inspection_left/log/?q=slow")
+        r = self.client.get("/part/programs/inspection_left/log/?log=start&q=slow")
         self.assertContains(r, "WARNING slow frame")
         self.assertEqual(self.client.get("/programs/nope/").status_code, 404)
 
     def test_log_outside_logs_folder_not_shown(self):
         self.cache.handle(*helpers.status("plc", "RUNNING", wtype="plc", log_file="/etc/passwd"))
-        r = self.client.get("/part/programs/plc/log/")
+        r = self.client.get("/part/programs/plc/log/?log=start")   # F64: capture tab
         self.assertContains(r, "outside the logs folder")
         self.assertNotContains(r, "root:")
 

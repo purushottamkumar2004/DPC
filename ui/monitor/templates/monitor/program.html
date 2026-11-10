@@ -6,7 +6,7 @@
   <p class="state {{ p.text.level|lvl }}"><span class="lamp lvl-{{ p.text.level }}"></span>{{ p.text.sentence }}</p>
   {% if p.text.action %}<p class="action">{{ p.text.action }}</p>{% endif %}
   {% if p.message %}<p class="tech">Supervisor: {{ p.message }}</p>{% endif %}
-  <p class="figs"><span>{{ p.id }}</span><span>state for {{ p.since_s|age }}</span><span>restarts {{ p.restarts|default_if_none:"—" }}</span>
+  <p class="figs"><span>{{ p.id }}</span><span>{% if p.status.status == "RUNNING" or p.status.status == "STARTING" or p.status.status == "UNHEALTHY" %}running for{% else %}in this state for{% endif %} {{ p.since_s|age }}</span><span>restarts {{ p.restarts|default_if_none:"—" }}</span>
     <span>heartbeat {% if p.heartbeat_age_s is not None %}{{ p.heartbeat_age_s|age }} ago{% else %}none{% endif %}</span></p>
   {% if p.last_error %}
   <h3>Last error</h3>
@@ -19,7 +19,15 @@
 </section>
 <section class="card">
   <h3>Log <span class="muted">last 200 lines</span></h3>
+  <nav class="tabs logtabs">{% for key, title in log_tabs %}
+    <a href="?log={{ key }}" class="{% if key == log_tab %}on{% endif %}"
+       data-tip="{% if key == 'program' %}What the program itself writes to its log file.{% else %}Captured by the Supervisor: start lines, warnings and crash tracebacks.{% endif %}">{{ title }}</a>{% endfor %}
+  </nav>
   <form class="filters" id="logfilter" onsubmit="return false">
+    <input type="hidden" name="log" value="{{ log_tab }}">
+    <label>Day <select name="day" hx-get="/part/programs/{{ p.id }}/log/" hx-trigger="change" hx-target="#log" hx-include="#logfilter">
+      <option value="">today (current file)</option>
+      {% for d in log_days %}<option value="{{ d }}" {% if d == log_day %}selected{% endif %}>{{ d }}</option>{% endfor %}</select></label>
     <label>Contains <input type="search" name="q" value="{{ log_text }}"
       hx-get="/part/programs/{{ p.id }}/log/" hx-trigger="keyup changed delay:400ms" hx-target="#log" hx-include="#logfilter"></label>
     <label>Level <select name="level" hx-get="/part/programs/{{ p.id }}/log/" hx-trigger="change" hx-target="#log" hx-include="#logfilter">

@@ -68,8 +68,8 @@ def recent_defects(request):
 
 @require_GET
 def live_image(request, camera_id):
-    """The current frame of one configured camera, downscaled (read-only, D-031); the fresh
-    inspection overlay instead when there is one (F60)."""
+    """The current frame of one configured camera, downscaled (read-only, D-031). Plain image only:
+    no overlay, boxes or bands (F66)."""
     cfg = get_config()
     if camera_id not in {c["id"] for c in cfg["cameras"]}:
         raise Http404("unknown camera")
@@ -77,14 +77,9 @@ def live_image(request, camera_id):
         width = max(160, min(1920, int(request.GET.get("w", files.LIVE_WIDTH))))
     except ValueError:
         width = files.LIVE_WIDTH
-    side = next(c["side"] for c in cfg["cameras"] if c["id"] == camera_id)
-    path, overlay = files.camera_source(cfg.paths["frames"], cfg.paths["data"], camera_id, side)
-    jpeg = files.live_image(cfg.paths["frames"], camera_id, width, path=path)
-    if jpeg is None and overlay:               # overlay vanished between stat and read
-        jpeg, overlay = files.live_image(cfg.paths["frames"], camera_id, width), False
+    jpeg = files.live_image(cfg.paths["frames"], camera_id, width)
     if jpeg is None:
         raise Http404("no live image")
     response = HttpResponse(jpeg, content_type="image/jpeg")
     response["Cache-Control"] = "no-store"
-    response["X-DPC-Overlay"] = "1" if overlay else "0"
     return response
