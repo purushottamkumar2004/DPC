@@ -65,13 +65,18 @@ class DefectStore:
                                            xmin, xmax, ymin, ymax))
         self.conn.commit()
 
+    LIVE_COUNT_SQL = ("INSERT INTO wheel_counter_table (ID, WHEEL_COUNT) VALUES (1, %s) "
+                      "ON DUPLICATE KEY UPDATE WHEEL_COUNT = VALUES(WHEEL_COUNT)")
+
     def write_live_wheel_count(self, wheel_count):
-        """R:2782-2803 (D-073 D3): live wheel number for the UI, row ID 1. Errors are logged,
-        not raised, as in RightAlgorithm.py."""
+        """R:2782-2803 (D-073 D3): live wheel number for the UI, row ID 1. An upsert since F75: a DB
+        that was never seeded (Tadipatri, D-101 finding) gets row 1 instead of an UPDATE that changes
+        nothing. Needs ID as primary key (db/schema.sql). WHEEL_COUNT is text, as the site seed '0'.
+        Errors are logged, not raised, as in RightAlgorithm.py."""
         cur = None
         try:
             cur = self.conn.cursor()
-            cur.execute("UPDATE wheel_counter_table SET WHEEL_COUNT = %s WHERE ID = 1", (wheel_count,))
+            cur.execute(self.LIVE_COUNT_SQL, (str(wheel_count),))
             self.conn.commit()
         except Exception:
             self.log.exception("update_wheel_count failed")
