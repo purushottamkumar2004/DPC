@@ -26,6 +26,8 @@ OFF_PATH_COLOUR = "#f0605d"                       # D-098 red
 CLASS_COLOURS = ["#5ec8f2", "#c792ea", "#e6e8eb", "#7fdbca", "#8fa8ff", "#f2a6d5", "#b8c4ce", "#9be0ff",
                  "#d7b8ff", "#a0e7e5"]
 KEEP_PAIRS = 4
+NOT_WRITTEN = ("Inspection has not written detections yet; it needs the F65 version "
+               "(restart inspection).")
 STALE_S = 30                                     # older detections: say so on the page
 TRIES = 4
 
@@ -69,7 +71,7 @@ class PairReader:
         """What the page draws: {"available": False, "reason"} or the pair's data plus seq/age."""
         detections = os.path.join(folder, DETECTIONS_FILE)
         if not os.path.exists(detections) and not os.path.exists(os.path.join(folder, FRAME_FILE)):
-            return {"available": False, "reason": "Detections not available yet."}
+            return {"available": False, "reason": NOT_WRITTEN}
         data, jpeg = self._read_pair(folder)
         with self._lock:
             pairs = self._pairs[folder]

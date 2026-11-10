@@ -1,0 +1,6 @@
+<div class="card" id="side-functions"{% if oob %} hx-swap-oob="true"{% endif %}><div class="h"><span>Functions</span><span class="muted">read-only · switches come in UI-2</span></div>
+  {% for key, label, on in s.checks %}
+  <div class="row" data-tip="From {{ s.inspection_worker }}.json checks.{{ key }}"><span>{{ label }}</span>
+    <span class="{% if on %}c-ok{% else %}c-off{% endif %}"><span class="dot {% if on %}bg-ok{% else %}bg-off{% endif %}"></span> {% if on %}on{% elif on is None %}not known{% else %}off{% endif %}</span></div>
+  {% endfor %}
+</div>

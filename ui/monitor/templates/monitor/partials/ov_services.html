@@ -1,0 +1,2 @@
+{% load monitor_tags %}{% for r in services.rows %}<a class="row" href="{{ r.link }}" data-tip="{{ r.tip }}"><span>{{ r.label }}</span><span class="{{ r.level|lvl }}">{{ r.text }}</span></a>
+{% empty %}<div class="row"><span class="muted">No programs known yet: is the Supervisor running?</span><span></span></div>{% endfor %}

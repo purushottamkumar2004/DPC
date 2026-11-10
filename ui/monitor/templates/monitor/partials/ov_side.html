@@ -1,0 +1,8 @@
+{% load monitor_tags %}<a class="card side" id="side-{{ s.side }}" href="{{ s.link }}" data-tip="Open the {{ s.side }} side page"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="h"><span>{{ s.side }} side</span><span class="{{ s.level|lvl }}">{{ s.state }}</span></div>
+  {% for r in s.rows %}<div class="row" data-tip="{{ r.tip }}"><span class="muted">{{ r.label }}</span><span class="{{ r.level|lvl }}">{{ r.text }}</span></div>{% endfor %}
+  <div class="chips">{% for key, label, on in s.checks %}
+    <span class="fn" data-tip="{% if on %}{{ label }} is switched on for {{ s.side }}.{% elif on is None %}Not known: no rendered settings for {{ s.side }} inspection.{% else %}{{ label }} is switched off for {{ s.side }} (inspection settings).{% endif %}">
+      <span class="dot {% if on %}bg-ok{% else %}bg-off{% endif %}"></span>{% if on %}{{ label }}{% elif on is None %}<span class="off">{{ label }} ?</span>{% else %}<span class="off">{{ label }} off</span>{% endif %}</span>{% endfor %}
+  </div>
+</a>

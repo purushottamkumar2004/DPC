@@ -85,7 +85,7 @@
       parts.push('<span><span class="sw" style="background:' + data.off_colour + '"></span>red = ' + data.off_note +
                  " (auto-ROI " + data.auto_roi_mode + ")</span>");
     } else {
-      parts.push('<span class="muted">Tick a class to draw its detections.</span>');
+      parts.push('<span class="muted">Tick a class to draw it</span>');
     }
     legend.innerHTML = parts.join("");
   }

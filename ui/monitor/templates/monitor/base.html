@@ -15,8 +15,8 @@ try { if (localStorage.getItem("dpc-theme") === "light") document.documentElemen
 <div class="app">
 <nav class="sb" aria-label="Pages">
   {% for p in nav_pages %}
-  <a href="{{ p.url }}" class="{% if active == p.key %}on{% endif %}{% if not p.ready %} later{% endif %}" data-tip="{{ p.tip }}" data-tip-side="right" aria-label="{{ p.title }}">
-    <svg class="ico"><use href="#i-{{ p.icon }}"/></svg></a>
+  <a href="{{ p.url }}" class="{% if active == p.key or p.key == 'system' and active in system_pages %}on{% endif %}{% if not p.ready %} later{% endif %}{% if p.key|slice:':5' == 'side-' %} sidetext{% endif %}" data-tip="{{ p.tip }}" data-tip-side="right" aria-label="{{ p.title }}">
+    {% if p.key|slice:':5' == 'side-' %}{{ p.title }}{% else %}<svg class="ico"><use href="#i-{{ p.icon }}"/></svg>{% endif %}</a>
   {% endfor %}
   <button class="theme" type="button" id="theme-toggle" data-tip="Switch between dark and light (this browser only)" data-tip-side="right" aria-label="Switch theme">
     <svg class="ico dark-only"><use href="#i-sun"/></svg><svg class="ico light-only"><use href="#i-moon"/></svg></button>

@@ -3,13 +3,13 @@
   <thead><tr><th>Program</th><th>State</th><th>Since</th><th>Restarts</th><th>Heartbeat</th><th>Last error</th></tr></thead>
   <tbody>
   {% for p in programs %}
-  <tr class="clickable" onclick="location.href='/programs/{{ p.id }}/'" data-tip="{{ p.text.sentence }}{% if p.text.action %} {{ p.text.action }}{% endif %}">
-    <td><a href="/programs/{{ p.id }}/">{{ p.label }}</a><br><small class="tech">{{ p.id }}</small></td>
+  <tr class="clickable" onclick="location.href='/system/programs/{{ p.id }}/'" data-tip="{{ p.text.sentence }}{% if p.text.action %} {{ p.text.action }}{% endif %}">
+    <td><a href="/system/programs/{{ p.id }}/">{{ p.label }}</a><br><small class="tech">{{ p.id }}</small></td>
     <td><span class="lamp lvl-{{ p.text.level }}"></span><span class="{{ p.text.level|lvl }}">{{ p.text.sentence }}</span><br><small class="tech">{{ p.value }}{% if p.message %} · {{ p.message }}{% endif %}</small></td>
     <td class="num" data-tip="Running: time since the program was started. Otherwise: time in this state.">{{ p.since_s|age }}</td>
     <td class="num">{{ p.restarts|default_if_none:"—" }}</td>
     <td class="num">{% if p.heartbeat_age_s is not None %}{{ p.heartbeat_age_s|age }} ago{% else %}—{% endif %}</td>
-    <td>{% if p.last_error %}{{ p.last_error.message|truncatechars:90 }} <a href="/programs/{{ p.id }}/">Details</a>{% else %}—{% endif %}</td>
+    <td>{% if p.last_error %}{{ p.last_error.message|truncatechars:90 }} <a href="/system/programs/{{ p.id }}/">Details</a>{% else %}—{% endif %}</td>
   </tr>
   {% empty %}
   <tr><td colspan="6">No programs known yet: is the Supervisor running?</td></tr>

@@ -1,0 +1,20 @@
+{% load monitor_tags %}<section class="card" id="side-roi"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="h"><span>Auto-ROI</span><span class="muted">mode {{ s.roi.mode }} · learning {{ s.roi.learning }}</span></div>
+  {% if not s.roi.has_roi %}
+  <p class="note lvl-warning">No region learned yet. Learning or observe mode can be started here in UI-2.</p>
+  {% else %}
+  <div class="facts four">
+    <div><div class="muted">Learned at</div><div>{{ s.roi.learned_at|default:"—" }}</div></div>
+    <div><div class="muted">Learned classes</div><div>{{ s.roi.learned|join:", "|default:"—" }}</div></div>
+    <div><div class="muted">Not learned</div><div class="{% if s.roi.not_learned %}c-warn{% endif %}">{{ s.roi.not_learned|join:", "|default:"none" }}</div></div>
+    <div><div class="muted">Out-of-bound list</div><div>{{ s.roi.outside_total|default_if_none:"—" }} entries{% if s.roi.not_listed %} · {{ s.roi.not_listed }} not listed (rate limit){% endif %}</div></div>
+  </div>
+  {% endif %}
+  {% if s.roi.classes %}
+  <table class="list compact">
+    <thead><tr><th>Class</th><th class="num">inside</th><th class="num">outside</th><th class="num">recent outside</th><th></th></tr></thead>
+    <tbody>{% for r in s.roi.classes %}<tr><td>{{ r.cls }}</td><td class="num">{{ r.inside }}</td><td class="num">{{ r.outside }}</td>
+      <td class="num">{% if r.ratio is not None %}{{ r.ratio|floatformat:"-3" }}{% else %}—{% endif %}</td>
+      <td>{% if r.drift %}<span class="c-warn" data-tip="Many recent detections are outside the learned area: the camera may have moved.">drift</span>{% endif %}</td></tr>{% endfor %}</tbody>
+  </table>{% endif %}
+</section>

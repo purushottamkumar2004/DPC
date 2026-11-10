@@ -1,0 +1,4 @@
+{% for a in alerts %}<a class="row" href="{{ a.link }}" data-tip="{{ a.tip }}"{% if a.id %} data-alert="{{ a.id }}"{% endif %}>
+  <span class="{% if a.level == 'error' %}c-err{% elif a.level == 'warning' %}c-warn{% else %}c-ok{% endif %}"><svg class="ico sm"><use href="#i-{{ a.icon }}"/></svg> {{ a.text }}</span>
+  <span class="muted">{{ a.when }}</span></a>
+{% empty %}<div class="row"><span class="c-ok"><svg class="ico sm"><use href="#i-circle-check"/></svg> No alerts</span><span></span></div>{% endfor %}

@@ -1,0 +1,47 @@
+{% extends "monitor/base.html" %}
+{% load static monitor_tags %}
+{% block content %}
+{% comment %}Level 2 side page (D-101): everything about one side, read-only in UI-1c.{% endcomment %}
+<div hidden hx-get="/part/side/{{ s.side }}/page/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="none"></div>
+{% include "monitor/partials/side_head.html" %}
+<section class="sidegrid">
+  <div class="card imgcard">
+    <div class="h"><span>Image</span>
+      <nav class="tabs">
+        <a href="?tab=live" class="{% if tab == 'live' %}on{% endif %}" data-tip="The plain camera image, as it is taken">Live</a>
+        <a href="?tab=detections" class="{% if tab == 'detections' %}on{% endif %}" data-tip="The last inspected frame with the classes you tick drawn on it">Detections</a>
+      </nav></div>
+    {% if tab == "detections" %}{% include "monitor/partials/detections.html" %}
+    {% else %}
+    <a class="img whole" href="/live/{{ s.camera_id }}.jpg?w=1920" data-tip="Open the full-size image">
+      <img data-live="/live/{{ s.camera_id }}.jpg?w=1600" src="/live/{{ s.camera_id }}.jpg?w=1600" alt="{{ s.side }} camera, live image">
+      {% include "monitor/partials/cam_badges.html" %}
+      <span class="nolive">No live image from the {{ s.side }} camera</span>
+    </a>{% endif %}
+  </div>
+  <div class="sidecol">
+    {% include "monitor/partials/side_functions.html" %}
+    {% include "monitor/partials/side_roi.html" %}
+  </div>
+</section>
+{% include "monitor/partials/side_roi_images.html" %}
+<section class="pair">
+    <div class="card"><div class="h"><span>Model</span><span class="muted">read-only</span></div>
+      <div class="row"><span class="muted">Running</span><span data-tip="{{ s.model_running.tip }}">{{ s.model_running.text }}</span></div>
+      <div class="row"><span class="muted">Current (folder)</span><span>{{ s.model.current|default:"—" }}</span></div>
+      <div class="row"><span class="muted">Pinned</span><span>{{ s.model.pinned|default:"no" }}</span></div>
+      <div class="row"><span class="muted">Installed</span><span>{% for v in s.model.installed %}{{ v.version }}{% if v.version == s.model.current %} (current){% endif %}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</span></div>
+      {% if s.model.error %}<p class="note">{{ s.model.error }}</p>{% endif %}
+      <p class="tech">{{ s.model.name|default:"" }} · switching and rollback come in UI-2</p>
+    </div>
+    <div class="card"><div class="h"><span>Camera</span><span class="muted">read-only</span></div>
+      <div class="row"><span class="muted">Serial</span><span>{{ s.camera.serial|default:"—" }}</span></div>
+      <div class="row"><span class="muted">Exposure</span><span>{% if s.camera.exposure_us %}{{ s.camera.exposure_us }} µs{% else %}—{% endif %}</span></div>
+      <div class="row"><span class="muted">Frame rate</span><span>{% if s.camera.fps %}{{ s.camera.fps }} fps{% else %}—{% endif %}</span></div>
+      <div class="row"><span class="muted">Rotate</span><span>{% if s.camera.rotate is not None %}{{ s.camera.rotate }}°{% else %}—{% endif %}</span></div>
+      <p class="tech">{{ s.camera_id }} · {{ s.camera.driver|default:"" }} · from {{ s.capture_worker }}.json · editing comes in UI-3</p>
+    </div>
+  
+</section>
+{% if tab == "detections" %}<script src="{% static 'monitor/detections.js' %}" defer></script>{% endif %}
+{% endblock %}

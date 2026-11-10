@@ -1,0 +1,30 @@
+{% extends "monitor/base.html" %}
+{% block main_class %}main ov{% endblock %}
+{% block content %}
+{% comment %}Level 1 overview (D-101): data only, no images, no defect list.
+Layout: docs/ui/overview_reference.html. One poll per refresh swaps each small fragment (hx-swap-oob).{% endcomment %}
+<div hidden hx-get="/part/overview/" hx-trigger="every {{ refresh_seconds }}s" hx-swap="none"></div>
+
+<header class="card top">
+  <div><div class="site">{{ site_name }}</div><div class="muted" id="clock">&nbsp;</div></div>
+  {% include "monitor/partials/ov_pill.html" %}
+  {% include "monitor/partials/ov_cycle.html" %}
+</header>
+
+<section class="sides">
+  {% for s in sides %}{% include "monitor/partials/ov_side.html" %}{% endfor %}
+</section>
+
+<section class="lower">
+  <div class="card listcard">
+    <div class="h"><a href="/system/programs/">Services</a><span class="muted" id="ov-services-sum"{% if oob %} hx-swap-oob="true"{% endif %}>{{ services.summary }}</span></div>
+    <div class="scroll" id="ov-services">{% include "monitor/partials/ov_services.html" %}</div>
+  </div>
+  <div class="card listcard">
+    <div class="h"><a href="/system/alerts/">Alerts</a><span class="muted">newest first</span></div>
+    <div class="scroll" id="ov-alerts">{% include "monitor/partials/ov_alerts.html" %}</div>
+  </div>
+</section>
+
+{% include "monitor/partials/ov_strip.html" %}
+{% endblock %}

@@ -1,0 +1,3 @@
+{% load monitor_tags %}<a class="prog wide" id="cycle" href="{{ cycle.wheel.link }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="muted"><span data-tip="{{ cycle.wheel.tip }}">{{ cycle.wheel.text }}</span> · <span class="{{ cycle.plate.level|lvl }}" data-tip="{{ cycle.plate.tip }}">{{ cycle.plate.text }}</span></div>
+  <div class="bar"><div style="width:{{ cycle.percent }}%"></div></div></a>

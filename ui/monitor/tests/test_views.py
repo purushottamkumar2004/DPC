@@ -48,15 +48,16 @@ class ViewTestBase(TestCase):
 
 class DashboardTests(ViewTestBase):
     def test_dashboard_green(self):
+        """UI-1c (D-101): the overview replaces the dashboard; same data, no images."""
         files.get_meter().sample()
         r = self.client.get("/")
         self.assertEqual(r.status_code, 200)
         html = r.content.decode()
-        self.assertIn("Everything is working.", html)
-        self.assertIn("LEFT camera is running.", html)
-        self.assertIn("117", html)                          # live wheel
-        self.assertIn("Wheel missing", html)                # last defects
-        self.assertIn("Defect mails are switched off", html)
+        self.assertIn("All systems running", html)
+        self.assertIn("LEFT side", html)
+        self.assertIn("Inspecting", html)
+        self.assertIn("Cycle: wheel 117 of 190", html)                # live wheel
+        self.assertIn("Switched off", html)                           # mail
         self.assertIn("htmx-2.0.4.min.js", html)
         self.assertNotIn("cdn", html.lower())
         self.assertNotIn(helpers.SECRET, html)
@@ -66,11 +67,10 @@ class DashboardTests(ViewTestBase):
         r = self.client.get("/part/banner/")
         self.assertContains(r, "LEFT camera is not delivering images")
         self.assertContains(r, "lvl-error")
-        r = self.client.get("/part/side/LEFT/")
+        r = self.client.get("/part/overview/")
         self.assertContains(r, "stopped retrying")
-        self.assertEqual(self.client.get("/part/side/NOPE/").status_code, 404)
-        self.assertEqual(self.client.get("/part/tiles/").status_code, 200)
-        self.assertEqual(self.client.get("/part/recent-defects/").status_code, 200)
+        self.assertRegex(r.content.decode(), r'(?s)id="side-LEFT".*?c-err">Failed')
+        self.assertEqual(self.client.get("/side/NOPE/").status_code, 404)
 
     def test_live_image_is_read_only_and_downscaled(self):
         before = os.stat(self.live)

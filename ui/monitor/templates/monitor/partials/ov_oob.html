@@ -1,0 +1,6 @@
+{% include "monitor/partials/ov_pill.html" %}{% include "monitor/partials/ov_cycle.html" %}
+{% for s in sides %}{% include "monitor/partials/ov_side.html" %}{% endfor %}
+<span class="muted" id="ov-services-sum" hx-swap-oob="true">{{ services.summary }}</span>
+<div id="ov-services" hx-swap-oob="innerHTML">{% include "monitor/partials/ov_services.html" %}</div>
+<div id="ov-alerts" hx-swap-oob="innerHTML">{% include "monitor/partials/ov_alerts.html" %}</div>
+{% include "monitor/partials/ov_strip.html" %}

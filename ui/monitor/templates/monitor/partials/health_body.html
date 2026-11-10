@@ -36,7 +36,7 @@
     <p>{% if mqtt.connected %}Last message {{ mqtt.last_message_age_s|age }} ago.{% else %}Values shown may be old.{% endif %}</p>
     <p class="tech">MQTT {{ mqtt.host }}:{{ mqtt.port }}</p>
   </div>
-  <a class="tile" href="/programs/" data-tip="The Supervisor starts, watches and restarts every program.">
+  <a class="tile" href="/system/programs/" data-tip="The Supervisor starts, watches and restarts every program.">
     <div class="muted">Supervisor</div>
     <div class="big {% if supervisor.state == 'online' %}c-ok{% else %}c-err{% endif %}">{% if supervisor.state == 'online' %}Online{% else %}Offline{% endif %}</div>
     <p>{% if supervisor.state == 'online' %}Running; programs are watched.{% elif supervisor.state %}Not running ({{ supervisor.state }}).{% else %}No news from the Supervisor.{% endif %}</p>
