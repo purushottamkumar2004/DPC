@@ -25,7 +25,7 @@ The logic is that of `LeftAlgorithm.py`, the reference (D-069). Changes are only
 | `model_selftest.py` | model self-test before a switch (F47, section 12); read-only, not part of the running program |
 | `auto_roi.py` | auto region of interest: learning on request, path check, observe / filter, out-of-bound list, drift (P13, section 13) |
 | `roi_offline.py` | learns the ROI from saved frames into a chosen folder (P13, section 13); not part of the running program |
-| `live_overlay.py` | annotated preview for the UI every few seconds (F60, section 14) |
+| `live_overlay.py` | annotated preview, plus the plain live frame + detections pair, for the UI every few seconds (F60, F65, section 14) |
 | `tests/` | unit tests and the old-vs-new equivalence test (no GPU needed) |
 
 ## 2. Flow
@@ -85,6 +85,7 @@ flowchart TD
   - Appended in F60 (append-only, D-034):
     - `ms_per_image`: mean time to process one frame, model plus every check, over the last 60 s; null until a frame was processed.
     - `waiting_for_plate`: true until the first plate after a start, while frames are inferred but not inspected.
+  - Appended for R6: `model` {name, version} of the running model package; null while it is still loading.
   - `healthy` is false when the main loop has not turned for 60 s, for example a hung GPU call. An empty `INF` still turns the loop.
   - The broker comes from the JSON `mqtt` block (F25; `user`/`password` null = no login). A file without the block (rendered before F25), or no paho-mqtt, means the program logs "Heartbeat off" once and runs without a heartbeat. Inspection never depends on the broker (D-034).
 
@@ -230,7 +231,7 @@ The mail sender sends every unsent row of any type, so all of them are now maile
 - **New observation, kept:** a frame is deleted as invalid when it is less than 0.03 s old (L:503-526, `is_valid_image`). With the atomic hand-off (D-031) a fresh `INF` link can be that young, so a frame can be lost. It is rare at 4 fps. Fix: skip the frame instead of deleting it; developer decision.
 
 ## 11. Tests
-- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 80 tests.
+- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 84 tests.
   - Settings from the real renderer: Tadipatri per-side values; a missing key is named.
   - Wheel counter in both directions; plate tracker: one plate crossing = one new plate, on both sides (D-077).
   - D-077 through the real frame flow: a plate crossing the Left camera with a wheel in view gives one reset and no `Batch_Wheels_Missing`; the next plate gives one, with the right count. (With the old B5 rule the same test gives 4 resets and a false restart at wheel 1.)
@@ -364,3 +365,18 @@ Every 3 s (`live_overlay.OVERLAY_INTERVAL_S`) inspection writes `<root>/data/sta
 The overlay uses the detections before auto-ROI filtering plus the frame's off-path list, drawn on a copy, so it never changes a detection or a defect. Cost: one downscale and a few rectangles every 3 s. Any error is logged and skipped.
 
 Tests (`tests/test_live_overlay.py`, 5): heartbeat fields (null before frames, mean after, append-only order); drawing (red off-path box, class colour box, band line, legend, 960 × 540 output, no red among class colours, main classes distinct); writer interval and atomic file; the real frame flow writes the overlay with the off-path box in red. The parameterised INSERT has its own test in `test_inspection.py`.
+
+**Live frame + detections, as a pair (F65).** In the same 3 s step, so the UI can draw only the classes a person selects:
+- `live_frame.jpg`: the same frame downscaled to 960 px wide, **no drawing**.
+- `live_detections.json`:
+  ```
+  {frame, time, seq, size [w, h] of live_frame.jpg, frame_mtime_ns,
+   boxes [{class, box [x1, y1, x2, y2] in live_frame pixels, score, off_path}],
+   bands {class: [[x, y_min, y_max], ...] in live_frame pixels}, auto_roi_mode}
+  ```
+  - **Boxes** are the detections **before** auto-ROI filtering, every class; `off_path` true = removed in `filter` mode, only marked in `observe`.
+  - **Bands:** every learned class, over the full width (D-094: the frame edges plus the stored points), when a `roi.json` for this frame size exists; otherwise `{}`.
+- **Matching pair:** `live_frame.jpg` is replaced first and `live_detections.json` last, each atomically. The JSON names the image file's `frame_mtime_ns`. A reader that finds a different mtime on `live_frame.jpg` has caught the next pair halfway, and reads again. `seq` counts the pairs since start.
+- `live_overlay.jpg` (F60) is still written as before.
+
+Tests (`tests/test_live_overlay.py`, now 10): additionally boxes and bands scaled to the live frame (1920 → 960), `off_path` flags, no bands without `roi.json`; the pair written together (skipped steps write neither, `frame_mtime_ns` and `size` match the image, no drawing on `live_frame.jpg`); the frame flow writes the pair with the frame name; heartbeat `model` field (null, then set, last key).

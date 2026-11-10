@@ -41,9 +41,20 @@ class HeartbeatFieldsTest(unittest.TestCase):
         stats.frame_done(ms=140, waiting_for_plate=False)
         p = HB.heartbeat_payload("inspection_left", stats, "v", "c")
         self.assertEqual((p["ms_per_image"], p["waiting_for_plate"]), (120.0, False))
-        old_keys = ["worker_id", "healthy", "pid", "version", "config_hash", "fps", "inf_queue_depth", "last_frame_age_s"]
+        old_keys = ["worker_id", "healthy", "pid", "version", "config_hash", "fps", "inf_queue_depth", "last_frame_age_s",
+                    "ms_per_image", "waiting_for_plate"]
         self.assertEqual(list(p)[:len(old_keys)], old_keys)                 # append-only (D-034)
         json.dumps(p)
+
+    def test_model_field_appended(self):
+        """R6: model {name, version} last; null while the model is still loading."""
+        stats = HB.LoopStats()
+        p = HB.heartbeat_payload("inspection_left", stats, "v", "c")
+        self.assertEqual((list(p)[-1], p["model"]), ("model", None))
+        stats.model = {"name": "dpc_maskrcnn_left", "version": "2026.11.04"}
+        p = HB.heartbeat_payload("inspection_left", stats, "v", "c")
+        self.assertEqual(p["model"], {"name": "dpc_maskrcnn_left", "version": "2026.11.04"})
+        self.assertEqual(json.loads(json.dumps(p))["model"]["version"], "2026.11.04")
 
 
 def flat_paths(cls="bucket_clip", y0=700, y1=1000):
@@ -77,6 +88,27 @@ class DrawTest(unittest.TestCase):
             self.assertGreater(np.abs(np.array(colour) - L.RED).max(), 80, colour)
 
 
+class LiveDetectionsTest(unittest.TestCase):
+    def test_boxes_and_bands_scaled_to_live_frame(self):
+        inside = det("bucket_clip", 400, 800, 800, 980, score=0.91234)
+        off = det("bucket_clip", 1200, 100, 1600, 260)
+        data = L.live_detections({"bucket_clip": [inside, off], "wheel": [det("wheel", 0, 0, 500, 500)]},
+                                 [("bucket_clip", off)], flat_paths(), (W, H), (960, 540),
+                                 {"frame": "f.jpg", "mode": "observe"})
+        self.assertEqual(data["size"], [960, 540])
+        self.assertEqual(data["auto_roi_mode"], "observe")
+        by_box = {tuple(b["box"]): b for b in data["boxes"]}
+        self.assertEqual(by_box[(200.0, 400.0, 400.0, 490.0)],
+                         {"class": "bucket_clip", "box": [200.0, 400.0, 400.0, 490.0], "score": 0.912, "off_path": False})
+        self.assertTrue(by_box[(600.0, 50.0, 800.0, 130.0)]["off_path"])
+        self.assertEqual(by_box[(0.0, 0.0, 250.0, 250.0)]["class"], "wheel")          # before filtering, all classes
+        self.assertEqual(data["bands"], {"bucket_clip": [[0.0, 350.0, 500.0], [960.0, 350.0, 500.0]]})
+
+    def test_no_roi_no_bands(self):
+        data = L.live_detections({}, [], None, (W, H), (960, 540), {"mode": "off"})
+        self.assertEqual((data["boxes"], data["bands"], data["auto_roi_mode"]), ([], {}, "off"))
+
+
 class WriterTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
@@ -93,8 +125,34 @@ class WriterTest(unittest.TestCase):
         self.assertFalse(writer.maybe_write(image, {}, [], None, info))
         now[0] += 2.5
         self.assertTrue(writer.maybe_write(image, {}, [], None, info))
-        self.assertEqual(os.listdir(self.dir), ["live_overlay.jpg"])         # no temp file left
+        self.assertEqual(sorted(os.listdir(self.dir)),                        # no temp file left
+                         ["live_detections.json", "live_frame.jpg", "live_overlay.jpg"])
         self.assertEqual(cv2.imread(os.path.join(self.dir, "live_overlay.jpg")).shape, (540, 960, 3))
+
+
+class PairTest(unittest.TestCase):
+    def test_pair_written_together_and_matching(self):
+        folder = tempfile.mkdtemp()
+        try:
+            now = [0.0]
+            writer = L.LiveOverlay(folder, LOG, interval_s=3, clock=lambda: now[0])
+            image = np.zeros((H, W, 3), np.uint8)
+            for frame, expect_write in (("a.jpg", True), ("b.jpg", False), ("c.jpg", True)):
+                writer.maybe_write(image, {"wheel": [det("wheel", 100, 100, 600, 600)]}, [], None,
+                                   {"frame": frame, "mode": "off"})
+                with open(os.path.join(folder, "live_detections.json")) as f:
+                    data = json.load(f)
+                if expect_write:
+                    self.assertEqual(data["frame"], frame)
+                self.assertNotEqual(data["frame"], "b.jpg")                      # skipped: neither file
+                self.assertEqual(data["frame_mtime_ns"], os.stat(os.path.join(folder, "live_frame.jpg")).st_mtime_ns)
+                self.assertEqual(list(cv2.imread(os.path.join(folder, "live_frame.jpg")).shape[1::-1]), data["size"])
+                now[0] += 2
+            self.assertEqual(data["seq"], 2)
+            plain = cv2.imread(os.path.join(folder, "live_frame.jpg"))
+            self.assertEqual(int(plain.max()), 0)                                 # no drawing on live_frame
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 class FrameFlowTest(unittest.TestCase):
@@ -123,6 +181,12 @@ class FrameFlowTest(unittest.TestCase):
             self.assertEqual([c for c, _ in insp.roi.last_outside], ["bucket_clip"])
             s = 960 / W
             self.assertLess(np.abs(out[int(260 * s), int(1400 * s)].astype(int) - L.RED).max(), 60)
+            with open(os.path.join(state, "live_detections.json")) as f:
+                data = json.load(f)
+            self.assertEqual(data["frame"], frame_name(1))
+            self.assertEqual(data["boxes"], [{"class": "bucket_clip", "box": [600.0, 50.0, 800.0, 130.0],
+                                              "score": 0.9, "off_path": True}])
+            self.assertEqual(data["bands"]["bucket_clip"], [[0.0, 350.0, 500.0], [960.0, 350.0, 500.0]])
         finally:
             shutil.rmtree(root, ignore_errors=True)
 

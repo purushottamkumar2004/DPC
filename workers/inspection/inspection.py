@@ -168,7 +168,7 @@ class Inspection:
             if paths is not None and (clean.shape[1], clean.shape[0]) != paths.frame_size:
                 paths = None                     # ROI ignored for another frame size (auto_roi logs it)
             self.overlay.maybe_write(clean, raw, self.roi.last_outside, paths,
-                                     {"side": self.s.side, "mode": self.s.auto_roi.mode,
+                                     {"side": self.s.side, "mode": self.s.auto_roi.mode, "frame": os.path.basename(frame_path),
                                       "wheel": self.wheel_counter, "waiting_for_plate": not self.plate_found})
 
     def _process(self, frame_path):
@@ -320,6 +320,7 @@ def main() -> int:
         from model import Detector, load_package          # Detectron2 / GPU from here on
         stats.tick()
         detector = Detector(load_package(settings.models_dir, settings.model_name), settings.threshold, logger)
+        stats.model = {"name": detector.package.name, "version": detector.package.version}   # heartbeat (R6)
         store = DefectStore(conn, conn.cursor(), settings, logger)
         purge_inf(settings.paths.inf)
         if settings.auto_roi.defaulted:
