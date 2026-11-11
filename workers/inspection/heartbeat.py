@@ -42,6 +42,17 @@ class LoopStats:
         self._frame_ms = deque()               # (time, ms) per processed frame, same window as fps
         self.waiting_for_plate = True          # F60: no inspection until the first plate
         self.model = None                      # R6: {name, version} once the model is loaded
+        # F76: plate / cycle boundary, replaced as one dict so the heartbeat thread never reads half
+        self.plate = {"plates_seen": 0, "last_plate_frame": None, "last_plate_at": None,
+                      "last_cycle_wheels": None}
+
+    def plate_seen(self, frame_name, cycle_wheels):
+        """F76: a NEW plate (once per physical plate, D-077). cycle_wheels = wheels counted in the
+        cycle that just ended; None for the first plate after a start (no complete cycle before it)."""
+        import datetime
+        self.plate = {"plates_seen": self.plate["plates_seen"] + 1, "last_plate_frame": frame_name,
+                      "last_plate_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+                      "last_cycle_wheels": cycle_wheels}
 
     def tick(self, inf_queue_depth=None):
         self.last_tick = time.monotonic()
@@ -90,6 +101,8 @@ def heartbeat_payload(worker_id, stats: LoopStats, version, config_hash, now=Non
     payload["waiting_for_plate"] = stats.waiting_for_plate
     # R6, appended: the running model; null while it is still loading
     payload["model"] = stats.model
+    # F76, appended: cycle boundaries for transfer (D-105) and "last plate N min ago" in the UI
+    payload.update(stats.plate)
     return payload
 
 
