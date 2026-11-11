@@ -56,6 +56,7 @@ Statuses: STARTING, RUNNING, UNHEALTHY, WAITING_RESTART, STOPPED, FAILED. Events
 - plc and ui: as built (PLC service D-084, UI D-096).
 Since F70 every rendered worker file has `mqtt` {host, port, user, password} (user/password null = no login; ui additionally `topic_prefix`); a broker change in `site.yaml` therefore rewrites, and restarts, every worker.
 **[BUILT, UI-1]** `dpc/worker/ui/health` heartbeat every 10 s. The UI keeps its own event history in `data/state/ui/ui.sqlite3` (UI-owned folder, written only by the UI, not cleaned).
+**[BUILT, P12, D-105]** transfer events on `dpc/worker/transfer/event`: cycle_staged, cycle_uploaded, upload_failed, model_downloaded {name, version}, model_download_failed, model_update_done, job_cancelled; heartbeat blocks `upload_cycle` and `model_update` (state, progress). Requests: `<root>/run/transfer.{upload_cycle,model_update,cancel}`.
 **[BUILT, P13]** auto-ROI events on `dpc/worker/inspection_<side>/event`: `roi_learned` {learned, not_learned}, `roi_learn_failed` {result, reason}, `roi_drift` {side, class, ratio, window}.
 **[BUILT, P11, D-087]** model events on `dpc/supervisor/event`, published by the `model` command (best effort): `model_switched` / `model_rolled_back` {model, from, to, sides, workers, restarted, pending, not_running}; `model_switch_failed` {model, action: switch|rollback, to, reason}; `model_pinned` {model, version, previous_pin, current}; `model_unpinned` {model, version}. Reload channel requests may carry `action: restart_workers` + `workers` + `reason`.
 **[BUILT, PLC service, D-084]** `dpc/plc/status` (retained) {timestamp, connected, conveyor_status, light_value, light_ok, cleaning_active, last_pulse_at, auto_cleaning}; `dpc/plc/command` {"action": "clean_pulse", "source", "reason"} (only `clean_pulse`; `poor_view` stays PROPOSED, Q22); events on `dpc/worker/plc/event`: `light_on_written`, `cleaning_pulse_started`, `cleaning_pulse_ended`.
@@ -101,7 +102,7 @@ Root `<root>` = `~/INSIGHTZZ` (config key `paths.root`), created by `scripts/set
 ```
 code/   config/{site.yaml, rendered/}   logs/   run/
 data/frames/CAM1|CAM2/{live, _tmp, INF, RAW_IMAGES, UI}      data/ui_live/CAM1|CAM2 (reserved)
-data/images/{DEFECTIVE, REPEATED, RAW, PLATE, MAGNET, TEMP}/{LEFT, RIGHT}
+data/images/{DEFECTIVE, REPEATED, RAW, PLATE, MAGNET, TEMP}/{LEFT, RIGHT}   data/transfer/ (staging of the transfer service, D-105; never touched by cleanup)
 data/wheel_status/{LEFT, RIGHT, IMAGES/{LEFT, RIGHT}, PDFS} (IMAGES/<SIDE> used by inspection D-073 D4, created by `setup_dpc_layout.sh` and checked by `dpc-check` since F23; the rest assumed, Q13)      data/bolt_data/{LEFT, RIGHT}   data/state   data/models
 ```
 **Frame lifecycle rules (D-031)** [BUILT in `frame_capture_basler`]:
