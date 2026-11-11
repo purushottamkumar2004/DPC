@@ -19,7 +19,22 @@ Safety: only `light_register` and `cleaning_register` can be written (any other 
 
 MQTT: `dpc/plc/status` (retained, every status interval), heartbeat on `dpc/worker/plc/health` (healthy while the program runs, even with the PLC down), events `light_on_written`, `cleaning_pulse_started`, `cleaning_pulse_ended` on `dpc/worker/plc/event`. Broker down: the service runs on.
 
-Site check, writes nothing: `DPC_WORKER_CONFIG=~/INSIGHTZZ/config/rendered/plc.json python3 plc_worker.py --check` prints the light, cleaning and conveyor registers.
+## Test functions (STATUS S5, wizard step 4, `plc_test.py`)
+They talk to the PLC directly (not through the service). Add `--json` for the UI.
+| Command | Does | Writes |
+|---|---|---|
+| `python3 plc_worker.py --check` | reads the light, cleaning and conveyor registers that are given; `light_is_on` | nothing |
+| `python3 plc_worker.py --light on\|off --seconds N` (default 5, max 600) | switches the light, holds N s, then writes `light_on_value` again | the light register only |
+| `python3 plc_worker.py --pulse` | one pulse: 1, `cleaning_pulse_seconds` (max 120), 0 | the cleaning register only |
+
+Settings: `plc.json` (env `DPC_WORKER_CONFIG`) when present, every value overridable, so the wizard can test before `site.yaml` exists: `--type --ip --port --timeout-s --light-register --light-on-value --cleaning-register --conveyor-status-register --cleaning-pulse-seconds`. There are no built-in IP or register values for the tests; a missing one is a bad request.
+Example: `python3 plc_worker.py --light off --seconds 5 --ip 192.168.1.5 --light-register 4109 --json`
+
+Result JSON: `ok`, `status`, `action`, `message`, `plc {type, ip, port}`, `settings_from`; check adds `registers {light|cleaning|conveyor_status: {register, value}}`, `light_on_value`, `light_is_on`; light and pulse add `writes [{register, value, reason, written, read_back}]`, `held_full_time`, `restored` (light) / `ended` (pulse), `duration_s`.
+Exit codes: 0 ok, 1 failed or restore_failed, 2 bad_request, 3 unreachable.
+The light is always put back to `light_on_value` and cleaning back to 0, also on SIGTERM / Ctrl-C during the wait (retried for 15 s); if that fails the status is `restore_failed` and the message says the light may be OFF / cleaning may be ON. Test writes are logged to `<root>/logs/plc_test.log` when the logs folder exists.
+If the PLC service is running at the same time, it puts the light back within `light_check_seconds`, and a test pulse ends any running service pulse; use the tests in setup mode (D-103) or with the service stopped.
+`--clean-pulse` is different: it asks the RUNNING service for a pulse over MQTT.
 
 Crash: config error (including a missing `plc.json`) or an error escaping the loop -> `<root>/run/plc.last_error.json`, exit 1 (D-073 D7, D-079). SIGTERM/SIGINT: exit 0. Log: `<root>/logs/plc.log`, midnight rotation, `log.backup_count` files; every write at INFO with register, value and reason.
 
@@ -27,7 +42,8 @@ Missing keys inside `plc.json` get the Tadipatri values (`plc_settings.DEFAULTS`
 
 | File | What |
 |---|---|
-| `plc_worker.py` | entry, loop, `--check`, `--clean-pulse`, exit codes |
+| `plc_worker.py` | entry, loop, CLI (`--check`, `--light`, `--pulse`, `--clean-pulse`), exit codes |
+| `plc_test.py` | the wizard test functions (S5) |
 | `plc_settings.py` | JSON reader, defaults, validation |
 | `modbus_link.py` | the one Modbus client: reconnect, backoff, write gate |
 | `plc_service.py` | light, pulse, conveyor status (tick based) |
