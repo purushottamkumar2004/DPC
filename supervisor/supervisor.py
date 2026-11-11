@@ -36,6 +36,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
 from communication.mqtt_client import MqttClient, now_iso      # noqa: E402
+from core.auto_install import AutoInstaller                     # noqa: E402
 from core.config import ConfigError, ConfigurationManager, parse_quiet_window  # noqa: E402
 from core.models import DEFAULT_SELFTEST, ModelCommandError, ModelManager   # noqa: E402
 from core.monitor import Monitor                                # noqa: E402
@@ -86,6 +87,9 @@ class Supervisor:
             self.workers[wc.id] = w
 
         self.disabled = list(config.disabled)          # F59: published once as DISABLED (retained)
+        # F82: models.auto_update: install -> switch after the transfer worker's model_downloaded
+        self.auto_install = AutoInstaller(self.settings, self.site_env, self.settings.runtime_root,
+                                          config.config_path, self._publish_supervisor_event)
         self.monitor = Monitor(self.workers, self.process_manager, self.recovery,
                                self.mqtt, self.settings.monitoring)
         self._not_started = []                # worker ids still waiting for their turn at startup
@@ -113,6 +117,7 @@ class Supervisor:
         self.mqtt.start()
         self.mqtt.subscribe(self.mqtt.worker_topic("+", "health"), self._on_health)
         self.mqtt.subscribe(self.mqtt.worker_topic("+", "command"), self._on_command)
+        self.mqtt.subscribe(self.mqtt.worker_topic("transfer", "event"), self.auto_install.on_transfer_event)
 
         for worker in self.workers.values():
             self.runtime.prepare(worker.config)
@@ -131,6 +136,7 @@ class Supervisor:
             self._serve_reload_request()
         self._launch_ready_workers()
         self._start_due_periodic_runs()
+        self.auto_install.tick()
         if time.time() >= self._next_check:
             self.monitor.check_all()
             self._apply_follows()
@@ -394,6 +400,7 @@ class Supervisor:
 
     def shutdown(self):
         log.info("Shutting down - stopping workers (reverse order)")
+        self.auto_install.stop()              # F82: a running automatic model switch ends first
         for worker in reversed(list(self.workers.values())):
             self.process_manager.stop_worker(worker)
             worker.message = "supervisor shutdown"
