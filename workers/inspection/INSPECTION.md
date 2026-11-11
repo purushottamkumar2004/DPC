@@ -25,6 +25,7 @@ The logic is that of `LeftAlgorithm.py`, the reference (D-069). Changes are only
 | `model_selftest.py` | model self-test before a switch (F47, section 12); read-only, not part of the running program |
 | `auto_roi.py` | auto region of interest: learning on request, path check, observe / filter, out-of-bound list, drift (P13, section 13) |
 | `roi_offline.py` | learns the ROI from saved frames into a chosen folder (P13, section 13); not part of the running program |
+| `measure.py` | measure tool for the setup wizard: box sizes per class and the movement direction (S6, section 15); read-only, not part of the running program |
 | `live_overlay.py` | annotated preview, plus the plain live frame + detections pair, for the UI every few seconds (F60, F65, section 14) |
 | `tests/` | unit tests and the old-vs-new equivalence test (no GPU needed) |
 
@@ -238,7 +239,7 @@ The mail sender sends every unsent row of any type, so all of them are now maile
 - **New observation, kept:** a frame is deleted as invalid when it is less than 0.03 s old (L:503-526, `is_valid_image`). With the atomic hand-off (D-031) a fresh `INF` link can be that young, so a frame can be lost. It is rare at 4 fps. Fix: skip the frame instead of deleting it; developer decision.
 
 ## 11. Tests
-- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 89 tests; the 2 real-DB tests of `test_live_counter.py` run only with `DPC_TEST_DB=host:port:user:password` (scratch database `dpc_f75_test`, created and dropped), otherwise they are skipped.
+- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 100 tests; the 2 real-DB tests of `test_live_counter.py` run only with `DPC_TEST_DB=host:port:user:password` (scratch database `dpc_f75_test`, created and dropped), otherwise they are skipped.
   - Settings from the real renderer: Tadipatri per-side values; a missing key is named.
   - Wheel counter in both directions; plate tracker: one plate crossing = one new plate, on both sides (D-077).
   - D-077 through the real frame flow: a plate crossing the Left camera with a wheel in view gives one reset and no `Batch_Wheels_Missing`; the next plate gives one, with the right count. (With the old B5 rule the same test gives 4 resets and a false restart at wheel 1.)
@@ -387,3 +388,32 @@ Tests (`tests/test_live_overlay.py`, 5): heartbeat fields (null before frames, m
 - `live_overlay.jpg` (F60) is still written as before.
 
 Tests (`tests/test_live_overlay.py`, now 10): additionally boxes and bands scaled to the live frame (1920 → 960), `off_path` flags, no bands without `roi.json`; the pair written together (skipped steps write neither, `frame_mtime_ns` and `size` match the image, no drawing on `live_frame.jpg`); the frame flow writes the pair with the frame name; heartbeat `model` field (null, then set, last key).
+
+## 15. Measure tool for the setup wizard (S6; D-103 steps 3 and 7, D-077, D-086)
+`python3 workers/inspection/measure.py --frames <folder> (--side LEFT | --model <name>) [--version <v>] [--count 40] [--threshold 0.5] [--models-dir <dir>] [--json]`
+
+Runs a model package on the newest N `.jpg` frames of a folder: the live `RAW_IMAGES`, or the frames the wizard grabbed. The model package is chosen like this:
+- **`--side`** takes the model name and threshold from `inspection_<side>.json` (per-side models, D-086); **`--model`** names it directly.
+- Without `--version`, the version `current` points to.
+- sha256-checked, using the same `model.Detector` and label mapping as inspection.
+
+The tool returns:
+1. **Sizes:** per class the median width and height, the 10th / 90th percentiles and the number of boxes, plus an **`object_sizes` proposal** from the medians: `wheel_w` / `wheel_h` (wheel), `bucket_clip_w`, `half_bucket_clip_w`, `chain_w` (first of `chain`, `bottom_chain`, `top_chain` the model has). A key whose class was not seen is `null`.
+   - **Note:** the checks use `bucket_clip_w` / `half_bucket_clip_w` as a **minimum** width (a clip must be wider). The median itself would reject about half the clips. The wizard should propose a value below it, e.g. the 10th percentile or 0.9 × median. The person confirms (D-103 step 7).
+2. **Direction:** `rtl`, `ltr` or `unknown`, from the full `wheel` boxes (half wheels are cut at the image edge) over consecutive frames.
+   - **Matching:** each wheel is matched to the nearest wheel of the next frame within half a wheel width; frames more than 2 s apart are not paired.
+   - **Steps:** steps under 3 px count as not moving.
+   - **Decision:** at least 5 moving steps, of which at least 80 % in the same direction. Negative x steps = `rtl`, positive = `ltr`.
+   - **Evidence:** frames with a wheel, frame pairs, wheel steps, moving steps, mean and median x step, consistency, and the reason.
+   - **`unknown`:** returned when the conveyor stood still, there were too few frames, or the steps disagree. D-077: never assumed; the wizard shows the evidence and a person confirms.
+
+**Read-only:** no DB access (pymysql is never imported), no file written, moved or deleted, `current` untouched. Exit 0 when the measurement ran (the direction may be `unknown`), 1 with the reason otherwise. `--json` prints the result only.
+
+**Tests** (`tests/test_measure.py`, 11, fake predictor):
+- **Direction:** rtl and ltr with consistency 1.0 and a ±60 px mean step; a stopped belt gives `unknown`; a short stop plus wrong wheel boxes still gives `rtl`; disagreeing steps give `unknown`; frames 5 s apart are not paired.
+- **Sizes:** medians, percentiles, proposal with the `chain_w` fallback and `null`.
+- **The whole run on both directions** (like Tadipatri LEFT rtl / RIGHT ltr): direction, sizes, newest 40 of 50 frames, model name and version.
+- **Errors:** bad version, no frames.
+- **Read-only snapshot.**
+- **`--side` settings from the rendered JSON.**
+- **CLI `--json`** and exit codes in a fresh process without pymysql.
