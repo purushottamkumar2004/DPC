@@ -840,6 +840,28 @@ class TransferF81(_TempDirTest):                                       # F81, D-
             self.assertProblem(problems, pattern)
 
 
+class NoMailLoader(_TempDirTest):                                       # S2
+    def test_mail_section_optional(self):
+        for value in ("absent", None):
+            data = self.config_data()
+            data.pop("transfer")
+            if value == "absent":
+                data.pop("mail")
+            else:
+                data["mail"] = None
+            cfg = sc.load_site_config(self.write_yaml(data))
+            self.assertIsNone(cfg.mail)
+            env = sc.legacy_env_vars(cfg)
+            self.assertNotIn("DPC_MAIL_SENDER", env)
+            self.assertEqual(env["DPC_DB_PASS"], SECRETS[("db", "password")])
+
+    def test_graph_still_required_by_transfer(self):
+        data = self.config_data()
+        data.pop("mail")
+        data.pop("graph")
+        self.assertEqual(self.problems_for(data), ["graph: missing (needed by transfer)"])
+
+
 class Secrets(_TempDirTest):
     def assertNoSecret(self, text):
         for value in list(SECRETS.values()) + ["s3cret"]:

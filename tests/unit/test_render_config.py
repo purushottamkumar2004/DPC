@@ -931,5 +931,26 @@ class TransferFile(Site):                                            # F81, D-10
         self.assertEqual(self.load("transfer")["models_in_use"], {"dpc_maskrcnn": ["LEFT"], "dpc_maskrcnn_right": ["RIGHT"]})
 
 
+class NoMailSection(Site):                                           # S2: mail is optional (D-103 step 8)
+    def test_no_mail_json_and_cleanup_disk_mail_off(self):
+        self.render()
+        self.data.pop("mail")
+        self.write()
+        changes = self.render()
+        self.assertEqual(changes["mail"], "removed")
+        self.assertFalse(os.path.exists(os.path.join(self.rendered, "mail.json")))
+        doc = self.load("cleanup")
+        self.assertIsNone(doc["mail"])
+        self.assertIsNone(doc["graph"])
+        sys.path.insert(0, CLEANUP_SETTINGS)
+        try:
+            import cleanup_settings
+        finally:
+            sys.path.pop(0)
+        settings = cleanup_settings.load_settings(os.path.join(self.rendered, "cleanup.json"))
+        self.assertFalse(settings.mail.enabled)
+        self.assertEqual(settings.warnings, ["cleanup.json: 'graph' or 'mail' missing: disk mail is OFF"])
+
+
 if __name__ == "__main__":
     unittest.main()

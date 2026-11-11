@@ -147,7 +147,7 @@ def cleanup_config(cfg: SiteConfig) -> Dict[str, Any]:
         "bolt_data": [os.path.join(p.data, "bolt_data", cam.side) for cam in cams],
     }
     graph = None
-    if cfg.graph is not None and cfg.mail.sender == "graph":
+    if cfg.graph is not None and cfg.mail is not None and cfg.mail.sender == "graph":
         graph = {"tenant_id": cfg.graph.tenant_id, "client_id": cfg.graph.client_id,
                  "client_secret": cfg.graph.client_secret}
     return {
@@ -162,7 +162,9 @@ def cleanup_config(cfg: SiteConfig) -> Dict[str, Any]:
                     "defective": {"days": c.defective.days, "items": c.defective.items},
                     "disk_percent": dict(c.disk_percent), "disk_report_time": c.disk_report_time},
         # to: disk_report_to, else recipients (the loader already falls back); cc empty on purpose
-        "mail": {"sender_address": cfg.mail.sender_address, "to": list(cfg.mail.disk_report_to), "cc": []},
+        # no mail section (S2): null -> the cleanup's disk mail is off, with its one warning
+        "mail": ({"sender_address": cfg.mail.sender_address, "to": list(cfg.mail.disk_report_to), "cc": []}
+                 if cfg.mail is not None else None),
         "graph": graph,
         "mqtt": _mqtt(cfg),                                      # heartbeat (F68, F70)
     }
@@ -293,7 +295,8 @@ def worker_configs(cfg: SiteConfig) -> Dict[str, Dict[str, Any]]:
     for camera in cfg.cameras:
         configs[SIDE_WORKER[camera.side]] = inspection_config(cfg, camera)
     configs["cleanup"] = cleanup_config(cfg)
-    configs["mail"] = mail_config(cfg)
+    if cfg.mail is not None:                     # optional since S2: no mail section = no mail program file
+        configs["mail"] = mail_config(cfg)
     configs["plc"] = plc_config(cfg)
     configs["ui"] = ui_config(cfg)
     if cfg.transfer is not None:                 # only on a site with a transfer section
@@ -343,6 +346,12 @@ def _write_private(path: str, data: Dict[str, Any]) -> None:
         raise
 
 
+def plan(cfg: SiteConfig) -> List[Change]:
+    """What render() would do for an already loaded config, writing nothing (used by
+    site_writer to say which workers a site.yaml change restarts, S2)."""
+    return _apply(cfg, header=None, dry_run=True)
+
+
 def render(site_yaml: Optional[str] = None, dry_run: bool = False) -> List[Change]:
     """Validate site.yaml and bring <root>/config/rendered/ in line with it. Raises
     SiteConfigError (nothing written) when site.yaml is invalid. dry_run: report only."""
@@ -350,6 +359,10 @@ def render(site_yaml: Optional[str] = None, dry_run: bool = False) -> List[Chang
     cfg = load_site_config(path)                       # raises before anything is written
     header = {"from": "site.yaml", "sha256": _sha256_of_file(path),
               "at": datetime.datetime.now().isoformat(timespec="seconds"), "renderer": RENDERER_VERSION}
+    return _apply(cfg, header, dry_run)
+
+
+def _apply(cfg: SiteConfig, header: Optional[Dict[str, Any]], dry_run: bool) -> List[Change]:
     folder = cfg.paths.rendered
     if not dry_run:
         os.makedirs(folder, mode=0o700, exist_ok=True)

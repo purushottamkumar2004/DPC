@@ -522,7 +522,7 @@ class SiteConfig:
     capture: CaptureConfig
     inspection: InspectionConfig
     plc: PlcConfig
-    mail: MailConfig
+    mail: Optional[MailConfig]          # None = this site sends no mail (S2, D-103 step 8)
     cleanup: CleanupConfig
     transfer: Optional[TransferConfig]   # None = no transfer service on this site
     source_path: str
@@ -1385,7 +1385,7 @@ def load_site_config(path: Optional[str] = None) -> SiteConfig:
     sides = [c.side for c in capture.cameras if c.side]
     inspection = _read_inspection(top, paths, sides)
     plc = _read_plc(top)
-    mail = _read_mail(top, paths)
+    mail = _read_mail(top, paths) if top.present("mail") else _no_mail(top)
     cleanup = _read_cleanup(top)
     transfer = _read_transfer(top, site.id)
     ui = _read_ui(top)
@@ -1417,10 +1417,17 @@ def _read_ui(top: _Section) -> UiSettings:
     return ui
 
 
-def _graph_users(mail: MailConfig, transfer: Optional[TransferConfig]) -> List[str]:
+def _no_mail(top: _Section) -> None:
+    """mail is optional (D-103 wizard step 8, S2): absent or null = this site sends no mail;
+    no mail.json is rendered and the cleanup's disk mail is off."""
+    top.used.add("mail")
+    return None
+
+
+def _graph_users(mail: Optional[MailConfig], transfer: Optional[TransferConfig]) -> List[str]:
     """Which programs need the shared `graph` login on this site."""
     users = []
-    if mail.sender == "graph":
+    if mail is not None and mail.sender == "graph":
         users.append("mail (sender graph)")
     if transfer is not None:
         users.append("transfer")
@@ -1611,15 +1618,15 @@ def legacy_env_vars(config: SiteConfig) -> Dict[str, str]:
     env = {
         "DPC_DB_USER": config.db.user,
         "DPC_DB_PASS": config.db.password,
-        "DPC_MAIL_SENDER": mail.sender_address,
-        "DPC_DISK_REPORT_TO": ",".join(mail.disk_report_to),
         "DPC_SITE_NAME": config.site.name,
     }
+    if mail is not None:
+        env.update({"DPC_MAIL_SENDER": mail.sender_address, "DPC_DISK_REPORT_TO": ",".join(mail.disk_report_to)})
     if config.graph is not None:
         graph = config.graph
         env.update({"DPC_MS_TENANT_ID": graph.tenant_id, "DPC_MS_CLIENT_ID": graph.client_id,
                     "DPC_MS_CLIENT_SECRET": graph.client_secret})
-    if mail.smtp is not None:
+    if mail is not None and mail.smtp is not None:
         env["DPC_SMTP_PASSWORD"] = mail.smtp.password
     if config.mqtt.user is not None:
         env.update({"DPC_MQTT_USER": config.mqtt.user, "DPC_MQTT_PASS": config.mqtt.password})
