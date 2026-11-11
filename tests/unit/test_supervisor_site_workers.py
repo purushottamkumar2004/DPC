@@ -214,11 +214,7 @@ class EveryWorkerHasItsRenderedFile(unittest.TestCase):
         manager = ConfigurationManager(SITE_FILE, SUPERVISOR_DIR)
         manager.load()
         missing = [w.id for w in manager.workers if w.id not in result.changes]
-        # Known gaps, each with the STATUS item that closes it. Delete the entry when it lands;
-        # until then the worker starts without DPC_WORKER_CONFIG and reports a config error.
-        known_gaps = {"transfer": "F81 (CONFIG renders transfer.json)"}
-        unexpected = [w for w in missing if w not in known_gaps]
-        self.assertEqual(unexpected, [], "workers without a rendered/<id>.json")
+        self.assertEqual(missing, [], "workers without a rendered/<id>.json")
         self.assertIn("ui", result.changes)
 
 
