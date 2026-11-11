@@ -245,3 +245,15 @@ on today; the transfer service (P12) uses the others, never for a pinned model.
 * Workers with `enabled: false` get a retained status `DISABLED` ("disabled in workers.yaml"), sent with the
   periodic "online" once MQTT is connected, so the UI does not need to read workers.yaml.
 * The `ui` worker (two-camera file) gets `DPC_WORKER_CONFIG=<root>/config/rendered/ui.json` like any worker.
+
+## Automatic model install (F82; D-060, D-087, D-105)
+
+The `transfer` worker downloads a model, packages it, verifies it and marks it ready, but never makes it
+current. It publishes `model_downloaded {name, version}` on `dpc/worker/transfer/event`. With
+`models.auto_update: install` the Supervisor then runs `supervisor.py model switch <name> <version>` as a
+child process (the D-087 switch: lock, verify, self-test, `previous`, `current`, events), without --confirm,
+so inspection restarts inside `monitoring.reload_quiet_window`, else waits as config_pending. One switch at a
+time; further downloads wait in order; the child's output goes to supervisor.log. Not switched, with a log
+line and `model_auto_switch_skipped {model, version, reason}` on `dpc/supervisor/event`: a pinned model, a
+model not used on this site, a version that is already current. With `off` or `download` the event is only
+logged (a person switches). A Supervisor stop ends a running automatic switch.

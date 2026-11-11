@@ -186,3 +186,20 @@ workers:
       type: heartbeat
       max_age_seconds: 30
       startup_grace_seconds: 30
+
+  # ---- transfer (P12, D-104, D-105): OneDrive/SharePoint training-data upload and model download ----
+  # Jobs only on request (UI button / <root>/run/transfer.{upload_cycle,model_update,cancel}).
+  # id "transfer" = rendered/transfer.json = WORKER_ID in transfer_settings.py. A downloaded model is
+  # packaged, verified and marked ready, never made current; with models.auto_update: install the
+  # Supervisor switches it (F82, D-087 rules; never a pinned model). SIGTERM: the running part
+  # stops at a safe point and resumes later, hence 30 s.
+  - id: transfer
+    type: transfer
+    mode: service
+    restart_cost: normal
+    command: python3 transfer.py
+    working_directory: ~/INSIGHTZZ/code/workers/transfer
+    stop_signal: SIGTERM
+    stop_timeout_seconds: 30
+    health:
+      type: process
