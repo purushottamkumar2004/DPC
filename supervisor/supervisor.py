@@ -45,6 +45,8 @@ from core.process_manager import ProcessManager, Worker, WorkerStatus  # noqa: E
 from core.recovery_manager import RecoveryManager               # noqa: E402
 from core.runtime_manager import RuntimeManager                 # noqa: E402
 from core.reload_channel import ReloadChannel, ReloadError      # noqa: E402
+from core.setup_mode import Paths                               # noqa: E402
+from core import setup_mode                                      # noqa: E402
 from core.site_env import SiteEnv, SiteEnvError                 # noqa: E402
 from health.basic_health_check import build_health_check       # noqa: E402
 from health.heartbeat import parse_heartbeat                    # noqa: E402
@@ -60,11 +62,21 @@ class Supervisor:
     # a follower is paused when the worker it follows enters one of these (D-068)
     LEADER_DOWN = (WorkerStatus.WAITING_RESTART, WorkerStatus.UNHEALTHY, WorkerStatus.FAILED, WorkerStatus.STOPPED)
 
-    def __init__(self, config: ConfigurationManager, mqtt=None, site_env: SiteEnv = None):
+    def __init__(self, config: ConfigurationManager, mqtt=None, site_env: SiteEnv = None,
+                 mode: str = "normal", mode_reason: str = "", paths: Paths = None):
         self.settings = config.settings
         self.site_env = site_env or SiteEnv()
+        # S1: "setup" = only the built-in ui worker, until setup-finish; "normal" = workers.yaml
+        self.mode, self.mode_reason = mode, mode_reason
+        self.paths = paths or Paths.from_site_env(self.site_env, config.config_path)
+        self.exec_requested = False           # setup-finish succeeded: re-exec this program in normal mode
+        self.disabled_reasons = {}            # worker id -> message of its DISABLED status
+        if mode == "normal":
+            self._drop_workers_without_their_section(config)
         # the only client that announces the Supervisor's presence (last-will, online/offline; F28)
         self.mqtt = mqtt or MqttClient(self.settings.mqtt, login=self._mqtt_login(), announce_presence=True)
+        if hasattr(self.mqtt, "presence_info"):
+            self.mqtt.presence_info = {"mode": mode}
         self.heartbeats = {}                  # worker_id -> Heartbeat of the last MQTT heartbeat
         self.commands = queue.Queue()         # commands from MQTT, handled in the main loop
         self.running = True
@@ -111,8 +123,9 @@ class Supervisor:
 
     def start(self):
         """Connect MQTT, create the folders and begin the staged start of the workers."""
-        log.info("Supervisor starting with %d worker(s): %s",
+        log.info("Supervisor starting in %s mode (%s) with %d worker(s): %s", self.mode, self.mode_reason,
                  len(self.workers), ", ".join(self.workers) or "-")
+        setup_mode.write_mode_file(self.settings.runtime_root, self.mode, self.mode_reason)
 
         self.mqtt.start()
         self.mqtt.subscribe(self.mqtt.worker_topic("+", "health"), self._on_health)
@@ -121,7 +134,8 @@ class Supervisor:
 
         for worker in self.workers.values():
             self.runtime.prepare(worker.config)
-        self._render_at_start()
+        if self.mode == "normal":
+            self._render_at_start()            # setup mode: no valid site.yaml to render yet
         self._not_started = list(self.workers)
         self._began_at = time.time()
         self._next_check = time.time() + self.settings.monitoring.check_interval_seconds
@@ -131,6 +145,7 @@ class Supervisor:
         """One pass of the main loop (every 0.5 s): commands, staged start, periodic runs,
         health checks every check_interval, status publishing."""
         self._handle_pending_commands()
+        self._serve_setup_finish()
         if self._reload_requested:
             self._reload_requested = False
             self._serve_reload_request()
@@ -151,8 +166,60 @@ class Supervisor:
         disabled since the last run does not keep showing its old RUNNING status)."""
         for wc in self.disabled:
             status = self.process_manager.get_status(Worker(config=wc))
-            status.update(status="DISABLED", message="disabled in workers.yaml (enabled: false)")
+            status.update(status="DISABLED",
+                          message=self.disabled_reasons.get(wc.id, "disabled in workers.yaml (enabled: false)"))
             self.mqtt.publish_status(wc.id, status)
+
+    # ---- setup mode (S1, D-103) ---------------------------------------------
+    OPTIONAL_SECTIONS = {"transfer": "transfer"}       # worker id -> site.yaml section it needs
+
+    def _drop_workers_without_their_section(self, config):
+        """A worker for an optional site.yaml section (transfer, D-105) only runs when the site has
+        that section; otherwise it is DISABLED with the reason. Unknown when site.yaml is unreadable:
+        then nothing is dropped."""
+        try:
+            site = self.site_env.load()
+        except SiteEnvError:
+            return
+        for worker_id, section in self.OPTIONAL_SECTIONS.items():
+            if getattr(site, section, None) is not None:
+                continue
+            worker = next((w for w in config.workers if w.id == worker_id), None)
+            if worker is None:
+                continue
+            config.workers.remove(worker)
+            config.start_order.remove(worker)
+            config.disabled.append(worker)
+            self.disabled_reasons[worker_id] = f"not started: site.yaml has no {section} section"
+
+    def _serve_setup_finish(self):
+        """<root>/run/setup_finish (UI or `supervisor.py setup-finish`): validate site.yaml and
+        workers.yaml; on success remove SETUP_MODE and re-exec in normal mode, else stay in setup
+        mode (marker written) and report why. Result file + dpc/supervisor/event."""
+        request = setup_mode.take_request(self.settings.runtime_root)
+        if request is None:
+            return
+        if self.mode == "normal":
+            setup_mode.write_result(self.settings.runtime_root, {"id": request["id"], "ok": True, "mode": "normal",
+                                                                 "problems": [], "note": "already in normal mode"})
+            return
+        problems = setup_mode.validate_for_normal_mode(self.paths, self.site_env)
+        if problems:
+            setup_mode.write_marker(self.paths)
+            for problem in problems:
+                log.warning("setup-finish refused: %s", problem)
+            setup_mode.write_result(self.settings.runtime_root, {"id": request["id"], "ok": False, "mode": "setup",
+                                                                 "problems": problems})
+            self._publish_supervisor_event("setup_finish_failed", problems=problems)
+            return
+        setup_mode.remove_marker(self.paths)
+        log.info("setup-finish: site.yaml and workers.yaml are valid; switching to normal mode")
+        setup_mode.write_result(self.settings.runtime_root, {"id": request["id"], "ok": True, "mode": "normal",
+                                                             "problems": []})
+        self._publish_supervisor_event("setup_finished")
+        time.sleep(0.5)                                   # let the event leave before the restart
+        self.exec_requested = True
+        self.running = False
 
     # ---- staged start (start_after) ----------------------------------------
     def _launch_ready_workers(self):
@@ -499,9 +566,9 @@ def setup_logging(log_dir: str):
     logging.getLogger("paho").setLevel(logging.WARNING)
 
 
-def cmd_run(config, site_env):
+def cmd_run(config, site_env, mode="normal", mode_reason="", paths=None):
     setup_logging(config.settings.log_dir)
-    sup = Supervisor(config, site_env=site_env)
+    sup = Supervisor(config, site_env=site_env, mode=mode, mode_reason=mode_reason, paths=paths)
     sup.reload_channel = ReloadChannel(config.settings.runtime_root)
     signal.signal(signal.SIGINT, sup.request_stop)
     signal.signal(signal.SIGTERM, sup.request_stop)
@@ -511,6 +578,12 @@ def cmd_run(config, site_env):
         sup.run()
     finally:
         sup.reload_channel.remove_pid()
+    if sup.exec_requested:
+        # S1: start again as this same process (same pid: systemd and the pid file are unaffected),
+        # through the normal boot path, which now finds the setup finished.
+        log.info("restarting the Supervisor in normal mode")
+        logging.shutdown()
+        os.execv(sys.executable, [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:])
 
 
 def cmd_reload(config, confirm):
@@ -607,21 +680,68 @@ def cmd_status(config, site_env, as_json=False):
 
     client.subscribe(client.worker_topic("+", "status"), on_worker_status)
     client.subscribe(client.topic("supervisor", "status"), lambda t, p: supervisor.update(p if isinstance(p, dict) else {}))
+    mode_info = setup_mode.read_mode_file(config.settings.runtime_root) or {}
     client.start()
     if not client.wait_connected(3):
-        return _status_error("Cannot reach the MQTT broker - is it running?", as_json)
+        if as_json:
+            print(json.dumps({"error": "Cannot reach the MQTT broker - is it running?",
+                              "mode": mode_info.get("mode"), "mode_reason": mode_info.get("reason")}))
+            return 1
+        return _status_error("Cannot reach the MQTT broker - is it running?" + _mode_line(mode_info), as_json)
     time.sleep(1.5)
     client.stop()
+    mode = (supervisor or {}).get("mode") or mode_info.get("mode")
     if as_json:
-        print(json.dumps({"supervisor": supervisor or None, "workers": dict(sorted(found.items()))}, indent=1))
+        print(json.dumps({"mode": mode, "mode_reason": mode_info.get("reason"), "supervisor": supervisor or None,
+                          "workers": dict(sorted(found.items()))}, indent=1))
         return 0 if found else 1
     if not found:
-        print("No status received (is the supervisor running?)")
+        print("No status received (is the supervisor running?)" + _mode_line(mode_info))
         return 1
+    if mode:
+        print(f"Supervisor mode: {mode}" + (f" ({mode_info['reason']})" if mode_info.get("reason") else ""))
     print(f"{'WORKER':<20}{'STATUS':<17}{'PID':<8}{'RESTARTS':<10}MESSAGE")
     for wid, s in sorted(found.items()):
         print(f"{wid:<20}{s['status']:<17}{str(s['pid'] or '-'):<8}{s['restart_count']:<10}{s['message']}")
     return 0
+
+
+def _mode_line(mode_info) -> str:
+    return f"\nLast known Supervisor mode: {mode_info['mode']} ({mode_info.get('reason', '')})" if mode_info else ""
+
+
+def cmd_setup_finish(site_env, workers_arg, as_json) -> int:
+    """S1: switch from setup mode to normal mode. With a running Supervisor the request goes to it
+    (<root>/run/setup_finish, the same file the UI writes) and it answers in setup_finish.result.json;
+    without one, the check is done here and the marker set or removed, so the next start is right.
+    Exit 0 = normal mode (now or at the next start), 1 = refused (stays in setup mode), 3 = no answer."""
+    paths = Paths.from_site_env(site_env, workers_arg)
+    if ReloadChannel(paths.run_dir).running_pid() is not None:
+        request_id = setup_mode.send_request(paths)
+        result = setup_mode.wait_result(paths, request_id, 60)
+        if result is None:
+            text = "no answer from the Supervisor within 60 s; see ~/INSIGHTZZ/logs/supervisor.log"
+            print(json.dumps({"error": text}) if as_json else text)
+            return 3
+    else:
+        problems = setup_mode.validate_for_normal_mode(paths, site_env)
+        if problems:
+            setup_mode.write_marker(paths)
+            result = {"ok": False, "mode": "setup", "problems": problems}
+        else:
+            setup_mode.remove_marker(paths)
+            result = {"ok": True, "mode": "normal", "problems": [],
+                      "note": "the Supervisor is not running: it starts in normal mode "
+                              "(sudo systemctl restart dpc-supervisor)"}
+    if as_json:
+        print(json.dumps(result))
+    elif result["ok"]:
+        print(f"Normal mode: {result.get('note') or 'every program is starting'}")
+    else:
+        print("Refused, staying in setup mode:")
+        for problem in result["problems"]:
+            print(f"  - {problem}")
+    return 0 if result["ok"] else 1
 
 
 def _print_config_error(text, as_json):
@@ -788,7 +908,8 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "model":
         return cmd_model(sys.argv[2:])
     parser = argparse.ArgumentParser(description="DPC Supervisor")
-    parser.add_argument("action", choices=["run", "check-config", "reload", "status", "start", "stop", "restart"])
+    parser.add_argument("action", choices=["run", "check-config", "reload", "status", "start", "stop", "restart",
+                                           "setup-finish"])
     parser.add_argument("worker_id", nargs="?", help="needed for start/stop/restart")
     parser.add_argument("-c", "--config", default=None,
                         help="workers.yaml (default: <root>/config/workers.yaml next to site.yaml)")
@@ -800,20 +921,41 @@ def main():
     args = parser.parse_args()
 
     site_env = SiteEnv(args.site_config)
+    if args.action == "setup-finish":
+        return cmd_setup_finish(site_env, args.config, args.json)
+
+    # S1: which workers list? -c wins; on a site, setup mode runs only the built-in ui list
+    mode, mode_reason, paths = "normal", "workers file given with -c", None
     workers_file = args.config
     if workers_file is None:
-        workers_file, problem = find_workers_file(site_env)
-        if problem:
-            _print_config_error(f"Configuration error: {problem}", args.json)
+        paths = Paths.from_site_env(site_env)
+        if os.path.isdir(paths.config_dir):
+            mode, mode_reason = setup_mode.decide_mode(paths, site_env, record=(args.action == "run"))
+        if mode == "setup":
+            config = setup_mode.setup_workers_config(paths)
+            workers_file = config.config_path
+        else:
+            workers_file, problem = find_workers_file(site_env)
+            if problem:
+                _print_config_error(f"Configuration error: {problem}", args.json)
+                return 2
+            mode_reason = "site.yaml and workers.yaml present"
+    if mode == "normal":
+        config = ConfigurationManager(workers_file, BASE_DIR)
+        try:
+            config.load()
+        except ConfigError as e:
+            _print_config_error(f"Configuration error: {e}", args.json)
             return 2
 
-    config = ConfigurationManager(workers_file, BASE_DIR)
-    try:
-        config.load()
-    except ConfigError as e:
-        _print_config_error(f"Configuration error: {e}", args.json)
-        return 2
-
+    if args.action == "check-config" and mode == "setup":
+        print(f"Setup mode ({mode_reason}): the Supervisor runs only the ui worker (built-in list)")
+        problems = setup_mode.validate_for_normal_mode(paths, site_env)
+        for problem in problems:
+            print(f"  setup-finish would refuse: {problem}")
+        if not problems:
+            print("  site.yaml and workers.yaml are valid: `supervisor.py setup-finish` switches to normal mode")
+        return 0
     if args.action == "check-config":
         print(f"OK - {workers_file}")
         print(f"OK - {len(config.workers)} enabled worker(s) in start order: "
@@ -833,7 +975,7 @@ def main():
             print(f"Note - no site.yaml at {site_yaml}: nothing is rendered, MQTT connects without a login")
         return 0
     if args.action == "run":
-        cmd_run(config, site_env)
+        cmd_run(config, site_env, mode, mode_reason, paths)
         return 0
     if args.action == "reload":
         return cmd_reload(config, args.confirm)

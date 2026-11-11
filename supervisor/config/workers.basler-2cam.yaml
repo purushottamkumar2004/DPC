@@ -171,9 +171,8 @@ workers:
 
   # ---- ui (P17, D-095, D-096): the local web UI (127.0.0.1 only, kiosk browser) ----
   # id "ui" = rendered/ui.json (F58) = the UI's worker_id; settings only from DPC_WORKER_CONFIG.
-  # Health: the UI publishes {"healthy": true} on dpc/worker/ui/health every 10 s.
-  # Note: heartbeat health needs the MQTT broker; with mosquitto down the UI is restarted
-  # after max_age + worker_timeout (it shows "MQTT unreachable" anyway).
+  # Health: process (D-097). Its heartbeat on dpc/worker/ui/health is still published, for display;
+  # heartbeat health would restart a healthy UI whenever the broker is down.
   - id: ui
     type: ui
     mode: service
@@ -183,9 +182,7 @@ workers:
     stop_signal: SIGTERM
     stop_timeout_seconds: 10
     health:
-      type: heartbeat
-      max_age_seconds: 30
-      startup_grace_seconds: 30
+      type: process
 
   # ---- transfer (P12, D-104, D-105): OneDrive/SharePoint training-data upload and model download ----
   # Jobs only on request (UI button / <root>/run/transfer.{upload_cycle,model_update,cancel}).

@@ -181,8 +181,8 @@ class UiWorkerF59(unittest.TestCase):
         self.assertEqual(w.command, "python3 run_ui.py")
         self.assertEqual(w.working_directory, os.path.join(os.path.expanduser("~"), "INSIGHTZZ/code/ui"))
         self.assertEqual((w.stop_signal, w.stop_timeout_seconds), ("SIGTERM", 10))
-        self.assertEqual((w.health.type, w.health.max_age_seconds, w.health.startup_grace_seconds),
-                         ("heartbeat", 30, 30))
+        self.assertEqual(w.health.type, "process", "D-097: crash only; heartbeat health would restart it "
+                                                   "whenever the broker is down")
         self.assertEqual((w.env, w.start_after, w.follows, w.env_from_site), ({}, [], None, False))
 
     def test_id_matches_the_ui(self):
@@ -315,15 +315,18 @@ class ServiceTemplate(unittest.TestCase):
         root = os.path.realpath(self.root)
         self.assertIn(f"User={os.environ.get('USER') or subprocess.check_output(['id', '-un'], text=True).strip()}", unit)
         self.assertIn(f"WorkingDirectory={root}/code/supervisor", unit)
-        self.assertIn(f"ExecStart={sys.executable} supervisor.py run -c {root}/config/workers.yaml", unit)
+        self.assertIn(f"ExecStart={sys.executable} supervisor.py run --site-config {root}/config/site.yaml", unit)
+        self.assertNotIn(" -c ", unit.split("ExecStart=")[1].splitlines()[0], "S1: no -c, so setup mode works")
         self.assertIn(f"Environment=PATH={os.path.dirname(sys.executable)}:", unit)
         self.assertIn("KillMode=mixed", unit)
 
-    def test_missing_workers_file_is_refused(self):
-        os.remove(os.path.join(self.root, "config", "workers.yaml"))
+    def test_fresh_machine_installs_for_setup_mode(self):
+        os.remove(os.path.join(self.root, "config", "workers.yaml"))      # S1: nothing configured yet
         result = self.dry_run()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("workers.yaml missing", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Setup mode", result.stderr)
+        self.assertTrue(result.stdout.startswith("#"))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "config", "SETUP_MODE")), "dry-run changes nothing")
 
 
 class TemplateFile(unittest.TestCase):

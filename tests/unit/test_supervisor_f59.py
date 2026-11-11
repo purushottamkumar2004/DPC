@@ -58,7 +58,9 @@ class StatusJson(RealBroker):
         self.start_supervisor()
         self.wait_worker_running()
         out = subprocess.run(self.cmd("status"), capture_output=True, text=True, timeout=30).stdout
-        self.assertTrue(out.startswith("WORKER              STATUS           PID     RESTARTS  MESSAGE"))
+        lines = out.splitlines()
+        self.assertTrue(lines[0].startswith("Supervisor mode: normal"), "S1: the mode comes first")
+        self.assertTrue(lines[1].startswith("WORKER              STATUS           PID     RESTARTS  MESSAGE"))
         self.assertIn("dummy_a", out)
 
     def test_broker_down_is_a_json_error(self):

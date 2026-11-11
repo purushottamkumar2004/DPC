@@ -257,3 +257,27 @@ time; further downloads wait in order; the child's output goes to supervisor.log
 line and `model_auto_switch_skipped {model, version, reason}` on `dpc/supervisor/event`: a pinned model, a
 model not used on this site, a version that is already current. With `off` or `download` the event is only
 logged (a person switches). A Supervisor stop ends a running automatic switch.
+
+## Setup mode (S1, D-103)
+
+On a fresh machine the Supervisor runs **only the UI** until the site is set up in the UI wizard.
+
+| at start | mode |
+|---|---|
+| `<root>/config/SETUP_MODE` present (setup not finished) | setup |
+| no `<root>/config/site.yaml` (fresh machine; the marker is then written) | setup |
+| `<root>/config/workers.yaml` missing or invalid | setup |
+| `site.yaml` invalid on a finished site (no marker) | normal, with the last rendered files and an error (a typo must not stop production after a reboot) |
+| otherwise | normal |
+
+Setup mode uses a built-in list: `ui` (`python3 run_ui.py` in `<root>/code/ui`, health `process`, D-097); no
+workers.yaml needed. `python3 supervisor.py setup-finish` (or the UI writing `<root>/run/setup_finish`, empty or
+`{"id": ...}`) checks site.yaml (loader) and workers.yaml (check-config, and an enabled `ui` worker so the UI
+does not disappear). OK: `SETUP_MODE` is removed and the Supervisor re-executes itself (same pid) in normal
+mode, starting every program; `transfer` only when site.yaml has a `transfer` section (else DISABLED with the
+reason). Refused: it stays in setup mode, writes the marker and reports why. Result in
+`<root>/run/setup_finish.result.json` `{id, ok, mode, problems}` and on `dpc/supervisor/event`
+(`setup_finished`, `setup_finish_failed {problems}`). Without a running Supervisor the command checks and sets or
+removes the marker itself. `status` / `status --json` show the mode (`"mode": "setup" | "normal"`, also on the
+"online" message and in `<root>/run/mode.json`, readable without the broker). The boot unit starts
+`supervisor.py run --site-config <root>/config/site.yaml` (no `-c`); `install_service.sh` works on a fresh machine.

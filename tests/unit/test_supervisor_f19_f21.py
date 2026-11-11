@@ -155,7 +155,7 @@ class LastErrorEndToEnd(_FailingWorkerTest):
     <root>/config/workers.yaml), a worker with a forced error, then supervisor.log on disk."""
 
     def test_forced_error_in_supervisor_log_file(self):
-        os.makedirs(os.path.join(self.root, "config"))
+        self.write_site_yaml()                     # S1: a site without site.yaml would be in setup mode
         data = {"mqtt": {"enabled": False}, "runtime": {"root": self.run_dir},
                 "log_dir": os.path.join(self.root, "logs"),
                 "monitoring": {"check_interval_seconds": 0.5, "startup_stagger_seconds": 0},
@@ -194,10 +194,21 @@ class FindWorkersFileF19(SupervisorTest):
 
     def site_root(self, root):
         os.makedirs(os.path.join(root, "config"), exist_ok=True)
+        self.valid_site_yaml(root)                # S1: without site.yaml a site root is in setup mode
         data = {"mqtt": {"enabled": False}, "runtime": {"root": os.path.join(root, "run")},
                 "log_dir": os.path.join(root, "logs"), "workers": [dummy("site_worker", "")]}
         with open(os.path.join(root, "config", "workers.yaml"), "w") as f:
             yaml.safe_dump(data, f)
+
+    def valid_site_yaml(self, root):
+        from tests.unit.test_supervisor_v2 import EXAMPLE_SITE_YAML
+        with open(EXAMPLE_SITE_YAML) as f:
+            data = yaml.safe_load(f)
+        data["paths"]["root"] = root
+        path = os.path.join(root, "config", "site.yaml")
+        with open(path, "w") as f:
+            yaml.safe_dump(data, f, sort_keys=False)
+        os.chmod(path, 0o600)
 
     def test_default_site_root_in_home(self):
         self.site_root(self.path("home/INSIGHTZZ"))
@@ -220,11 +231,12 @@ class FindWorkersFileF19(SupervisorTest):
         self.assertIn(os.path.join(self.path("home/INSIGHTZZ"), "run", "supervisor.pid"), result.stdout,
                       "the pid is looked for in <root>/run, not in the code folder")
 
-    def test_site_folder_without_workers_yaml_is_an_error_never_the_example(self):
+    def test_site_folder_without_workers_yaml_is_setup_mode_never_the_example(self):
         os.makedirs(self.path("home/INSIGHTZZ/config"))
+        self.valid_site_yaml(self.path("home/INSIGHTZZ"))
         result = self.cli("check-config")
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("no workers.yaml in", result.stdout)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Setup mode (no workers.yaml at", result.stdout)   # S1: only the UI, not the example
         self.assertNotIn("dummy_crasher", result.stdout)
 
     def test_development_machine_uses_the_example_with_a_note(self):

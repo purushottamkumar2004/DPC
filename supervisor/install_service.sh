@@ -36,14 +36,19 @@ ROOT="$(cd "$ROOT" 2>/dev/null && pwd)" || fail "root folder not found (scripts/
 [ -n "$PYTHON" ] && [ -x "$PYTHON" ] || fail "no python3 found; pass --python /path/to/python3"
 PYTHON="$(cd "$(dirname "$PYTHON")" && pwd)/$(basename "$PYTHON")"
 [ -f "$ROOT/code/supervisor/supervisor.py" ] || fail "$ROOT/code/supervisor/supervisor.py missing (code checkout)"
-[ -f "$ROOT/config/workers.yaml" ] || fail "$ROOT/config/workers.yaml missing (copy supervisor/config/workers.basler-2cam.yaml)"
 for value in "$USER_NAME" "$ROOT" "$PYTHON"; do
   case "$value" in *[[:space:]\|\&]*) fail "spaces or | & are not supported in: $value" ;; esac
 done
 
 # the unit must be able to start: config valid and the same Python can import the Supervisor
-(cd "$ROOT/code/supervisor" && "$PYTHON" supervisor.py check-config -c "$ROOT/config/workers.yaml") >&2 \
-  || fail "check-config failed; fix the workers file first"
+# A fresh machine has no site.yaml/workers.yaml yet: the service then starts in setup mode (only the
+# UI, S1). On a set-up site the workers file must be valid before the service is (re)installed.
+if [ -f "$ROOT/config/workers.yaml" ] && [ ! -f "$ROOT/config/SETUP_MODE" ] && [ -f "$ROOT/config/site.yaml" ]; then
+  (cd "$ROOT/code/supervisor" && "$PYTHON" supervisor.py check-config --site-config "$ROOT/config/site.yaml") >&2 \
+    || fail "check-config failed; fix the workers file first"
+else
+  echo "Setup mode: the Supervisor will start only the UI until setup is finished (supervisor.py setup-finish)" >&2
+fi
 
 RENDERED="$(sed -e "s|@USER@|$USER_NAME|g" -e "s|@ROOT@|$ROOT|g" \
                 -e "s|@PYTHON_DIR@|$(dirname "$PYTHON")|g" -e "s|@PYTHON@|$PYTHON|g" "$TEMPLATE")"
