@@ -1,7 +1,7 @@
 # Database seed (D-043)
 
 Goal: one set of SQL files that builds the **whole DPC database structure** for a new site.
-Today you run them by hand in MySQL Workbench; later `scripts/dpc_db_init.py` runs the same files automatically (installer, D-035).
+Today you run them by hand in MySQL Workbench; `bootstrap.py` runs the same files automatically (installer and wizard, D-103).
 
 ## Files
 | File | What it does | When to run |
@@ -12,13 +12,27 @@ Today you run them by hand in MySQL Workbench; later `scripts/dpc_db_init.py` ru
 | `migrations/NNNN_<what>.sql` (from `0002`) | One file per change, numbered, append-only. Brings an **existing** site DB up to the current `schema.sql`. | Existing sites, in number order |
 | `reference/<site>/schema_<date>.sql` | Structure-only export of a live site DB, kept as a record. Never run on a new site. | Read when reconciling `schema.sql` |
 | `schema_version` table | Created by `schema.sql`; each migration inserts its number. Shows which changes a site has. | Read it to see where a site stands |
+| `bootstrap.py` | Builds or checks a whole site DB in one go (S3): creates the database, a program user with rights on that database only (D-050), runs `schema.sql` + `fixed_rows.sql`, one health row per camera serial, then logs in as the program user. Idempotent; reports each step as created / already there; never prints a password. Function `bootstrap()` for the UI wizard, CLI with `--json`. | New site (installer / wizard Apply), or to repair a site DB that was never seeded |
 | `test_seed.py` | Builds a scratch DB `dpc_seed_test` from the files above (twice), runs every DB statement the repo programs use, and checks the reference coverage, CONTRACTS section 5 and "no site values". Never touches a site DB. | After every change in `db/` |
 
-## New site in MySQL Workbench
+## New site with bootstrap.py (recommended)
+Needs `pip install pymysql` and a MySQL admin login. Passwords come from the environment or a prompt, never from the command line:
+```bash
+export DPC_DB_ADMIN_PASS='<admin password>'   # or leave unset to be asked
+export DPC_DB_PASS='<program user password>'  # the same value goes into site.yaml db.password
+python3 db/bootstrap.py --db <site_db> --user <program_user> --serial <CAM1 serial> --serial <CAM2 serial>
+```
+- Admin is `root` by default (`--admin-user`). If root logs in only through the socket (Ubuntu's auth_socket), run it with `sudo` and `--socket /var/run/mysqld/mysqld.sock`.
+- The program user is created for `localhost` and `127.0.0.1` (`--program-host` to change) with `ALL PRIVILEGES` on the site database only; `root` or the admin user is refused as program user. Sites may still run on root (D-050); this gives them the dedicated user.
+- Run it again at any time: nothing changes, every step says "already there". A missing fixed row (e.g. `wheel_counter_table` row 1 on Tadipatri, D-101) or a new camera's health row is added.
+- An existing program user keeps its password; the last step ("login check") says whether the password you gave works. `--reset-password` sets it.
+- `--json` prints the report for the UI. Exit code 0 = all ok, 1 = a step failed.
+
+## New site in MySQL Workbench (by hand)
 1. Create an empty schema with the site's DB name and select it (double-click it so it is bold).
 2. Open and run `schema.sql`, then `fixed_rows.sql`.
 3. Copy `site_rows.example.sql`, put the site's camera serials in, run it.
-4. Create the site's DB user with rights on this schema only (see `CLAUDE_PROJECT_SETUP.md` / `secrets.env`), never `root`.
+4. Preferably create a DB user with rights on this schema only (what `bootstrap.py` does); `root` is allowed (D-050).
 
 ## Not in here
 - Django's own tables (`auth_*`, `django_*` and the UI app tables): created by `python manage.py migrate`.

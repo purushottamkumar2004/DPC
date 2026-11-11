@@ -117,12 +117,14 @@ def test_program_queries(conn):
     # inspection: RightAlgorithm.update_wheel_count
     run("RightAlgorithm UPDATE wheel_counter_table", "UPDATE wheel_counter_table SET WHEEL_COUNT = %s WHERE ID = 1",
         ("57",), rows=1)
+    # inspection since F75: the writes_live_wheel_counter side upserts row 1
+    run("inspection UPSERT wheel_counter_table",
+        "INSERT INTO wheel_counter_table (ID, WHEEL_COUNT) VALUES (1, %s) "
+        "ON DUPLICATE KEY UPDATE WHEEL_COUNT = VALUES(WHEEL_COUNT)", ("58",), rows=2)
     # mail senders (DictCursor)
     unsent = run("mail SELECT unsent", "SELECT * FROM defects_table WHERE is_alert_sent = 0;", rows=1,
                  keys=("ID", "defect_type", "defect_side", "wheel_no", "create_datetime", "xmin", "xmax", "ymin", "ymax"))
-    if unsent and "id" not in unsent[0]:
-        print("NOTE immediate_mail_sender reads defect['id'] from SELECT *; the column is ID, so that key does "
-              "not exist (KeyError). Mail worker issue, not a schema issue (see handoff).")
+    # DictCursor keys rows by the column name: the key is 'ID', not 'id' (CONTRACTS 5)
     for col in ("id", "ID"):   # immediate_mail_sender uses id, outlook sender uses ID
         run(f"mail dedupe SELECT {col}",
             f"SELECT {col} FROM defects_table WHERE create_datetime > NOW() - INTERVAL 1 DAY AND wheel_no = 12 "

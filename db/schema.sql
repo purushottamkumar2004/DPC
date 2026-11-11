@@ -88,8 +88,11 @@ CREATE TABLE IF NOT EXISTS repeated_defects_table (
 
 -- ---------------------------------------------------------------------
 -- wheel_counter_table: ONE row (ID = 1) with the live wheel number as text.
--- Written only by RightAlgorithm (UPDATE ... WHERE ID = 1), so the row is
--- created by fixed_rows.sql, not by the program.
+-- Written only by the inspection side whose rendered config has
+-- writes_live_wheel_counter: true (one side per site, D-073), as an upsert:
+-- INSERT ... (1, n) ON DUPLICATE KEY UPDATE WHEEL_COUNT (F75), so a DB without
+-- row 1 still works. fixed_rows.sql seeds '0' so the UI shows a number on a
+-- fresh DB before the first plate. Read by the UI.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS wheel_counter_table (
     ID           INT         NOT NULL AUTO_INCREMENT PRIMARY KEY,
