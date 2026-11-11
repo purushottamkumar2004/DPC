@@ -55,6 +55,7 @@ class SiteYamlTest(SupervisorTest):
         with open(EXAMPLE_SITE_YAML) as f:
             data = yaml.safe_load(f)
         data["paths"]["root"] = self.path("INSIGHTZZ")
+        data.pop("transfer", None)     # the example has a transfer section since F81; these tests are about cam2
         data["db"]["user"], data["db"]["password"] = SECRETS["db_user"], SECRETS["db_password"]
         data["mqtt"]["user"], data["mqtt"]["password"] = SECRETS["mqtt_user"], SECRETS["mqtt_password"]
         if data.get("graph"):

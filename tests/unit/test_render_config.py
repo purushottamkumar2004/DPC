@@ -850,5 +850,86 @@ class MqttEverywhereF70(Site):                                       # F70, D-09
         self.assertEqual({w for w, s in self.render().items() if s == "written"}, set(WORKERS))
 
 
+class TransferFile(Site):                                            # F81, D-104, D-105
+    TRANSFER = {"drive": {"site": "contoso.sharepoint.com:/sites/DPC"},
+                "upload": {"chunk_mb": 500, "staging_max_gb": 20, "max_mbps": 20, "plate_images": 100}}
+
+    def transfer_settings(self):
+        sys.path.insert(0, os.path.join(REPO_ROOT, "workers", "transfer"))
+        try:
+            import transfer_settings
+        finally:
+            sys.path.pop(0)
+        return transfer_settings
+
+    def with_transfer(self, **changes):
+        self.data["transfer"] = dict(self.TRANSFER, **changes)
+        self.write()
+
+    def test_not_rendered_without_a_transfer_section(self):
+        self.data.pop("transfer", None)
+        self.write()
+        self.assertNotIn("transfer", self.render())
+        self.with_transfer()
+        self.assertEqual(self.render()["transfer"], "written")
+        self.data.pop("transfer")
+        self.write()
+        self.assertEqual(self.render()["transfer"], "removed")
+        self.assertFalse(os.path.exists(os.path.join(self.rendered, "transfer.json")))
+
+    def test_shape(self):                                            # F81 done when
+        self.with_transfer()
+        self.render()
+        path = os.path.join(self.rendered, "transfer.json")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        doc = self.load("transfer")
+        self.assertEqual(set(doc) - {"_generated"}, {"worker_id", "site", "log", "paths", "cameras", "sides",
+                                                     "models_in_use", "machine", "graph", "mqtt", "transfer"})
+        r, data = self.root, os.path.join(self.root, "data")
+        self.assertEqual(doc["paths"], {"root": r, "logs": f"{r}/logs", "run": f"{r}/run",
+                                        "state": f"{data}/state/transfer", "staging": f"{data}/transfer/staging",
+                                        "downloads": f"{data}/transfer/downloads", "models": f"{data}/models"})
+        self.assertEqual(doc["cameras"][1], {"id": "CAM2", "side": "RIGHT", "serial": "24874775", "fps": 4.0,
+                                             "exposure_us": 2000, "rotate": 0,
+                                             "raw_images": f"{data}/frames/CAM2/RAW_IMAGES"})
+        self.assertEqual(doc["sides"][0], {"side": "LEFT", "camera_id": "CAM1", "inspection_worker": "inspection_left",
+                                           "plate": f"{data}/images/PLATE/LEFT"})
+        self.assertEqual(doc["models_in_use"], {"dpc_maskrcnn": ["LEFT", "RIGHT"]})
+        self.assertEqual(doc["graph"]["client_secret"], GRAPH_SECRET)
+        self.assertEqual(doc["mqtt"], {"host": "localhost", "port": 1883, "user": None, "password": None})
+        self.assertEqual(doc["transfer"], {
+            "drive": {"site": "contoso.sharepoint.com:/sites/DPC"}, "models_folder": "DPC/models/tadipatri",
+            "upload": {"chunk_mb": 500, "remote_folder": "DPC/data/tadipatri", "staging_max_gb": 20.0,
+                       "max_mbps": 20.0, "plate_images": 100}})
+
+    def test_transfer_starts_without_warnings(self):                 # F81 done when
+        self.with_transfer()
+        self.render()
+        ts = self.transfer_settings()
+        settings = ts.build_settings(ts.read_raw_config(os.path.join(self.rendered, "transfer.json")))
+        self.assertEqual(settings.warnings, [])
+        self.assertEqual((settings.models_folder, settings.upload.remote_folder, settings.drive),
+                         ("DPC/models/tadipatri", "DPC/data/tadipatri", {"site": "contoso.sharepoint.com:/sites/DPC"}))
+        self.assertEqual([s.side for s in settings.sides], ["LEFT", "RIGHT"])
+
+    def test_download_only_and_unlimited(self):
+        self.with_transfer(upload=None)
+        self.render()
+        self.assertIsNone(self.load("transfer")["transfer"]["upload"])
+        self.with_transfer(upload={"max_mbps": None})
+        self.render()
+        self.assertIsNone(self.load("transfer")["transfer"]["upload"]["max_mbps"])
+        ts = self.transfer_settings()
+        settings = ts.build_settings(ts.read_raw_config(os.path.join(self.rendered, "transfer.json")))
+        self.assertEqual((settings.upload.max_mbps, settings.warnings), (None, []))
+
+    def test_per_side_models_in_use(self):
+        self.with_transfer()
+        self.data["inspection"]["sides"]["RIGHT"]["model"] = {"name": "dpc_maskrcnn_right"}
+        self.write()
+        self.render()
+        self.assertEqual(self.load("transfer")["models_in_use"], {"dpc_maskrcnn": ["LEFT"], "dpc_maskrcnn_right": ["RIGHT"]})
+
+
 if __name__ == "__main__":
     unittest.main()

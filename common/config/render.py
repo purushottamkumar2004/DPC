@@ -24,6 +24,7 @@ import os
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
+from common.config.model_package import models_in_use
 from common.config.site_config import AUTO_ROI_KEYS, SiteConfig, load_site_config, default_config_path
 
 RENDERER_VERSION = 1
@@ -250,9 +251,42 @@ def ui_config(cfg: SiteConfig) -> Dict[str, Any]:
     }
 
 
+def transfer_config(cfg: SiteConfig) -> Dict[str, Any]:
+    """transfer (F81, D-104, D-105): the shape workers/transfer/transfer_settings.py reads, every key
+    written so the program takes nothing from its defaults. Only rendered when site.yaml has a
+    transfer section. graph is required for it (the loader checks)."""
+    p, t = cfg.paths, cfg.transfer
+    upload = None
+    if t.upload is not None:
+        u = t.upload
+        upload = {"chunk_mb": u.chunk_mb, "remote_folder": u.remote_folder, "staging_max_gb": u.staging_max_gb,
+                  "max_mbps": u.max_mbps, "plate_images": u.plate_images}
+    return {
+        "worker_id": "transfer",
+        "site": {"id": cfg.site.id, "name": cfg.site.name},
+        "log": {"backup_count": t.log.backup_count},
+        "paths": {"root": p.root, "logs": p.logs, "run": p.run,
+                  "state": os.path.join(p.data, "state", "transfer"),
+                  "staging": os.path.join(p.data, "transfer", "staging"),
+                  "downloads": os.path.join(p.data, "transfer", "downloads"),
+                  "models": os.path.join(p.data, "models")},
+        "cameras": [{"id": cam.id, "side": cam.side, "serial": cam.serial, "fps": cam.fps,
+                     "exposure_us": cam.exposure_us, "rotate": cam.rotate,
+                     "raw_images": p.frame_dir(cam.id, "RAW_IMAGES")} for cam in cfg.cameras],
+        "sides": [{"side": cam.side, "camera_id": cam.id, "inspection_worker": SIDE_WORKER[cam.side],
+                   "plate": p.image_dir("PLATE", cam.side)} for cam in cfg.cameras],
+        "models_in_use": models_in_use(cfg),
+        "machine": {"total_wheel_count": cfg.inspection.machine.total_wheel_count},
+        "graph": {"tenant_id": cfg.graph.tenant_id, "client_id": cfg.graph.client_id,
+                  "client_secret": cfg.graph.client_secret},
+        "mqtt": _mqtt(cfg),
+        "transfer": {"drive": dict(t.drive), "models_folder": t.models_folder, "upload": upload},
+    }
+
+
 def worker_configs(cfg: SiteConfig) -> Dict[str, Dict[str, Any]]:
     """worker_id -> settings. Capture and inspection for the configured cameras only (a
-    one-camera site gets two of each kind less); cleanup, mail, plc and ui always."""
+    one-camera site gets two of each kind less); cleanup, mail, plc and ui always; transfer when configured."""
     configs = {}
     for camera in cfg.cameras:
         configs[CAMERA_WORKER[camera.id]] = capture_config(cfg, camera)
@@ -262,6 +296,8 @@ def worker_configs(cfg: SiteConfig) -> Dict[str, Dict[str, Any]]:
     configs["mail"] = mail_config(cfg)
     configs["plc"] = plc_config(cfg)
     configs["ui"] = ui_config(cfg)
+    if cfg.transfer is not None:                 # only on a site with a transfer section
+        configs["transfer"] = transfer_config(cfg)
     return configs
 
 

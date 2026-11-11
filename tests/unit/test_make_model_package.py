@@ -389,5 +389,38 @@ class CocoAndSharedConfig(_Base):                                    # F49, D-08
         self.assertIn("supervisor.py model switch dpc_maskrcnn 2026.11.1", out)
 
 
+class IndexMapF50(_Base):                                            # F50, D-089
+    def write_json(self, data, name="classes_map.json"):
+        path = os.path.join(self.src, name)
+        with open(path, "w") as f:
+            json.dump(data, f)
+        self.before[path] = (digest(path), os.stat(path).st_mtime_ns)
+        return path
+
+    def test_index_map_in_classes_from_coco(self):
+        path = self.write_json({"2": "plate", "0": "wheel", "1": "bucket_clip"})
+        code, out = self.run_tool("--classes-from-coco", path)
+        self.assertEqual(code, 0, out)
+        package = mp.verify_package(os.path.join(self.models, "dpc_maskrcnn", "2026.10.1"))
+        self.assertEqual(package.classes, ("wheel", "bucket_clip", "plate"))
+        self.assertEqual(num_classes_of(package.detectron_yaml)[0], 3)
+        self.assertSourcesUntouched()
+
+    def test_index_map_in_classes_file(self):
+        code, out = self.run_tool("--classes-file", self.write_json({"0": "wheel", "1": "plate"}))
+        self.assertEqual(code, 0, out)
+
+    def test_bad_index_maps_are_refused(self):
+        cases = [({"0": "wheel", "2": "plate"}, "without gaps; missing [1]"),
+                 ({"0": "wheel", "x": "plate"}, "key 'x' is not a class index"),
+                 ({"0": "wheel", "1": "wheel"}, "name 'wheel' appears more than once"),
+                 ({"0": "wheel", "1": ""}, "index 1: name missing")]
+        for data, message in cases:
+            code, out = self.run_tool("--classes-from-coco", self.write_json(data))
+            self.assertEqual(code, 1, data)
+            self.assertIn(message, out)
+            self.assertFalse(os.path.exists(os.path.join(self.models, "dpc_maskrcnn", "2026.10.1")))
+
+
 if __name__ == "__main__":
     unittest.main()
