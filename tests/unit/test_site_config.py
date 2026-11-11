@@ -104,7 +104,7 @@ class ExampleLoads(_TempDirTest):
         self.assertEqual(cfg.mail.sender, "graph")
         self.assertIsNotNone(cfg.graph)
         self.assertEqual(cfg.transfer.upload.remote_folder, "DPC/data/example_site")   # <site.id> replaced
-        self.assertEqual(cfg.transfer.models_folder, "DPC/models")
+        self.assertEqual(cfg.transfer.models_folder, "DPC/models/example_site")   # <site.id> replaced (D-105)
         self.assertFalse(hasattr(cfg, "models"))                              # D-060
         for section in (cfg.capture, cfg.inspection, cfg.plc, cfg.mail, cfg.cleanup, cfg.transfer):
             self.assertEqual(section.log.backup_count, 5)
@@ -121,9 +121,12 @@ class ExampleLoads(_TempDirTest):
         data["inspection"]["machine"].pop("wheel_stand_required_counts", None)
         # ... and auto_roi.learn_images, retired by D-093 (a warning; doc fix in the F53 handoff)
         data["inspection"].get("auto_roi", {}).pop("learn_images", None)
+        # ... and has no transfer.drive yet (required since F81; doc fix in the F81 handoff)
+        data["transfer"].setdefault("drive", {"site": "contoso.sharepoint.com:/sites/DPC"})
+        data["transfer"].pop("models_check_hours", None)
         cfg = sc.load_site_config(self.write_yaml(data))
         self.assertEqual(cfg.inspection.model.name, "dpc_maskrcnn")
-        self.assertEqual(cfg.transfer.models_folder, "DPC/models")
+        self.assertIn(cfg.transfer.models_folder, ("DPC/models", "DPC/models/tadipatri"))
         self.assertEqual(cfg.transfer.upload.remote_folder, "DPC/data/tadipatri")
         self.assertEqual(cfg.warnings, ("db.user is root; a dedicated user with limited rights "
                                         "is recommended (D-030)",))
@@ -157,10 +160,10 @@ class ExampleLoads(_TempDirTest):
 
     def test_transfer_without_upload(self):
         data = self.config_data()
-        data["transfer"] = {"log": {"backup_count": 3}}
+        data["transfer"] = {"drive": {"user": "dpc@example.com"}, "log": {"backup_count": 3}}
         cfg = sc.load_site_config(self.write_yaml(data))
         self.assertIsNone(cfg.transfer.upload)
-        self.assertEqual(cfg.transfer.models_folder, "DPC/models")         # default
+        self.assertEqual(cfg.transfer.models_folder, "DPC/models/example_site")   # default (D-105)
 
 
 # ======================================================================
@@ -793,6 +796,47 @@ class UiF58(_TempDirTest):                                             # F58, D-
         for pattern in (r"^ui\.port: must be between 1024 and 65535", r"^ui\.refresh_seconds: must be >= 0\.5",
                         r"^ui\.event_keep_days: must be between 1", r"^ui\.event_keep_rows: must be between 100",
                         r"^ui\.login: unknown key"):
+            self.assertProblem(problems, pattern)
+
+
+class TransferF81(_TempDirTest):                                       # F81, D-104, D-105
+    def transfer(self, **values):
+        data = self.config_data()
+        data["transfer"] = dict({"drive": {"site": "contoso.sharepoint.com:/sites/DPC"}}, **values)
+        return data
+
+    def test_defaults(self):
+        t = sc.load_site_config(self.write_yaml(self.transfer(upload={}))).transfer
+        self.assertEqual(t.drive, {"site": "contoso.sharepoint.com:/sites/DPC"})
+        self.assertEqual(t.models_folder, "DPC/models/example_site")
+        u = t.upload
+        self.assertEqual((u.weekday, u.chunk_mb, u.remote_folder, u.staging_max_gb, u.max_mbps, u.plate_images),
+                         (None, 500, "DPC/data/example_site", 20.0, 20.0, 100))
+
+    def test_values_and_null_bandwidth(self):
+        t = sc.load_site_config(self.write_yaml(self.transfer(
+            drive={"user": "dpc@example.com"}, models_folder="Shared/models/<site.id>",
+            upload={"max_mbps": None, "staging_max_gb": 50, "plate_images": 0, "weekday": "sunday"}))).transfer
+        self.assertEqual((t.drive, t.models_folder), ({"user": "dpc@example.com"}, "Shared/models/example_site"))
+        self.assertEqual((t.upload.max_mbps, t.upload.staging_max_gb, t.upload.plate_images, t.upload.weekday),
+                         (None, 50.0, 0, "sunday"))
+
+    def test_drive_rules(self):
+        data = self.config_data()
+        data["transfer"] = {"log": {"backup_count": 5}}
+        self.assertEqual(self.problems_for(data), ["transfer.drive: missing"])
+        for drive, pattern in (({"site": "x", "user": "a@b.com"}, r"^transfer\.drive: give exactly one of"),
+                               ({"site": "contoso.sharepoint.com/sites/DPC"}, r"^transfer\.drive\.site: must look like"),
+                               ({"user": "not-an-address"}, r"^transfer\.drive\.user: must be the user's sign-in"),
+                               ({"group": "x"}, r"^transfer\.drive\.group: unknown key")):
+            self.assertProblem(self.problems_for(self.transfer(drive=drive)), pattern)
+
+    def test_bad_upload_values_and_dropped_key(self):
+        problems = self.problems_for(self.transfer(models_check_hours=6, upload={
+            "max_mbps": 0, "staging_max_gb": 0, "plate_images": -1, "weekday": "someday"}))
+        for pattern in (r"^transfer\.models_check_hours: dropped \(D-105\)", r"^transfer\.upload\.max_mbps: must be > 0",
+                        r"^transfer\.upload\.staging_max_gb: must be > 0", r"^transfer\.upload\.plate_images: must be between 0",
+                        r"^transfer\.upload\.weekday: must be one of monday"):
             self.assertProblem(problems, pattern)
 
 

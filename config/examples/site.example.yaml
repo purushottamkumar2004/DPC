@@ -165,11 +165,18 @@ cleanup:                          # all optional; these are the defaults
   disk_report_time: "09:00"       # daily disk mail (Graph only, D-082); quoted HH:MM
   log: {backup_count: 5}
 
-transfer:                         # optional: leave out if this site runs no transfer service (D-057)
-  upload: {weekday: sunday, chunk_mb: 500, remote_folder: "DPC/data/<site.id>"}   # optional weekly upload
-  models_folder: "DPC/models"     # OneDrive folder with <name>/<version>/ (default)
+transfer:                         # optional: leave out if this site runs no transfer service (D-104, D-105)
+  drive: {site: "contoso.sharepoint.com:/sites/DPC"}   # EDIT; required; or {user: "dpc@example.com"} (OneDrive)
+  models_folder: "DPC/models/<site.id>"   # default; holds <model>/<YYYY.MM.DD>.zip (D-105)
+  upload:                         # optional: leave out = this site uploads nothing
+    chunk_mb: 500                 # defaults shown
+    remote_folder: "DPC/data/<site.id>"
+    staging_max_gb: 20            # cap of data/transfer/staging
+    max_mbps: 20                  # upload limit in megabits/s; null = unlimited
+    plate_images: 100             # plate frames uploaded with a cycle; 0 = none
+    # weekday: sunday             # no default: jobs are click-started (D-105), no schedule now
   log: {backup_count: 5}
-# Model updates (auto_update, check interval, pin) are Supervisor settings, not here (D-060).
+# Model updates (auto_update, pin, switch) are Supervisor settings, not here (D-060).
 
 ui:                               # the local web UI (D-095); optional, these are the defaults
   port: 8080                      # http://127.0.0.1:<port> on this machine only

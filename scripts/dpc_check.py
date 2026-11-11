@@ -56,7 +56,8 @@ PING_TIMEOUT_S = 1           # per camera with an ip (D-064); 2 cameras keep the
 
 # Folders under data/ that are not per camera or per side (CONTRACTS 4.1). Of wheel_status only
 # IMAGES/<SIDE> is checked (D-075); its other subfolders are still "assumed" (Q13).
-DATA_TOP_DIRS = ("bolt_data", "state", "models")
+DATA_TOP_DIRS = ("bolt_data", "state", "models",
+                 "transfer", "transfer/staging", "transfer/downloads")   # staging of the transfer service (D-105)
 # The frame hand-off uses hard links and renames, so these must share one filesystem (D-031).
 SAME_FS_SUBDIRS = ("_tmp", "INF", "UI", "live", "RAW_IMAGES")
 

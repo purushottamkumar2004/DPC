@@ -50,7 +50,9 @@ class HeartbeatFieldsTest(unittest.TestCase):
         """R6: model {name, version} last; null while the model is still loading."""
         stats = HB.LoopStats()
         p = HB.heartbeat_payload("inspection_left", stats, "v", "c")
-        self.assertEqual((list(p)[-1], p["model"]), ("model", None))
+        self.assertEqual(p["model"], None)
+        keys = list(p)
+        self.assertEqual(keys[keys.index("waiting_for_plate") + 1], "model")     # appended after F60
         stats.model = {"name": "dpc_maskrcnn_left", "version": "2026.11.04"}
         p = HB.heartbeat_payload("inspection_left", stats, "v", "c")
         self.assertEqual(p["model"], {"name": "dpc_maskrcnn_left", "version": "2026.11.04"})
