@@ -50,6 +50,7 @@ class MqttClient:
         self.enabled = settings.enabled and mqtt is not None
         self.connected = threading.Event()
         self.announce_presence = announce_presence
+        self.presence_info = {}                  # added to "online", e.g. {"mode": "setup"} (S1)
         self._subscriptions = []         # [(topic_filter, callback)]
         self._client = None
 
@@ -119,7 +120,8 @@ class MqttClient:
         announce presence (F28). The Supervisor calls it on connect and periodically, so a
         stale "offline" (e.g. from an old CLI) is corrected within one status interval."""
         if self.announce_presence:
-            self.publish(self.topic("supervisor", "status"), {"status": "online", "timestamp": now_iso()}, retain=True)
+            self.publish(self.topic("supervisor", "status"),
+                         {"status": "online", "timestamp": now_iso(), **self.presence_info}, retain=True)
 
     def publish_status(self, worker_id: str, status: dict):
         self.publish(self.worker_topic(worker_id, "status"), status, retain=True)

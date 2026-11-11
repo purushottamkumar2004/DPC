@@ -171,8 +171,10 @@ class ConfigurationManager:
 
     # ------------------------------------------------------------------
     def load(self):
-        raw = self._read_file()
+        self.load_dict(self._read_file())
 
+    def load_dict(self, raw: dict):
+        """The same checks as load(), for a workers list built in code (S1: the setup-mode list)."""
         self.settings = Settings(
             monitoring=_build(MonitoringSettings, raw.get("monitoring"), "monitoring"),
             mqtt=_build(MqttSettings, raw.get("mqtt"), "mqtt"),

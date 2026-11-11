@@ -21,7 +21,9 @@ WorkingDirectory=@ROOT@/code/supervisor
 # Supervisor (the one with pypylon, cv2, ...), not /usr/bin/python3 by accident.
 Environment=PATH=@PYTHON_DIR@:/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONUNBUFFERED=1
-ExecStart=@PYTHON@ supervisor.py run -c @ROOT@/config/workers.yaml
+# No -c: the Supervisor finds <root>/config/workers.yaml next to site.yaml, and on a fresh machine
+# (no site.yaml yet, or SETUP_MODE) runs only the UI until setup-finish (S1, D-103).
+ExecStart=@PYTHON@ supervisor.py run --site-config @ROOT@/config/site.yaml
 Restart=always
 RestartSec=5
 # `systemctl reload dpc-supervisor` = `supervisor.py reload` without --confirm (6f): render
