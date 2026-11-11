@@ -49,9 +49,32 @@ Stop the Supervisor's copy first: two processes cannot open the same camera.
 - Repeating problems are logged at most once per minute, with a repeat count.
 - SIGTERM / Ctrl+C: the current frame is finished, the camera is closed, `_tmp` is left empty.
 
+## camera_probe (setup and checks, STATUS S4)
+Lists the cameras on this machine and grabs one image, without the capture program. Used by the UI
+setup wizard (D-103 step 3) and by hand:
+```
+python3 camera_probe.py list [--driver all|basler|flir] [--json]
+python3 camera_probe.py grab SERIAL OUT_FILE [--exposure US] [--timeout-ms MS] [--driver auto|basler|flir] [--json]
+```
+In Python: `camera_probe.list_all()`, `camera_probe.grab_one(serial, out_path, exposure_us=None, timeout_ms=5000, driver="auto")`.
+
+- `list` gives per camera: driver, serial, model, IP (GigE only), `in_use` (true / false / null when the SDK
+  cannot tell), device class and user name. A missing SDK is reported per driver ("Basler SDK not installed",
+  "FLIR SDK not installed"), never an error.
+- `grab` writes one image (.jpg, .png or .bmp; written next to the target, then renamed). Status and exit code:
+  `ok` 0; `failed` 1 (open or grab failed, the SDK's text in `message`); `sdk_missing` 1; `bad_request` 2;
+  `in_use` 3; `not_found` 4.
+- A camera held by another program (normally the running capture) is reported `in_use` and never forced:
+  stop that program first. The probe sets TriggerMode Off, and with `--exposure` ExposureAuto Off and the
+  exposure; these live in the camera's working memory only, and the capture sets its own values when it starts.
+- FLIR (Spinnaker, PySpin) is in `flir_probe.py` with the same functions and results; `in_use` comes from the
+  camera's access status, read without opening it. Not yet tried on a real FLIR camera.
+- Try it without hardware: `PYLON_CAMEMU=2 python3 camera_probe.py list` (pylon's emulated cameras).
+
 ## Tests
 ```
 python3 -m unittest discover -s workers/frame_capture_basler/tests -t . -v
 ```
-A fake `pypylon` (`tests/fake_pypylon/`) stands in for the camera. One test renders the Tadipatri reference
+A fake `pypylon` (`tests/fake_pypylon/`) and a fake `PySpin` (`tests/fake_pyspin/`) stand in for the cameras;
+one probe test uses the real pylon SDK with its emulated cameras when pypylon is installed (else skipped). One test renders the Tadipatri reference
 `site.yaml` with the real renderer and loads both capture files.
