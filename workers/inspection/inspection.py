@@ -236,6 +236,8 @@ class Inspection:
         # The cycle itself (counter reset) always runs; only the defect check can be off (D-085).
         if self.cycle_restart:
             self.cycle_restart.run(self.wheels.count, image.copy(), repeated_list)
+        # F76: heartbeat plate fields; the first plate after a start ends no complete cycle
+        self.stats.plate_seen(os.path.basename(frame_path), self.wheels.count if self.plate_found else None)
         if not self.plate_found:
             self.plate_found = True
             logger.info("Plate Found: Resetting state and clearing wheel lists for this frame.")

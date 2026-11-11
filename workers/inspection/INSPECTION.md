@@ -86,6 +86,13 @@ flowchart TD
     - `ms_per_image`: mean time to process one frame, model plus every check, over the last 60 s; null until a frame was processed.
     - `waiting_for_plate`: true until the first plate after a start, while frames are inferred but not inspected.
   - Appended for R6: `model` {name, version} of the running model package; null while it is still loading.
+  - Appended for F76 (D-105), set in `_on_plate()` only at a **new** plate (once per physical plate, D-077):
+    - `plates_seen`: new plates since the process started.
+    - `last_plate_frame`: that plate's frame name.
+    - `last_plate_at`: ISO time with UTC offset, when it was processed.
+    - `last_cycle_wheels`: wheels counted in the cycle that just ended; `null` for the first plate after a start (nothing is counted before it).
+    - Before the first plate: 0 / null / null / null.
+    - The transfer service uses them as cycle boundaries; the UI shows "last plate N min ago".
   - `healthy` is false when the main loop has not turned for 60 s, for example a hung GPU call. An empty `INF` still turns the loop.
   - The broker comes from the JSON `mqtt` block (F25; `user`/`password` null = no login). A file without the block (rendered before F25), or no paho-mqtt, means the program logs "Heartbeat off" once and runs without a heartbeat. Inspection never depends on the broker (D-034).
 
@@ -231,7 +238,7 @@ The mail sender sends every unsent row of any type, so all of them are now maile
 - **New observation, kept:** a frame is deleted as invalid when it is less than 0.03 s old (L:503-526, `is_valid_image`). With the atomic hand-off (D-031) a fresh `INF` link can be that young, so a frame can be lost. It is rare at 4 fps. Fix: skip the frame instead of deleting it; developer decision.
 
 ## 11. Tests
-- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 87 tests; the 2 real-DB tests of `test_live_counter.py` run only with `DPC_TEST_DB=host:port:user:password` (scratch database `dpc_f75_test`, created and dropped), otherwise they are skipped.
+- **`python3 -m unittest discover -s workers/inspection/tests -t .`** (repo root, no GPU, no DB): 89 tests; the 2 real-DB tests of `test_live_counter.py` run only with `DPC_TEST_DB=host:port:user:password` (scratch database `dpc_f75_test`, created and dropped), otherwise they are skipped.
   - Settings from the real renderer: Tadipatri per-side values; a missing key is named.
   - Wheel counter in both directions; plate tracker: one plate crossing = one new plate, on both sides (D-077).
   - D-077 through the real frame flow: a plate crossing the Left camera with a wheel in view gives one reset and no `Batch_Wheels_Missing`; the next plate gives one, with the right count. (With the old B5 rule the same test gives 4 resets and a false restart at wheel 1.)
