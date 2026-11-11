@@ -27,7 +27,7 @@ SIDES=(LEFT RIGHT)
 FRAME_SUBDIRS=(live _tmp INF RAW_IMAGES UI)
 IMAGE_KINDS=(DEFECTIVE REPEATED RAW PLATE MAGNET TEMP)   # MAGNET: magnet diagnostics (D-072), TEMP (D-067)
 WHEEL_STATUS_SUBDIRS=(LEFT RIGHT IMAGES IMAGES/LEFT IMAGES/RIGHT PDFS)   # IMAGES/<SIDE>: best image per wheel (D-075)
-DATA_TOP=(bolt_data state models)
+DATA_TOP=(bolt_data state models transfer transfer/staging transfer/downloads)   # transfer/: D-105
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

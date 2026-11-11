@@ -86,6 +86,35 @@ def classes_from_xml(path: str) -> List[str]:
     return list(value) if isinstance(value, (list, tuple)) else []
 
 
+def is_index_map(data) -> bool:
+    """The training tool's class file {"0": "wheel", "1": "plate", ...} (D-089)."""
+    return isinstance(data, dict) and bool(data) and "categories" not in data and "classes" not in data \
+        and all(isinstance(k, str) for k in data)
+
+
+def classes_from_index_map(data: dict, label: str) -> List[str]:
+    """{"0": name, ...} -> [name, ...] in index order. Refuses non-integer keys, gaps (keys must be
+    exactly 0..n-1), and empty or duplicate names: each would shift a class index silently (F50)."""
+    problems, by_index = [], {}
+    for key, name in data.items():
+        if not key.strip().isdigit():
+            problems.append(f"key {key!r} is not a class index")
+            continue
+        if not isinstance(name, str) or not name.strip():
+            problems.append(f"index {key}: name missing")
+            continue
+        by_index[int(key)] = name
+    missing = sorted(set(range(len(data))) - set(by_index))
+    if not problems and missing:
+        problems.append(f"indexes must be 0..{len(data) - 1} without gaps; missing {missing}")
+    names = list(by_index.values())
+    for name in sorted({n for n in names if names.count(n) > 1}):
+        problems.append(f"name {name!r} appears more than once")
+    if problems:
+        raise PackagingError(f"{label}: " + "; ".join(problems))
+    return [by_index[i] for i in range(len(by_index))]
+
+
 def classes_from_coco(path: str) -> List[str]:
     """The class list of a training dataset in COCO format: `categories` sorted by `id` (D-088).
     Refuses a file without categories, ids that are not unique integers, and missing or
@@ -95,6 +124,8 @@ def classes_from_coco(path: str) -> List[str]:
             data = json.load(f)
     except (OSError, ValueError) as exc:
         raise PackagingError(f"--classes-from-coco: cannot read {path} ({type(exc).__name__})") from None
+    if is_index_map(data):                       # the training tool's index-map class file (D-089, F50)
+        return classes_from_index_map(data, "--classes-from-coco")
     categories = data.get("categories") if isinstance(data, dict) else None
     if not isinstance(categories, list) or not categories:
         raise PackagingError(f"--classes-from-coco: {path} has no `categories` list")
@@ -120,12 +151,15 @@ def classes_from_coco(path: str) -> List[str]:
 
 
 def classes_from_file(path: str) -> List[str]:
-    """A JSON list of names, or a classes.json object with a "classes" list."""
+    """A JSON list of names, a classes.json object with a "classes" list, or the training tool's
+    index map {"0": name, ...} (D-089, F50)."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError) as exc:
         raise PackagingError(f"--classes-file: cannot read {path} ({type(exc).__name__})") from None
+    if is_index_map(data):
+        return classes_from_index_map(data, "--classes-file")
     return list(data.get("classes", [])) if isinstance(data, dict) else list(data) if isinstance(data, list) else []
 
 
@@ -377,9 +411,10 @@ def main(argv=None) -> int:
     parser.add_argument("--weights", help="the .pth weights file (copied, never changed)")
     parser.add_argument("--detectron-yaml", help="override the shared config models/configs/mask_rcnn_R101_FPN_3x.yaml "
                                                  "(self-contained; NUM_CLASSES is set from the classes)")
-    parser.add_argument("--classes-from-coco", help="training dataset JSON (COCO): categories sorted by id (normal way)")
+    parser.add_argument("--classes-from-coco", help="training dataset JSON (COCO: categories sorted by id), or the "
+                                                    "training tool's index map {\"0\": name, ...} (normal way)")
     parser.add_argument("--classes", help="class names in model output order, comma separated")
-    parser.add_argument("--classes-file", help="JSON list of class names (or a classes.json)")
+    parser.add_argument("--classes-file", help="JSON list of class names, a classes.json, or an index map {\"0\": name}")
     parser.add_argument("--classes-from-xml", help="legacy leftConfig.xml/rightConfig.xml: uses <ALL_CLASS_NAMES>")
     parser.add_argument("--label-map", default="", help="model_class=label pairs, comma separated")
     parser.add_argument("--legacy-label-map", action="store_true",

@@ -182,6 +182,8 @@ class Failures(Site):                                                # done when
             for folder in (f"images/MAGNET/{side}", f"images/TEMP/{side}", f"bolt_data/{side}",
                            f"wheel_status/IMAGES/{side}"):                     # F23, D-075
                 self.assertIn(os.path.join(data, folder), expected)
+        for folder in ("transfer", "transfer/staging", "transfer/downloads"):     # F81, D-105
+            self.assertIn(os.path.join(data, folder), expected)
         shutil.rmtree(os.path.join(data, "images", "MAGNET", "LEFT"))
         results, _ = self.run_all()
         self.assertEqual(results["layout"].status, dc.FAIL)

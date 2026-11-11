@@ -485,16 +485,20 @@ class CleanupConfig:
 
 @dataclass(frozen=True)
 class TransferUpload:
-    weekday: str         # monday .. sunday
+    weekday: Optional[str]   # monday .. sunday; no default: jobs are click-started (D-105), no schedule now
     chunk_mb: int
-    remote_folder: str   # OneDrive folder, "<site.id>" already replaced
+    remote_folder: str       # OneDrive folder, "<site.id>" already replaced
+    staging_max_gb: float = 20.0           # cap of data/transfer/staging
+    max_mbps: Optional[float] = 20.0       # upload bandwidth limit, megabits/s; None = unlimited
+    plate_images: int = 100                # plate frames uploaded with a cycle; 0 = none
 
 
 @dataclass(frozen=True)
 class TransferConfig:
-    upload: Optional[TransferUpload]   # None = no weekly upload (model download only)
-    models_folder: str                 # OneDrive folder with <name>/<version>/ (D-060)
+    upload: Optional[TransferUpload]   # None = this site uploads nothing (model download only)
+    models_folder: str                 # OneDrive folder with <model>/<YYYY.MM.DD>.zip, "<site.id>" replaced (D-105)
     log: LogSettings
+    drive: Dict[str, str] = field(default_factory=dict)   # {"site": "<host>:/sites/<path>"} or {"user": "<upn>"}
 
 
 @dataclass(frozen=True)
@@ -1277,27 +1281,71 @@ def _read_cleanup(top: _Section) -> CleanupConfig:
 
 # ---- transfer (D-057, D-060) ----
 
+def _read_drive(s: _Section) -> Dict[str, str]:
+    """transfer.drive: exactly one of {site: "<host>:/sites/<path>"} (SharePoint, D-105 Q18) or
+    {user: "<upn>"} (a user's OneDrive). Required: the transfer program cannot start without it."""
+    d = s.section("drive")
+    kinds = [k for k in ("site", "user") if k in d.data]
+    if d.data and len(kinds) != 1:
+        d.problem("", 'give exactly one of site ("<host>:/sites/<path>") or user ("<upn>")')
+    result = {}
+    for kind in kinds:
+        value = d.string(kind)
+        if value is None:
+            continue
+        if kind == "site" and ":/" not in value:
+            d.problem("site", f'must look like "contoso.sharepoint.com:/sites/DPC", got {value!r}')
+            continue
+        if kind == "user" and not _EMAIL_RE.match(value):
+            d.problem("user", f"must be the user's sign-in address, got {value!r}")
+            continue
+        result[kind] = value.strip()
+    d.finish()
+    return result
+
+
+def _site_folder(value: Optional[str], site_id: Optional[str]) -> Optional[str]:
+    return value.replace(SITE_ID_TOKEN, site_id) if value and site_id else value
+
+
+def _read_upload(s: _Section, site_id: Optional[str]) -> Optional[TransferUpload]:
+    """transfer.upload (optional; absent or null = this site uploads nothing)."""
+    if not s.present("upload"):
+        s.used.add("upload")
+        return None
+    u = s.section("upload")
+    if "max_mbps" in u.data and u.data["max_mbps"] is None:
+        u.used.add("max_mbps")
+        max_mbps = None                                    # explicit null = unlimited
+    else:
+        max_mbps = u.number("max_mbps", required=False, default=20.0, low=0, low_exclusive=True, high=100000)
+    upload = TransferUpload(
+        weekday=u.string("weekday", required=False, default=None, choices=WEEKDAYS),
+        chunk_mb=u.integer("chunk_mb", required=False, default=500, low=1, high=100000),
+        remote_folder=_site_folder(u.string("remote_folder", required=False, default=f"DPC/data/{SITE_ID_TOKEN}"),
+                                   site_id),
+        staging_max_gb=u.number("staging_max_gb", required=False, default=20.0, low=0, low_exclusive=True,
+                                high=100000),
+        max_mbps=max_mbps,
+        plate_images=u.integer("plate_images", required=False, default=100, low=0, high=100000),
+    )
+    u.finish()
+    return upload
+
+
 def _read_transfer(top: _Section, site_id: Optional[str]) -> Optional[TransferConfig]:
-    """Optional: absent means this site runs no transfer service."""
+    """Optional: absent means this site runs no transfer service (D-104, D-105)."""
     if not top.present("transfer"):
         top.used.add("transfer")
         return None
     s = top.section("transfer")
-    upload = None
-    if s.present("upload"):
-        u = s.section("upload")
-        folder = u.string("remote_folder", required=False, default=f"DPC/data/{SITE_ID_TOKEN}")
-        upload = TransferUpload(
-            weekday=u.string("weekday", required=False, default="sunday", choices=WEEKDAYS),
-            chunk_mb=u.integer("chunk_mb", required=False, default=500, low=1, high=100000),
-            remote_folder=folder.replace(SITE_ID_TOKEN, site_id) if folder and site_id else folder,
-        )
-        u.finish()
-    else:
-        s.used.add("upload")
-    cfg = TransferConfig(upload=upload,
-                         models_folder=s.string("models_folder", required=False, default="DPC/models"),
-                         log=_read_log(s))
+    if "models_check_hours" in s.data:
+        s.used.add("models_check_hours")
+        s.problem("models_check_hours", "dropped (D-105): model updates are click-started, there is no check interval")
+    cfg = TransferConfig(upload=_read_upload(s, site_id),
+                         models_folder=_site_folder(s.string("models_folder", required=False,
+                                                             default=f"DPC/models/{SITE_ID_TOKEN}"), site_id),
+                         log=_read_log(s), drive=_read_drive(s))
     s.finish()
     return cfg
 
