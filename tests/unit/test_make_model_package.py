@@ -422,5 +422,54 @@ class IndexMapF50(_Base):                                            # F50, D-08
             self.assertFalse(os.path.exists(os.path.join(self.models, "dpc_maskrcnn", "2026.10.1")))
 
 
+class JsonResultF90(_Base):                                          # F90: one JSON result for the wizard
+    KEYS = {"ok", "name", "version", "classes", "label_map", "current_changed", "folder", "error"}
+
+    def run_json(self, *extra, version="2026.10.1"):
+        code, out = self.run_tool("--json", *extra, version=version)
+        lines = out.strip().splitlines()
+        self.assertEqual(len(lines), 1, out)                          # only the JSON, no progress text
+        result = json.loads(lines[0])
+        self.assertEqual(set(result), self.KEYS)
+        return code, result
+
+    def test_success(self):
+        code, result = self.run_json("--classes-from-xml", self.xml, "--legacy-label-map")
+        self.assertEqual(code, 0)
+        self.assertEqual(result, {
+            "ok": True, "name": "dpc_maskrcnn", "version": "2026.10.1", "classes": XML_CLASSES,
+            "label_map": {"dusty_chain_base": "bucket_clip", "dusty_wheel_bolt": "wheel_bolt"},
+            "current_changed": True, "folder": os.path.join(self.models, "dpc_maskrcnn", "2026.10.1"),
+            "error": None})
+
+    def test_second_version_does_not_change_current(self):
+        self.run_json("--classes", "wheel")
+        code, result = self.run_json("--classes", "wheel", version="2026.11.1")
+        self.assertEqual((code, result["ok"], result["current_changed"]), (0, True, False))
+
+    def test_refused_input(self):
+        code, result = self.run_json("--classes", "wheel,wheel")
+        self.assertEqual(code, 1)                                     # exit code unchanged
+        self.assertEqual((result["ok"], result["name"], result["version"], result["folder"]),
+                         (False, "dpc_maskrcnn", "2026.10.1", None))
+        self.assertIn("a name appears more than once", result["error"])
+
+    def test_file_system_error_is_still_one_json_answer(self):
+        original = mk.mp.sha256_of
+        mk.mp.sha256_of = lambda path: (_ for _ in ()).throw(OSError("disk full"))
+        try:
+            code, result = self.run_json("--classes", "wheel")
+        finally:
+            mk.mp.sha256_of = original
+        self.assertEqual((code, result["ok"]), (1, False))
+        self.assertEqual(result["error"], "OSError: disk full")
+
+    def test_without_json_the_output_is_unchanged(self):
+        code, out = self.run_tool("--classes", "wheel")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("Packaged dpc_maskrcnn/2026.10.1"))
+        self.assertNotIn("{", out.splitlines()[0])
+
+
 if __name__ == "__main__":
     unittest.main()

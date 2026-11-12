@@ -362,20 +362,27 @@ def build_from_repo(models_dir: str, repo_version_dir: str, weights: str) -> str
     return _assemble(models_dir, manifest.name, manifest.version, copies, manifest=manifest_doc)
 
 
-def _set_current_first_install(models_dir: str, name: str, version: str, no_current: bool) -> None:
+def _set_current_first_install(models_dir: str, name: str, version: str, no_current: bool,
+                                say=print) -> bool:
+    """Point `current` at the new version on a first install only. True when it was changed."""
     model_root = os.path.join(models_dir, name)
     if no_current:
-        print("  current not changed (--no-current)")
-        return
+        say("  current not changed (--no-current)")
+        return False
     pinned = mp.read_pinned(model_root)
     current = mp.read_current(model_root)
     if pinned is not None or current is not None:
         # After the first install the Supervisor owns `current` (D-060, D-061).
-        print(f"  current not changed: it is already set ({current}{', pinned' if pinned else ''}); "
-              f"switch with the Supervisor (supervisor.py model switch {name} {version})")
-        return
+        say(f"  current not changed: it is already set ({current}{', pinned' if pinned else ''}); "
+            f"switch with the Supervisor (supervisor.py model switch {name} {version})")
+        return False
     mp.set_current(model_root, version)
-    print(f"  current -> {version}")
+    say(f"  current -> {version}")
+    return True
+
+
+def _quiet(*args, **kwargs):
+    pass
 
 
 def _mode(args) -> str:
@@ -424,8 +431,33 @@ def main(argv=None) -> int:
     parser.add_argument("--export-to-repo", action="store_true", help=argparse.SUPPRESS)   # retired (D-088)
     parser.add_argument("--models-dir", default=DEFAULT_MODELS_DIR, help=f"default {DEFAULT_MODELS_DIR}")
     parser.add_argument("--no-current", action="store_true", help="do not point current at the new version")
+    parser.add_argument("--json", action="store_true",
+                        help="print only one JSON result {ok, name, version, classes, label_map, current_changed, "
+                             "folder, error} (for the setup wizard, F90); exit codes unchanged")
     args = parser.parse_args(argv)
+    if not args.json:
+        return _run(args, print)
+    result = {"ok": False, "name": args.name, "version": args.version, "classes": None, "label_map": None,
+              "current_changed": False, "folder": None, "error": None}
+    try:
+        code = _run(args, _quiet, result)
+    except Exception as exc:                      # a file system error: still one JSON answer, exit 1
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        code = 1
+    print(json.dumps(result))
+    return code
+
+
+def _run(args, say, result=None) -> int:
+    """The packaging itself; `say` prints progress (or nothing with --json); `result` collects
+    the --json answer."""
+    result = result if result is not None else {}
     models_dir = os.path.abspath(os.path.expanduser(args.models_dir))
+
+    def done(package, target, changed):
+        result.update(ok=True, name=package.name, version=package.version, classes=list(package.classes),
+                      label_map=dict(package.label_map), current_changed=changed, folder=target, error=None)
+        return 0
 
     try:
         mode = _mode(args)
@@ -433,10 +465,10 @@ def main(argv=None) -> int:
             target = build_from_repo(models_dir, args.from_repo, args.weights)
             package = mp.verify_package(target)
             open(os.path.join(target, mp.READY_FILE), "w").close()
-            print(f"Installed {package.name}/{package.version} from {args.from_repo} in {target}")
-            print(f"  weights match the repo manifest; {len(package.classes)} classes")
-            _set_current_first_install(models_dir, package.name, package.version, args.no_current)
-            return 0
+            say(f"Installed {package.name}/{package.version} from {args.from_repo} in {target}")
+            say(f"  weights match the repo manifest; {len(package.classes)} classes")
+            changed = _set_current_first_install(models_dir, package.name, package.version, args.no_current, say)
+            return done(package, target, changed)
 
         args.detectron_yaml = args.detectron_yaml or SHARED_DETECTRON_YAML     # D-088: shared by default
         classes = collect_classes(args)
@@ -449,19 +481,20 @@ def main(argv=None) -> int:
         package = mp.verify_package(target, name=args.name, version=args.version)
         open(os.path.join(target, mp.READY_FILE), "w").close()          # verified: ready to run
     except (PackagingError, mp.ModelPackageError) as exc:
-        print(f"FAILED: {exc}")
+        say(f"FAILED: {exc}")
+        result["error"] = str(exc)
         return 1
 
-    print(f"Packaged {args.name}/{args.version} in {target}")
-    print(f"  {len(package.classes)} classes, label map {package.label_map or '{}'}, trained_at {trained_at}")
+    say(f"Packaged {args.name}/{args.version} in {target}")
+    say(f"  {len(package.classes)} classes, label map {package.label_map or '{}'}, trained_at {trained_at}")
     if skipped:
-        print(f"  legacy label map entries skipped (no such class in this model): {', '.join(skipped)}")
+        say(f"  legacy label map entries skipped (no such class in this model): {', '.join(skipped)}")
     if warning:
-        print(f"  WARNING {warning}")
-    print(f"  config {os.path.basename(args.detectron_yaml)} with NUM_CLASSES {len(package.classes)}"
-          + (" (shared, D-088)" if os.path.abspath(args.detectron_yaml) == SHARED_DETECTRON_YAML else ""))
-    _set_current_first_install(models_dir, args.name, args.version, args.no_current)
-    return 0
+        say(f"  WARNING {warning}")
+    say(f"  config {os.path.basename(args.detectron_yaml)} with NUM_CLASSES {len(package.classes)}"
+        + (" (shared, D-088)" if os.path.abspath(args.detectron_yaml) == SHARED_DETECTRON_YAML else ""))
+    changed = _set_current_first_install(models_dir, args.name, args.version, args.no_current, say)
+    return done(package, target, changed)
 
 
 if __name__ == "__main__":
