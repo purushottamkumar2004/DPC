@@ -7,7 +7,9 @@ With MySQL admin credentials it:
      ALL PRIVILEGES on that database only, so the programs no longer need root (D-050),
   3. loads db/schema.sql and db/fixed_rows.sql (tables, wheel_counter_table row 1,
      CAMERA_PLC_STATUS row 1),
-  4. inserts one health_status row per camera serial (INSERT IGNORE),
+  4. inserts one health_status row per camera serial (INSERT IGNORE); without serials this
+     step is skipped (wizard step 2 runs before the cameras are chosen, Apply runs it again
+     with them, F93),
   5. logs in as the program user to prove the password and the rights work.
 
 Idempotent: a second run changes nothing and reports every step as "already there".
@@ -22,7 +24,7 @@ MySQL admin password on a fresh install (F88). An explicit admin password, or --
 (root over auth_socket), still works as before.
 
 Function:  bootstrap(BootstrapRequest(...)) -> dict  (used by the UI wizard, D-103)
-CLI:       python3 db/bootstrap.py --db <name> --user <program user> --serial <s1> --serial <s2> [--json]
+CLI:       python3 db/bootstrap.py --db <name> --user <program user> [--serial <s1> --serial <s2>] [--json]
            The program password comes from the environment (DPC_DB_PASS) or a prompt, the admin
            password from DPC_DB_ADMIN_PASS or else mysql_setup.cnf; never from the command line
            (it would show in `ps` and the shell history).
@@ -54,6 +56,7 @@ DEFAULT_ROOT = "~/INSIGHTZZ"
 SETUP_CNF = os.path.join("config", "mysql_setup.cnf")   # relative to the root, CONTRACTS 4.1
 
 CREATED, ALREADY, UPDATED, OK, FAILED = "created", "already there", "updated", "ok", "failed"
+SKIPPED = "skipped"                                    # not an error (Report.ok ignores it)
 
 
 class BootstrapError(ValueError):
@@ -65,7 +68,7 @@ class BootstrapRequest:
     db_name: str
     program_user: str
     program_password: str
-    serials: Sequence[str]
+    serials: Sequence[str] = ()                       # empty: no health rows yet (F93)
     admin_user: Optional[str] = None                  # None/"" with no password: from mysql_setup.cnf
     admin_password: Optional[str] = None              # None/"": use mysql_setup.cnf (unless unix_socket)
     host: str = "localhost"
@@ -119,9 +122,9 @@ def validate(req: BootstrapRequest) -> None:
         raise BootstrapError("program password is empty")
     if not req.program_hosts or not all(HOST_RE.match(h or "") for h in req.program_hosts):
         raise BootstrapError("program hosts: give at least one host (e.g. localhost)")
-    serials = [str(s).strip() for s in req.serials]
-    if not serials or any(not s or len(s) > 64 for s in serials):
-        raise BootstrapError("camera serials: give at least one, each 1-64 characters")
+    serials = [str(s).strip() for s in (req.serials or ())]
+    if any(not s or len(s) > 64 for s in serials):
+        raise BootstrapError("camera serials: each 1-64 characters")
     if len(set(serials)) != len(serials):
         raise BootstrapError("camera serials: the same serial is given twice")
 
@@ -275,6 +278,10 @@ def read_schema_tables() -> List[str]:
 
 
 def step_health_rows(cur, req, report):
+    if not req.serials:
+        report.add("health row", "(none)", SKIPPED,
+                   "no camera serials given; run again with the serials once the cameras are chosen")
+        return
     for serial in req.serials:
         serial = str(serial).strip()
         cur.execute("INSERT IGNORE INTO health_status (ITEM, HEALTH) VALUES (%s, 'NOK')", (serial,))
@@ -358,7 +365,8 @@ def main(argv=None) -> int:
     ap.add_argument("--user", required=True, help="program user to create (not root)")
     ap.add_argument("--password-env", default="DPC_DB_PASS",
                     help="environment variable with the program user's password (default DPC_DB_PASS)")
-    ap.add_argument("--serial", action="append", default=[], required=True, help="camera serial (repeat per camera)")
+    ap.add_argument("--serial", action="append", default=[],
+                    help="camera serial (repeat per camera); without it no health rows are inserted (F93)")
     ap.add_argument("--program-host", action="append", help="host part of the program user (repeat; "
                     "default localhost and 127.0.0.1)")
     ap.add_argument("--reset-password", action="store_true", help="set the password on an existing program user")
