@@ -1,0 +1,30 @@
+{% extends "monitor/setup/frame.html" %}
+{% block step %}
+<fieldset class="choice"><legend>Defect mails</legend>
+  <label><input type="radio" name="enabled" value="no" {% if not answers.mail %}checked{% endif %}> No mail <span class="muted">(defects are still recorded and shown)</span></label>
+  <label><input type="radio" name="enabled" value="yes" {% if answers.mail %}checked{% endif %}> Send a mail for every defect</label>
+</fieldset>
+<div class="fields three">
+  <label class="field"><span class="flabel">Sender</span><select name="sender">
+    <option value="graph" {% if answers.mail.sender != "smtp" %}selected{% endif %}>Microsoft 365 (Graph)</option>
+    <option value="smtp" {% if answers.mail.sender == "smtp" %}selected{% endif %}>SMTP</option></select></label>
+  {% with name="sender_address" label="Sender address" value=form.sender_address|default:answers.mail.sender_address %}{% include "monitor/setup/field.html" %}{% endwith %}
+  {% with name="project_name" label="Name in the subject" value=form.project_name|default:answers.mail.project_name|default:answers.site.name %}{% include "monitor/setup/field.html" %}{% endwith %}
+  {% with name="recipients" label="Recipients" value=form.recipients|default:answers.mail.recipients|join:", " help="Comma-separated" %}{% include "monitor/setup/field.html" %}{% endwith %}
+  {% with name="cc" label="Cc" value=form.cc|default:answers.mail.cc|join:", " %}{% include "monitor/setup/field.html" %}{% endwith %}
+</div>
+<fieldset class="choice"><legend>Microsoft 365 login {% if graph_set %}<span class="c-ok">set</span>{% else %}<span class="muted">not set</span>{% endif %}</legend>
+  <p class="muted">From the app registration (also used by the data transfer). Typed values are never shown again and are stored only in site.yaml at Apply.</p>
+  <div class="fields three"><label class="field"><span class="flabel">Tenant id</span><input type="password" name="graph_tenant_id" autocomplete="off"></label>
+    <label class="field"><span class="flabel">Client id</span><input type="password" name="graph_client_id" autocomplete="off"></label>
+    <label class="field"><span class="flabel">Client secret</span><input type="password" name="graph_client_secret" autocomplete="off"></label></div>
+</fieldset>
+<fieldset class="choice"><legend>SMTP (only for an SMTP sender) {% if smtp_set %}<span class="c-ok">password set</span>{% endif %}</legend>
+  <div class="fields three"><label class="field"><span class="flabel">Host</span><input name="smtp_host" value="{{ answers.mail.smtp.host|default:'smtp.gmail.com' }}"></label>
+    <label class="field"><span class="flabel">Port</span><input name="smtp_port" value="{{ answers.mail.smtp.port|default:587 }}"></label>
+    <label class="field"><span class="flabel">Password</span><input type="password" name="smtp_password" autocomplete="new-password"></label></div>
+</fieldset>
+<p><button class="btn" hx-post="/setup/mail/do/test/" hx-include="#stepform" hx-target="#job" data-tip="Sends one mail without attachments to the recipients">Send test mail</button></p>
+{% with r=result %}{% include "monitor/setup/result.html" %}{% endwith %}
+{% for k, v in errors.items %}<p class="ferr">{{ v }}</p>{% endfor %}
+{% endblock %}

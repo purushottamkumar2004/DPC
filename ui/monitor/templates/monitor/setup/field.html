@@ -1,0 +1,6 @@
+{% comment %}One labelled input. name, label, value, help, type (text), errors{% endcomment %}<label class="field{% if errors|default_if_none:''|length and name in errors %} bad{% endif %}">
+  <span class="flabel">{{ label }}</span>
+  <input type="{{ type|default:'text' }}" name="{{ name }}" value="{{ value|default_if_none:'' }}"{% if placeholder %} placeholder="{{ placeholder }}"{% endif %}>
+  {% if help %}<span class="muted">{{ help }}</span>{% endif %}
+  {% for k, v in errors.items %}{% if k == name %}<span class="ferr">{{ v }}</span>{% endif %}{% endfor %}
+</label>

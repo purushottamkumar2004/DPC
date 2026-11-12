@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Commissioning {{ r.site.name }}</title>
+<style>body{font:14px/1.5 system-ui,sans-serif;margin:24px;color:#111}h1{font-size:20px}td,th{padding:4px 10px;border-bottom:1px solid #ccc;text-align:left}.ok{color:#1f8a57}.no{color:#c9302c}</style></head>
+<body><h1>Commissioning report · {{ r.site.name }} ({{ r.site.id }})</h1><p>Saved {{ r.saved_at }}</p>
+<table><tr><th>Check</th><th>Result</th><th>Detail</th><th>Ticked at</th></tr>
+{% for i in r.checklist %}<tr><td>{{ i.title }}</td><td class="{% if i.ok %}ok{% else %}no{% endif %}">{% if i.ok %}done{% else %}open{% endif %}</td><td>{{ i.detail }}</td><td>{{ i.at|default:"" }}</td></tr>{% endfor %}</table>
+<h2>Auto-ROI</h2><ul>{% for a in r.auto_roi %}<li>{{ a.side }}: {% if a.learned %}learned{% else %}not learned{% endif %}, mode {{ a.mode }}</li>{% endfor %}</ul>
+<h2>Tests</h2><ul>{% for k, t in r.tests.items %}<li>{{ k }}: {{ t.sentence }}</li>{% endfor %}</ul>
+<p>Signature: ____________________</p></body></html>

@@ -1,0 +1,25 @@
+{% extends "monitor/setup/frame.html" %}
+{% block step %}
+<p class="muted">Choose the trained weights (.pth) and its class file (the training dataset JSON, a class list, an index map or the old XML), for example from a USB stick under /media. One model for both sides, or one per side.</p>
+<fieldset class="choice"><legend>Package a model</legend>
+  <div class="fields three">
+    {% with name="name" label="Model name" value=answers.models.LEFT|default:"" placeholder="dpc_maskrcnn" help="Lowercase; a side model ends in _left / _right" %}{% include "monitor/setup/field.html" %}{% endwith %}
+    {% with name="weights" label="Weights (.pth)" value="" placeholder="choose below" %}{% include "monitor/setup/field.html" %}{% endwith %}
+    {% with name="classes" label="Class file" value="" placeholder="choose below" %}{% include "monitor/setup/field.html" %}{% endwith %}
+  </div>
+  <label>For <select name="side"><option value="both">both sides</option><option value="LEFT">LEFT only</option><option value="RIGHT">RIGHT only</option></select></label>
+  <button class="btn" hx-post="/setup/model/do/package/" hx-include="#stepform" hx-target="#job">Package</button>
+  <div id="browser" hx-post="/setup/model/do/browse/" hx-trigger="load" hx-vals='{"path": "/media"}'></div>
+</fieldset>
+<table class="list compact"><thead><tr><th>Side</th><th>Model</th><th>Version</th><th>Self-test</th><th></th></tr></thead><tbody>
+{% for s in sides %}{% for side, name in answers.models.items %}{% if side == s.side %}
+<tr><td>{{ side }}</td><td>{{ name }}<input type="hidden" name="model_{{ side }}" value="{{ name }}"></td>
+  <td>{% for n, p in packages.items %}{% if n == name %}{{ p.version }}{% endif %}{% endfor %}</td>
+  <td>{% for n, p in packages.items %}{% if n == name %}{% if p.selftest %}<span class="c-ok">passed</span>{% elif p.selftest is False %}<span class="c-err">failed</span>{% else %}not run{% endif %}{% endif %}{% endfor %}</td>
+  <td><button class="btn" hx-post="/setup/model/do/selftest/" hx-vals='{"name": "{{ name }}", "serial": "{{ s.serial }}"}' hx-target="#job" data-tip="Runs the model on the frames recorded from the {{ side }} camera">Self-test</button>
+    <button class="btn" hx-post="/setup/cameras/do/direction/" hx-vals='{"serial": "{{ s.serial }}", "model": "{{ name }}"}' hx-target="#job" data-tip="Direction of the {{ side }} camera from its recorded frames">Detect direction</button></td></tr>
+{% endif %}{% endfor %}{% endfor %}
+</tbody></table>
+{% for name, r2 in results.items %}{% with r=r2.selftest %}{% include "monitor/setup/result.html" %}{% endwith %}{% endfor %}
+{% for k, v in errors.items %}<p class="ferr">{{ v }}</p>{% endfor %}
+{% endblock %}

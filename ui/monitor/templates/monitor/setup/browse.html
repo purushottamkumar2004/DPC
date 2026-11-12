@@ -1,0 +1,8 @@
+<div class="browser">
+  {% if not b.path %}<p class="muted">Folders: {% for r in b.roots %}<a href="#" hx-post="/setup/model/do/browse/" hx-vals='{"path": "{{ r }}"}' hx-target="#browser">{{ r }}</a> {% empty %}none found (insert the USB stick){% endfor %}</p>
+  {% else %}<p class="tech">{{ b.path }}{% if b.parent %} · <a href="#" hx-post="/setup/model/do/browse/" hx-vals='{"path": "{{ b.parent }}"}' hx-target="#browser">up</a>{% endif %}</p>
+  <ul class="plainlines">{% for d in b.dirs %}<li><a href="#" hx-post="/setup/model/do/browse/" hx-vals='{"path": "{{ b.path }}/{{ d }}"}' hx-target="#browser">{{ d }}/</a></li>{% endfor %}
+  {% for f in b.files %}<li>{{ f.name }} <span class="muted">{{ f.size_mb }} MB</span>
+    {% if f.name|lower|slice:"-4:" == ".pth" %}<a href="#" onclick="document.querySelector('[name=weights]').value='{{ f.path }}';return false">use as weights</a>
+    {% else %}<a href="#" onclick="document.querySelector('[name=classes]').value='{{ f.path }}';return false">use as class file</a>{% endif %}</li>{% endfor %}</ul>{% endif %}
+</div>

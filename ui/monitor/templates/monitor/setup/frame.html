@@ -1,0 +1,25 @@
+{% extends "monitor/base.html" %}
+{% load static %}
+{% block content %}
+{% comment %}Setup wizard frame (D-103): progress, steps, the job panel, Back / Next.{% endcomment %}
+<header class="card top pagetop">
+  <div><div class="site">Setup · {{ title }}</div><div class="muted">step {{ progress.index }} of {{ progress.total }}{% if draft.updated_at %} · draft saved {{ draft.updated_at|slice:"11:16" }}{% endif %}</div></div>
+  <div class="prog wide"><div class="muted">{{ progress.percent }} % done</div><div class="bar"><div style="width:{{ progress.percent }}%"></div></div></div>
+</header>
+{% if mode == "normal" %}<p class="card note lvl-warning">This site is already running. Applying a changed setup writes site.yaml again and <b>restarts the programs whose settings change</b>; inspection pauses until the next plate. The tests below talk to the real cameras and PLC.</p>{% endif %}
+<nav class="tabs wizsteps">{% for key, name, _ in steps %}<a href="/setup/{{ key }}/" class="{% if key == step %}on{% endif %}">{{ forloop.counter }} {{ name }}</a>{% endfor %}
+  <a href="/setup/commissioning/" data-tip="The checklist after Apply">Commissioning</a></nav>
+<section class="card wizard">
+  <p class="explain">{{ explain }}</p>
+  <form method="post" id="stepform" action="/setup/{{ step }}/" autocomplete="off">{% csrf_token %}
+    {% block step %}{% endblock %}
+    <div class="wiznav">
+      {% if progress.index > 1 %}<button class="btn" name="go" value="back" formnovalidate>Back</button>{% endif %}
+      <button class="btn" name="go" value="save" formnovalidate data-tip="Keep these answers and stay on this step">Save</button>
+      {% if step != "review" %}<button class="btn primary" name="go" value="next">Next</button>{% endif %}
+    </div>
+  </form>
+</section>
+<section class="card" id="job" hx-get="/part/setup/job/" hx-trigger="load">{% include "monitor/setup/job_panel.html" %}</section>
+<script src="{% static 'monitor/setup.js' %}" defer></script>
+{% endblock %}

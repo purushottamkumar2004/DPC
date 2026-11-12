@@ -1,0 +1,7 @@
+{% extends "monitor/setup/frame.html" %}
+{% block step %}
+<div class="fields">
+{% with name="name" label="Site name" value=form.name|default:answers.site.name help="As people call it, e.g. Tadipatri DPC." %}{% include "monitor/setup/field.html" %}{% endwith %}
+{% with name="id" label="Site id" value=form.id|default:answers.site.id help="Short, for file and database names: lowercase letters, digits, - or _. Left empty, it is made from the name." %}{% include "monitor/setup/field.html" %}{% endwith %}
+</div>
+{% endblock %}

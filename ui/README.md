@@ -56,6 +56,24 @@ Overview, top to bottom:
 - Services (every program: state, one key value, heartbeat age) and Alerts (scrolls inside its card);
 - device strip: PLC, light, conveyor, disk, GPU, database, MQTT.
 
+## Setup (S8, D-103, D-107, D-108)
+`/setup/` is a step-by-step wizard; in setup mode (`run/mode.json` mode = setup) the UI opens on it and the
+other pages are greyed. In normal mode it warns that applying restarts programs.
+Steps: site, database (D-108 defaults from `config/site_defaults.yaml`; "standard password set", never shown),
+cameras (search, grab, LEFT/RIGHT, exposure/fps/rotate, record frames, detect direction, confirm), PLC (read,
+light off 5 s, cleaning pulse), machine, model (choose files under /media, /mnt or the root; package; self-test),
+object sizes (measure: p10 proposed, median beside it), mail (optional, test mail), data transfer (optional,
+check), review (the real loader, secrets as set / not set, warnings).
+Every button runs its tool with `--json` as a background job, one at a time (`monitor/setup/jobs.py`).
+Secrets go in through env or stdin, never argv, and live only in memory until Apply writes site.yaml
+(`monitor/setup/vault.py`); the draft holds none.
+Apply (one job): bootstrap again with the chosen serials, then `site_from_draft` and `write_site`, then
+`write_workers_file`, then `run/setup_finish {id}`. It waits for `setup_finish.result.json` with that id
+and for normal mode, then opens the Overview.
+Commissioning (`/setup/commissioning/`): live ticks (camera fps, PLC, first plate, wheels per revolution,
+auto-ROI learn/observe/filter, test mail, transfer check/model update/upload), remembered once reached, and
+a saved report.
+
 ## Where every value comes from
 | Shown | Source |
 |---|---|

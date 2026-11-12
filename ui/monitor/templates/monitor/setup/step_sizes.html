@@ -1,0 +1,15 @@
+{% extends "monitor/setup/frame.html" %}
+{% block step %}
+<p class="muted">Sizes are the smallest a part may have (in pixels). "Measure" runs the model on this side's recorded frames and proposes the 10th percentile; the median is shown beside it (D-107). Confirm or change each value.</p>
+{% for side, rows in size_rows.items %}
+<fieldset class="choice"><legend>{{ side }}</legend>
+  <p><button class="btn" hx-post="/setup/sizes/do/measure/" hx-vals='{"side": "{{ side }}"}' hx-target="#job">Measure</button></p>
+  <div class="fields five">{% for r in rows %}
+    <label class="field{% for k, v in errors.items %}{% if k == r.name %} bad{% endif %}{% endfor %}"><span class="flabel">{{ r.key }}</span>
+      <input type="text" name="{{ r.name }}" value="{{ r.value|default_if_none:'' }}" inputmode="numeric">
+      <span class="muted">{% if r.median is not None %}proposed p10 · median {{ r.median }} · {{ r.boxes }} boxes{% elif r.value %}saved{% else %}not measured{% endif %}</span>
+      {% for k, v in errors.items %}{% if k == r.name %}<span class="ferr">{{ v }}</span>{% endif %}{% endfor %}</label>{% endfor %}
+  </div>
+</fieldset>
+{% endfor %}
+{% endblock %}

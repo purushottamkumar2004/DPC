@@ -1,0 +1,17 @@
+{% extends "monitor/setup/frame.html" %}
+{% block step %}
+<p class="muted">Type and register numbers come from the PLC program. The defaults are the Tadipatri values. Tests talk to the PLC directly{% if mode == "normal" %}; the running PLC service may switch the light back meanwhile{% endif %}.</p>
+<div class="fields three">
+{% with name="ip" label="PLC IP address" value=form.ip|default:plc.ip placeholder="192.168.1.5" %}{% include "monitor/setup/field.html" %}{% endwith %}
+{% with name="port" label="Port" value=form.port|default:plc.port help="Modbus TCP, normally 502" %}{% include "monitor/setup/field.html" %}{% endwith %}
+{% with name="light_on_value" label="Light on value" value=form.light_on_value|default:plc.light_on_value help="1 = the light is on when the register is 1" %}{% include "monitor/setup/field.html" %}{% endwith %}
+{% with name="light_register" label="Light register" value=form.light_register|default:plc.light_register %}{% include "monitor/setup/field.html" %}{% endwith %}
+{% with name="cleaning_register" label="Cleaning register" value=form.cleaning_register|default:plc.cleaning_register %}{% include "monitor/setup/field.html" %}{% endwith %}
+{% with name="conveyor_status_register" label="Conveyor status register" value=form.conveyor_status_register|default:plc.conveyor_status_register %}{% include "monitor/setup/field.html" %}{% endwith %}
+</div>
+<p class="muted">Type: Modbus TCP (the only type the programs support).</p>
+<p><button class="btn" hx-post="/setup/plc/do/read/" hx-include="#stepform" hx-target="#job" data-tip="Reads the registers; writes nothing">Read</button>
+  <button class="btn" hx-post="/setup/plc/do/light/" hx-include="#stepform" hx-target="#job" data-tip="Watch the conveyor light: it goes off for 5 seconds and comes back">Light off 5 s</button>
+  <button class="btn" hx-post="/setup/plc/do/pulse/" hx-include="#stepform" hx-target="#job" data-tip="One cleaning pulse: watch the camera cleaning">Test cleaning pulse</button></p>
+{% for a, r in results.items %}{% include "monitor/setup/result.html" %}{% endfor %}
+{% endblock %}
