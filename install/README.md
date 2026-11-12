@@ -27,11 +27,13 @@ Never with `sudo` or as root: the files and the service must belong to the site 
 | 2 | Browser | Chromium (on 22.04 only as a snap: `snap install chromium`) | skipped when present |
 | 3 | Code | `git clone --branch <tag>` into `~/INSIGHTZZ/code` (detached at the release, D-039) | see "Updating" |
 | 4 | Layout | `scripts/setup_dpc_layout.sh` (code, config, logs, run, data incl. `data/transfer`) | creates only missing folders |
-| 5 | Python packages | `requests paho-mqtt numpy pymysql PyYAML pymodbus` (3.x), `opencv-python-headless` (only when no `cv2` imports yet), `supervisor/requirements.txt`, `ui/requirements.txt` (Django, waitress); `--user` for the system Python | pip skips what is installed; installed `numpy`, `torch`, `torchvision` are never upgraded (constraints file) |
-| 6 | Manual items | checks only, see below | - |
-| 7 | Boot service | `supervisor/install_service.sh` (systemd `dpc-supervisor`, D-052) | rewrites the same unit |
-| 8 | Kiosk | `~/.config/autostart/dpc-kiosk.desktop` runs `install/kiosk.sh` at login | written only when different |
-| 9 | Start | `systemctl start dpc-supervisor`: with no `site.yaml` it runs in **setup mode**, only the UI (S1); waits until the UI answers | see "Updating" |
+| 5 | MySQL admin account | `dpc_setup@localhost` with a random password, created through `sudo mysql` (root via auth_socket); login in `config/mysql_setup.cnf` (D-107) | kept while it logs in; a broken login gets a new password |
+| 6 | Company DB defaults | `config/site_defaults.yaml`: `db.name_suffix _db`, `db.user dpc_app`, `db.password` = the company-standard password (D-108) | kept; `--reset-defaults` asks again |
+| 7 | Python packages | `requests paho-mqtt numpy pymysql PyYAML pymodbus` (3.x), `opencv-python-headless` (only when no `cv2` imports yet), `supervisor/requirements.txt`, `ui/requirements.txt` (Django, waitress); `--user` for the system Python | pip skips what is installed; installed `numpy`, `torch`, `torchvision` are never upgraded (constraints file) |
+| 8 | Manual items | checks only, see below | - |
+| 9 | Boot service | `supervisor/install_service.sh` (systemd `dpc-supervisor`, D-052) | rewrites the same unit |
+| 10 | Kiosk | `~/.config/autostart/dpc-kiosk.desktop` runs `install/kiosk.sh` at login | written only when different |
+| 11 | Start | `systemctl start dpc-supervisor`: with no `site.yaml` it runs in **setup mode**, only the UI (S1); waits until the UI answers | see "Updating" |
 
 The installer itself was cloned with the code, so step 3 must come before step 4 (the layout script is in the repo); `setup_dpc_layout.sh` keeps the existing `code/` checkout.
 
@@ -39,8 +41,27 @@ The UI address is `http://127.0.0.1:<ui.port>/`: the port comes from `config/ren
 
 Log of each run: `~/INSIGHTZZ/logs/install_<date>_<time>.log`.
 
+## MySQL admin account and company DB defaults (D-107, D-108)
+Both files are in `~/INSIGHTZZ/config/` (folder mode 700), mode 600, owned by the site user, outside `code/`, so never in git. The installer never prints the passwords.
+
+| File | Content | Read by |
+|---|---|---|
+| `mysql_setup.cnf` | `[client]` `user=dpc_setup`, `password=<random, 32 characters>` | the wizard's database step through `db/bootstrap.py` (creates the site DB and the program user) |
+| `site_defaults.yaml` | `db: {name_suffix: '_db', user: 'dpc_app', password: '<company standard>'}` | the wizard's database step (pre-filled; can be changed per site) |
+
+**The company-standard DB password** is asked once per machine, at the start of the run (typed twice, not shown). Without a terminal, give it for that one command: `DPC_DB_PASSWORD='...' bash install.sh --tag v0.<n>` (put a space before the command so bash does not keep it in the history). To change it: `bash ~/INSIGHTZZ/code/install/install.sh --reset-defaults`.
+
+`dpc_setup` has all rights on this MySQL (it creates databases and users); the site programs never use it. **When `sudo mysql` cannot log in** (a MySQL whose root has a password, for example an older site), the installer says so and continues; create the account by hand, then re-run the installer (it keeps a working file):
+```bash
+mysql -u root -p      # then, with a password of your choice:
+#   CREATE USER 'dpc_setup'@'localhost' IDENTIFIED BY '<password>';
+#   GRANT ALL PRIVILEGES ON *.* TO 'dpc_setup'@'localhost' WITH GRANT OPTION;
+printf '[client]\nuser=dpc_setup\npassword=%s\n' '<password>' > ~/INSIGHTZZ/config/mysql_setup.cnf
+chmod 600 ~/INSIGHTZZ/config/mysql_setup.cnf
+```
+
 ## What stays manual (checked, not installed)
-Step 6 checks these and prints `OK` / `MISSING` with what to do. The wizard opens anyway; its camera and model steps need them.
+Step 8 checks these and prints `OK` / `MISSING` with what to do. The wizard opens anyway; its camera and model steps need them.
 
 | Item | Check | How to install |
 |---|---|---|
@@ -70,7 +91,7 @@ python3 ~/INSIGHTZZ/code/scripts/dpc_check.py
 Rollback = the same with the older tag. Read the handoffs between the two tags for `Install impact:` lines. Record the tag in `SITES.md`.
 
 ## Options
-`--tag TAG`, `--ref BRANCH` (test machines only, never a site), `--root DIR` (default `~/INSIGHTZZ`), `--python PATH` (default `python3` in PATH; a venv is allowed), `--repo URL`, `--no-kiosk` (no screen), `--dry-run`, `--check-only`. Exit codes: 0 done, 1 a step failed, 2 wrong usage, 3 `--check-only` found a missing item.
+`--tag TAG`, `--ref BRANCH` (test machines only, never a site), `--root DIR` (default `~/INSIGHTZZ`), `--python PATH` (default `python3` in PATH; a venv is allowed), `--repo URL`, `--no-kiosk` (no screen), `--reset-defaults` (ask the company-standard DB password again), `--dry-run`, `--check-only`. Exit codes: 0 done, 1 a step failed, 2 wrong usage, 3 `--check-only` found a missing item.
 
 ## Kiosk
 `kiosk.sh` waits for the UI (up to 3 min after boot), turns off GNOME screen blanking and lock, opens Chromium `--kiosk`, and reopens it if it is closed. To leave it: Alt+F4, then `pkill -f install/kiosk.sh`. It is started again at the next login. Machines without a screen: install with `--no-kiosk`.
@@ -78,7 +99,9 @@ Rollback = the same with the older tag. Read the handoffs between the two tags f
 ## Tests
 ```bash
 bash install/tests/test_install.sh          # as a normal user; needs git, optional shellcheck
+bash install/tests/test_db_setup.sh         # steps 5 and 6 with a fake MySQL; made-up passwords only
 ```
+`test_db_setup.sh` covers: cnf written with mode 600 and a 32-character password, never printed, kept on the second run, renewed when its login fails, nothing written when `sudo mysql` fails; `site_defaults.yaml` mode 600 and exact YAML round-trip (quotes, colon, `#`), kept on re-run, rewritten with `--reset-defaults`, refused without terminal and without `DPC_DB_PASSWORD`; `--dry-run` writes nothing.
 Covers: shellcheck clean; `--dry-run` prints every step and creates nothing; an unknown tag is refused with the list of tags; the code step clones, is unchanged on the second run, switches tags, refuses hand-edited code and a non-empty non-git `code/`; the kiosk entry is written once; `kiosk.sh --url` reads the port from `ui.json`. The sudo steps (apt, snap, systemd) are only checked by `--dry-run` here and on a real machine.
 
 ## Limits (v1)

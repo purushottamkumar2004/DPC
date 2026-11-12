@@ -6,11 +6,13 @@
 #   2  browser           Chromium for the kiosk screen (snap on Ubuntu 22.04)
 #   3  code              git clone of a release tag into <root>/code
 #   4  layout            <root>/{code,config,logs,run,data} via scripts/setup_dpc_layout.sh
-#   5  Python packages   every worker's packages + ui/requirements.txt, for the same python3 the service uses
-#   6  manual items      checks NVIDIA driver, torch + CUDA, detectron2, camera SDK (pypylon / PySpin)
-#   7  boot service      supervisor/install_service.sh (systemd unit dpc-supervisor)
-#   8  kiosk             autostart entry that opens the UI full-screen at login
-#   9  start             starts the Supervisor; on a fresh machine it runs in setup mode (S1: only the UI)
+#   5  MySQL admin       account dpc_setup (random password) in <root>/config/mysql_setup.cnf (D-107)
+#   6  DB defaults       company-standard DB settings in <root>/config/site_defaults.yaml (D-108)
+#   7  Python packages   every worker's packages + ui/requirements.txt, for the same python3 the service uses
+#   8  manual items      checks NVIDIA driver, torch + CUDA, detectron2, camera SDK (pypylon / PySpin)
+#   9  boot service      supervisor/install_service.sh (systemd unit dpc-supervisor)
+#  10  kiosk             autostart entry that opens the UI full-screen at login
+#  11  start             starts the Supervisor; on a fresh machine it runs in setup mode (S1: only the UI)
 #
 # Run as the site user (NOT root, NOT with sudo); it asks for the sudo password when a step needs it.
 # Safe to re-run: every step checks first and only does what is missing.
@@ -20,7 +22,7 @@
 #   bash install.sh                         re-run on an installed machine (code left as it is)
 #   bash install.sh --tag v0.<n+1>          update the code of an installed machine to another tag
 #   bash install.sh --dry-run --tag v0.<n>  print every step, change nothing
-#   bash install.sh --check-only            only the checks of step 6 (after installing a manual item)
+#   bash install.sh --check-only            only the checks of step 8 (after installing a manual item)
 #
 # Options:
 #   --tag TAG      release tag to check out (git tag v0.<n>)
@@ -29,9 +31,13 @@
 #   --python PATH  the python3 for the Supervisor and every worker (default: python3 in PATH)
 #   --repo URL     git repository (default: the DPC repo on GitHub)
 #   --no-kiosk     skip the browser and the kiosk autostart (machine without a screen)
+#   --reset-defaults  ask again for the company-standard DB password, rewrite site_defaults.yaml
 #   --dry-run      print every step, change nothing (checks still run: they only read)
 #   --check-only   run only the manual-item checks
 #   -h, --help     this text
+#
+# The company-standard DB password (D-108) is asked once per machine, hidden, at the start of the
+# run (or set DPC_DB_PASSWORD in the environment of that one command). It is never printed.
 #
 # Exit: 0 done (manual items still missing are listed at the end), 1 a step failed, 2 wrong usage,
 #       3 (--check-only) a manual item is missing.
@@ -50,7 +56,7 @@ SERVICE_NAME="dpc-supervisor"
 PIP_PACKAGES=(requests "paho-mqtt>=1.6" numpy pymysql "PyYAML>=5.4" "pymodbus>=3,<4")
 PIP_OPENCV="opencv-python-headless"
 # Never upgraded by this script when already installed: a newer numpy can break a torch/detectron2
-# that was built against the installed one (they are installed by hand, step 6).
+# that was built against the installed one (they are installed by hand, step 8).
 PIP_KEEP_AS_IS=(numpy torch torchvision)
 MIN_PYTHON="3.10"                  # Django 5.2 (ui/requirements.txt)
 UI_WAIT_SECONDS=120                # first UI start runs the Django migrations
@@ -64,6 +70,8 @@ PY=""
 DRY_RUN=0
 CHECK_ONLY=0
 NO_KIOSK=0
+RESET_DEFAULTS=0
+DB_PASSWORD=""                     # company-standard DB password: only in memory until step 6
 CODE_CHANGED=0                     # step 3 moved the checkout to another commit
 CHECK_LINES=()                     # results of step 6, printed in the summary
 MANUAL_MISSING=0
@@ -85,7 +93,7 @@ run_sudo() {
   if [[ $DRY_RUN -eq 1 ]]; then echo "  [dry-run] sudo$(printf ' %q' "$@")"; else sudo "$@"; fi
 }
 
-usage() { sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,43p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -98,6 +106,7 @@ parse_args() {
       --no-kiosk)   NO_KIOSK=1; shift ;;
       --dry-run)    DRY_RUN=1; shift ;;
       --check-only) CHECK_ONLY=1; shift ;;
+      --reset-defaults) RESET_DEFAULTS=1; shift ;;
       -h|--help)    usage; exit 0 ;;
       *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
     esac
@@ -296,7 +305,151 @@ step_layout() {
   fi
 }
 
-# ---------------------------------------------------------------- 5 Python packages
+# ---------------------------------------------------------------- 5 MySQL admin account (D-107)
+# A fresh Ubuntu 22.04 MySQL has root only through auth_socket ("sudo mysql", no password), so the
+# wizard could not create the site DB. The installer has sudo: it creates the admin account
+# dpc_setup@localhost with a random password and keeps the login in mysql_setup.cnf, which
+# db/bootstrap.py reads when no admin password is given (F85).
+# The two commands are variables so the tests can put fakes in their place (no real MySQL needed).
+MYSQL_SETUP_USER="dpc_setup"
+MYSQL_CLIENT=(mysql)               # checks the login in the cnf file
+MYSQL_AS_ROOT=(sudo mysql)         # root over auth_socket
+
+mysql_setup_cnf() { echo "$ROOT/config/mysql_setup.cnf"; }
+
+# mysql_cnf_works <cnf>: the account in that file can log in now
+mysql_cnf_works() {
+  [[ -r "$1" ]] && "${MYSQL_CLIENT[@]}" --defaults-file="$1" -e "SELECT 1" >/dev/null 2>&1
+}
+
+new_random_password() {
+  # 32 characters from letters, digits, - and _: safe inside SQL '...' and in an option file
+  "$PY" -c 'import secrets; print(secrets.token_urlsafe(24))'
+}
+
+# The SQL goes to mysql on stdin, never on a command line (other users can read command lines).
+# ALTER USER also repairs an account whose password was lost; the grant lets the wizard create
+# the site DB and the program user with rights on that DB only (db/bootstrap.py).
+mysql_setup_sql() {
+  cat <<SQL
+CREATE USER IF NOT EXISTS '$MYSQL_SETUP_USER'@'localhost' IDENTIFIED BY '$1';
+ALTER USER '$MYSQL_SETUP_USER'@'localhost' IDENTIFIED BY '$1';
+GRANT ALL PRIVILEGES ON *.* TO '$MYSQL_SETUP_USER'@'localhost' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+SQL
+}
+
+step_mysql_admin() {
+  step "5  MySQL admin account ($MYSQL_SETUP_USER)"
+  local cnf password tmp
+  cnf="$(mysql_setup_cnf)"
+  if mysql_cnf_works "$cnf"; then
+    [[ $DRY_RUN -eq 1 ]] || chmod 600 "$cnf"
+    say "  $cnf: the account logs in, kept"
+    return 0
+  fi
+  if [[ $DRY_RUN -eq 1 ]]; then
+    say "  [dry-run] sudo mysql: create (or reset) $MYSQL_SETUP_USER@localhost with a new random password"
+    say "  [dry-run] write $cnf (mode 600): [client] user=$MYSQL_SETUP_USER, password=<hidden>"
+    return 0
+  fi
+  [[ -f "$cnf" ]] && say "  $cnf does not log in: the account gets a new password"
+  password="$(new_random_password)"
+  # File first (owner only, temporary name), account second, file into place last: an interrupted
+  # run leaves the old file or none, never a file with a password the account does not have.
+  tmp="$(umask 077 && mktemp "$ROOT/config/.mysql_setup.XXXXXX")"
+  printf '[client]\nuser=%s\npassword=%s\n' "$MYSQL_SETUP_USER" "$password" >"$tmp"
+  if ! mysql_setup_sql "$password" | "${MYSQL_AS_ROOT[@]}" >/dev/null 2>&1; then
+    rm -f "$tmp"
+    note "the MySQL account $MYSQL_SETUP_USER was not created: 'sudo mysql' did not log in as root
+        (this MySQL's root probably has a password). See install/README.md 'MySQL admin account'."
+    return 0
+  fi
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$cnf"
+  if mysql_cnf_works "$cnf"; then
+    say "  $MYSQL_SETUP_USER ready; its login is in $cnf (mode 600)"
+  else
+    note "$MYSQL_SETUP_USER was created but its login fails; try: mysql --defaults-file=$cnf -e 'SELECT 1'"
+  fi
+}
+
+# ---------------------------------------------------------------- 6 company DB defaults (D-108)
+# New sites use the same DB user and password everywhere (developer's decision, D-108). The
+# password lives only in <root>/config/site_defaults.yaml (mode 600, outside code/ and git); the
+# wizard's database step is pre-filled from it. Name suffix and user are company standards.
+DEFAULT_DB_NAME_SUFFIX="_db"
+DEFAULT_DB_USER="dpc_app"
+
+site_defaults_file() { echo "$ROOT/config/site_defaults.yaml"; }
+
+need_db_password() {
+  [[ $RESET_DEFAULTS -eq 1 || ! -f "$(site_defaults_file)" ]]
+}
+
+# Asked right after the first checks, so nobody waits for a prompt in the middle of the install.
+ask_db_password() {
+  need_db_password || return 0
+  if [[ $DRY_RUN -eq 1 ]]; then
+    say "  [dry-run] the company-standard DB password would be asked here (or taken from DPC_DB_PASSWORD)"
+    return 0
+  fi
+  if [[ -n "${DPC_DB_PASSWORD:-}" ]]; then
+    DB_PASSWORD="$DPC_DB_PASSWORD"
+    say "  company-standard DB password: taken from DPC_DB_PASSWORD"
+    return 0
+  fi
+  [[ -t 0 ]] || fail "the company-standard DB password is needed once: run this in a terminal, or set DPC_DB_PASSWORD"
+  local first second
+  while true; do
+    read -r -s -p "Company-standard DB password (not shown): " first; echo
+    read -r -s -p "The same password again: " second; echo
+    if [[ -z "$first" ]]; then echo "  empty: please enter it again"; continue; fi
+    if [[ "$first" != "$second" ]]; then echo "  the two entries differ: please enter it again"; continue; fi
+    break
+  done
+  DB_PASSWORD="$first"
+}
+
+yaml_single_quoted() {   # any text as a YAML single-quoted scalar (a ' inside is written '')
+  local q="'"
+  printf "'%s'" "${1//$q/$q$q}"
+}
+
+site_defaults_yaml() {
+  cat <<YAML
+# Company-standard settings for new sites (D-108), written by install/install.sh.
+# Holds a secret: mode 600; never copy it into code/, git or a chat. Change: install.sh --reset-defaults
+db:
+  name_suffix: '$DEFAULT_DB_NAME_SUFFIX'
+  user: '$DEFAULT_DB_USER'
+  password: $(yaml_single_quoted "$DB_PASSWORD")
+YAML
+}
+
+step_site_defaults() {
+  step "6  Company DB defaults (site_defaults.yaml)"
+  local file tmp
+  file="$(site_defaults_file)"
+  if ! need_db_password; then
+    [[ $DRY_RUN -eq 1 ]] || chmod 600 "$file"
+    say "  $file: present, kept (install.sh --reset-defaults changes it)"
+    return 0
+  fi
+  if [[ $DRY_RUN -eq 1 ]]; then
+    say "  [dry-run] write $file (mode 600): db.name_suffix $DEFAULT_DB_NAME_SUFFIX, db.user $DEFAULT_DB_USER, db.password <hidden>"
+    return 0
+  fi
+  [[ -n "$DB_PASSWORD" ]] || fail "no company-standard DB password was entered"
+  tmp="$(umask 077 && mktemp "$ROOT/config/.site_defaults.XXXXXX")"
+  site_defaults_yaml >"$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$file"
+  DB_PASSWORD=""
+  say "  written $file (mode 600, password not shown)"
+}
+
+# ---------------------------------------------------------------- 7 Python packages
 python_in_venv() {
   "$PY" -c 'import sys; sys.exit(0 if sys.prefix != sys.base_prefix else 1)'
 }
@@ -319,7 +472,7 @@ EOF
 }
 
 step_python_packages() {
-  step "5  Python packages (for $PY)"
+  step "7  Python packages (for $PY)"
   local packages=("${PIP_PACKAGES[@]}") pip_args=(--disable-pip-version-check) constraints
   if python_can_import cv2; then
     say "  OpenCV already importable: $PIP_OPENCV not added"
@@ -406,7 +559,7 @@ check_autologin() {
 }
 
 step_checks() {
-  step "6  Items installed by hand (checked, not installed)"
+  step "8  Items installed by hand (checked, not installed)"
   CHECK_LINES=()
   MANUAL_MISSING=0
   check_nvidia_driver
@@ -419,7 +572,7 @@ step_checks() {
 
 # ---------------------------------------------------------------- 7 boot service
 step_service() {
-  step "7  Boot service ($SERVICE_NAME)"
+  step "9  Boot service ($SERVICE_NAME)"
   # install_service.sh writes the unit only through sudo, runs check-config on a set-up site,
   # and on a fresh machine says that the Supervisor will start in setup mode (S1).
   local args=(--root "$ROOT" --python "$PY")
@@ -458,7 +611,7 @@ write_if_changed() {
 }
 
 step_kiosk() {
-  step "8  Kiosk screen (autostart at login)"
+  step "10 Kiosk screen (autostart at login)"
   if [[ $NO_KIOSK -eq 1 ]]; then say "  skipped (--no-kiosk)"; return 0; fi
   write_if_changed "$HOME/.config/autostart/dpc-kiosk.desktop" "$(kiosk_desktop_entry)"
 }
@@ -480,7 +633,7 @@ ui_url() {
 }
 
 step_start() {
-  step "9  Start the Supervisor"
+  step "11 Start the Supervisor"
   if ! systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
     # Fresh machine: no site.yaml yet, so the Supervisor starts in setup mode (only the UI).
     run_sudo systemctl start "$SERVICE_NAME"
@@ -561,11 +714,14 @@ main() {
   fi
   [[ $DRY_RUN -eq 1 ]] && echo "DRY RUN: every step is printed, nothing is changed."
   preflight
+  ask_db_password
   start_log
   step_system_packages
   step_browser
   step_code
   step_layout
+  step_mysql_admin
+  step_site_defaults
   step_python_packages
   step_checks
   step_service

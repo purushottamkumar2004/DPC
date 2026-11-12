@@ -7,6 +7,7 @@
 # 1 shellcheck (when installed); 2 --dry-run prints every step and creates nothing;
 # 3 the code step clones, is unchanged the second time, switches tags, refuses hand-edited code;
 # 4 the kiosk autostart entry is written once and unchanged the second time; 5 kiosk.sh --url.
+# Steps 5 and 6 (MySQL admin account, DB defaults): tests/test_db_setup.sh.
 
 set -euo pipefail
 
@@ -43,7 +44,7 @@ make_test_remote() {
 
 test_shellcheck() {
   if ! command -v shellcheck >/dev/null 2>&1; then echo "SKIP  shellcheck not installed"; return 0; fi
-  if shellcheck -x "$INSTALL_DIR/install.sh" "$INSTALL_DIR/kiosk.sh" "$HERE/test_install.sh"; then
+  if shellcheck -x "$INSTALL_DIR/install.sh" "$INSTALL_DIR/kiosk.sh" "$HERE/test_install.sh" "$HERE/test_db_setup.sh"; then
     pass "shellcheck clean"
   else
     fail "shellcheck"
@@ -59,8 +60,10 @@ test_dry_run() {
   expect_in "$out" "== 3  Code" "dry-run step 3"
   expect_in "$out" "clone --quiet --branch v0.900" "dry-run prints the clone"
   expect_in "$out" "setup_dpc_layout.sh --root $root" "dry-run prints the layout"
+  expect_in "$out" "== 5  MySQL admin account (dpc_setup)" "dry-run step 5"
+  expect_in "$out" "db.password <hidden>" "dry-run step 6 hides the password"
   expect_in "$out" "pip install" "dry-run prints the pip install"
-  expect_in "$out" "== 6  Items installed by hand" "dry-run runs the checks"
+  expect_in "$out" "== 8  Items installed by hand" "dry-run runs the checks"
   expect_in "$out" "install_service.sh --root $root" "dry-run prints the boot service"
   expect_in "$out" "dpc-kiosk.desktop" "dry-run prints the kiosk entry"
   expect_in "$out" "systemctl start dpc-supervisor" "dry-run prints the start"
