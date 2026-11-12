@@ -155,6 +155,11 @@ def _drive(r: _Reader) -> Dict[str, str]:
     if drive is _MISSING or drive is None:
         r.missing.append("transfer.drive")
         return {}
+    return parse_drive(drive)
+
+
+def parse_drive(drive) -> Dict[str, str]:
+    """{"site": "<host>:/sites/<path>"} or {"user": "<upn>"}, checked (also used by --check)."""
     if not isinstance(drive, dict) or len(drive) != 1 or not set(drive) <= {"site", "user"}:
         raise ConfigError('transfer.drive must be {"site": "<host>:/sites/<path>"} or {"user": "<upn>"}')
     key, value = next(iter(drive.items()))
@@ -192,11 +197,12 @@ def _upload(r: _Reader, site_id: str) -> Optional[Upload]:
         raise ConfigError("transfer.upload.max_mbps must be above 0 (null = unlimited)")
     if up.plate_images < 0:
         raise ConfigError("transfer.upload.plate_images must be 0 (off) or more")
-    up.remote_folder = _remote(up.remote_folder, site_id, "transfer.upload.remote_folder")
+    up.remote_folder = remote_path(up.remote_folder, site_id, "transfer.upload.remote_folder")
     return up
 
 
-def _remote(path: str, site_id: str, label: str) -> str:
+def remote_path(path: str, site_id: str, label: str) -> str:
+    """A OneDrive folder path with <site.id> resolved, checked (also used by --check)."""
     path = path.replace("<site.id>", site_id).strip("/")
     if not path or any(part in ("", ".", "..") for part in path.split("/")):
         raise ConfigError(f"{label} must be a folder path like DPC/data/{site_id}")
@@ -270,7 +276,7 @@ def build_settings(raw: dict) -> Settings:
         total_wheel_count=(r.lookup("machine.total_wheel_count")
                            if isinstance(r.lookup("machine.total_wheel_count"), int) else None),
         graph=graph, drive=_drive(r),
-        models_folder=_remote(r.get("transfer.models_folder", str, DEFAULT_MODELS_FOLDER), site_id,
+        models_folder=remote_path(r.get("transfer.models_folder", str, DEFAULT_MODELS_FOLDER), site_id,
                               "transfer.models_folder"),
         upload=None, mqtt=mqtt if isinstance(mqtt, dict) else None)
     s.upload = _upload(r, site_id)
