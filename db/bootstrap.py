@@ -15,14 +15,22 @@ An existing user keeps its password unless reset_password is set; step 5 then te
 whether the given password still works.
 Passwords are never printed, logged or put in the report (also not inside error texts).
 
+Admin login: without an admin password, the admin is the dpc_setup account that
+install/install.sh creates (step 5, D-107): user and password are read from the [client]
+section of <root>/config/mysql_setup.cnf (pymysql read_default_file), so nobody types a
+MySQL admin password on a fresh install (F88). An explicit admin password, or --socket
+(root over auth_socket), still works as before.
+
 Function:  bootstrap(BootstrapRequest(...)) -> dict  (used by the UI wizard, D-103)
 CLI:       python3 db/bootstrap.py --db <name> --user <program user> --serial <s1> --serial <s2> [--json]
-           Passwords come from the environment (DPC_DB_ADMIN_PASS, DPC_DB_PASS) or a prompt,
-           never from the command line (it would show in `ps` and the shell history).
+           The program password comes from the environment (DPC_DB_PASS) or a prompt, the admin
+           password from DPC_DB_ADMIN_PASS or else mysql_setup.cnf; never from the command line
+           (it would show in `ps` and the shell history).
 Exit code: 0 = every step ok, 1 = a step failed (the report says which).
 """
 
 import argparse
+import configparser
 import dataclasses
 import getpass
 import json
@@ -39,7 +47,11 @@ SCRIPTS = ("schema.sql", "fixed_rows.sql")          # run in this order (D-043)
 NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 USER_RE = re.compile(r"^[A-Za-z0-9_]{1,32}$")
 HOST_RE = re.compile(r"^[A-Za-z0-9_.:%-]{1,255}$")
-FORBIDDEN_PROGRAM_USERS = {"root", "mysql.sys", "mysql.session", "mysql.infoschema", "debian-sys-maint"}
+SETUP_ADMIN_USER = "dpc_setup"                    # the installer's MySQL admin account (D-107)
+FORBIDDEN_PROGRAM_USERS = {"root", SETUP_ADMIN_USER, "mysql.sys", "mysql.session", "mysql.infoschema",
+                           "debian-sys-maint"}
+DEFAULT_ROOT = "~/INSIGHTZZ"
+SETUP_CNF = os.path.join("config", "mysql_setup.cnf")   # relative to the root, CONTRACTS 4.1
 
 CREATED, ALREADY, UPDATED, OK, FAILED = "created", "already there", "updated", "ok", "failed"
 
@@ -50,20 +62,46 @@ class BootstrapError(ValueError):
 
 @dataclasses.dataclass
 class BootstrapRequest:
-    admin_user: str
-    admin_password: str
     db_name: str
     program_user: str
     program_password: str
     serials: Sequence[str]
+    admin_user: Optional[str] = None                  # None/"" with no password: from mysql_setup.cnf
+    admin_password: Optional[str] = None              # None/"": use mysql_setup.cnf (unless unix_socket)
     host: str = "localhost"
     port: int = 3306
     unix_socket: Optional[str] = None                 # admin over the socket (e.g. root with auth_socket)
     program_hosts: Sequence[str] = ("localhost", "127.0.0.1")
     reset_password: bool = False                       # set the given password on an existing user
+    root: str = DEFAULT_ROOT                           # DPC root; mysql_setup.cnf is in <root>/config/
+    admin_option_file: Optional[str] = None            # override for <root>/config/mysql_setup.cnf
+
+    def uses_option_file(self) -> bool:
+        return not self.admin_password and not self.unix_socket
+
+    def option_file(self) -> str:
+        return os.path.expanduser(self.admin_option_file or os.path.join(self.root, SETUP_CNF))
 
     def secrets(self) -> List[str]:
         return [s for s in (self.admin_password, self.program_password) if s]
+
+
+def read_option_file(path: str) -> dict:
+    """User and password of the [client] section; BootstrapError if missing or incomplete."""
+    hint = "run install/install.sh (it creates dpc_setup)"
+    if not os.path.isfile(path):
+        raise BootstrapError(f"no MySQL admin password given and {path} not found: {hint}")
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        with open(path, encoding="utf-8") as f:
+            parser.read_file(f)
+    except (OSError, configparser.Error) as e:
+        raise BootstrapError(f"cannot read {path} ({type(e).__name__}): {hint}")
+    user = parser.get("client", "user", fallback="").strip()
+    password = parser.get("client", "password", fallback="").strip().strip("'\"")
+    if not user or not password:
+        raise BootstrapError(f"{path} has no [client] user and password: {hint}")
+    return {"user": user, "password": password}
 
 
 def validate(req: BootstrapRequest) -> None:
@@ -74,7 +112,7 @@ def validate(req: BootstrapRequest) -> None:
         raise BootstrapError(f"database name {req.db_name!r} is a MySQL system database")
     if not USER_RE.match(req.program_user or ""):
         raise BootstrapError("program user: use 1-32 letters, digits or _")
-    if req.program_user.lower() in FORBIDDEN_PROGRAM_USERS or req.program_user == req.admin_user:
+    if req.program_user.lower() in FORBIDDEN_PROGRAM_USERS or req.program_user == (req.admin_user or ""):
         raise BootstrapError(f"program user {req.program_user!r} must be a new, dedicated user, "
                              "not root or the admin user (D-050)")
     if not req.program_password:
@@ -150,7 +188,13 @@ class Report:
 
 # --------------------------------------------------------------------------- steps
 def _connect(connect, req: BootstrapRequest, user: str, password: str, database=None, as_admin=True):
-    kwargs = dict(user=user, password=password, port=int(req.port), autocommit=True, connect_timeout=10)
+    kwargs = dict(port=int(req.port), autocommit=True, connect_timeout=10)
+    if as_admin and req.uses_option_file():
+        # pymysql takes user and password from the file's [client] section only when they are
+        # not passed, so they are left out here
+        kwargs["read_default_file"] = req.option_file()
+    else:
+        kwargs.update(user=user, password=password)
     if database:
         kwargs["database"] = database
     if as_admin and req.unix_socket:
@@ -257,11 +301,17 @@ def step_login_check(connect, req, report):
 def bootstrap(req: BootstrapRequest, connect: Optional[Callable] = None) -> dict:
     """Run all steps. Returns {"ok": bool, "database": ..., "steps": [...]} with no password in it.
     Raises BootstrapError for bad input (before anything is changed)."""
+    if req.uses_option_file():
+        login = read_option_file(req.option_file())
+        req = dataclasses.replace(req, admin_user=login["user"])
+        secrets = req.secrets() + [login["password"]]      # only for redacting error texts
+    else:
+        secrets = req.secrets()
     validate(req)
     if connect is None:
         import pymysql
         connect = pymysql.connect
-    report = Report(req.secrets())
+    report = Report(secrets)
     try:
         admin = _connect(connect, req, req.admin_user, req.admin_password)
         try:
@@ -278,7 +328,9 @@ def bootstrap(req: BootstrapRequest, connect: Optional[Callable] = None) -> dict
         report.add("error", type(e).__name__, FAILED, str(e))
     else:
         step_login_check(connect, req, report)
-    return {"ok": report.ok, "database": req.db_name, "program_user": req.program_user, "steps": report.steps}
+    return {"ok": report.ok, "database": req.db_name, "program_user": req.program_user,
+            "admin": f"{req.admin_user} ({req.option_file()})" if req.uses_option_file() else req.admin_user,
+            "steps": report.steps}
 
 
 # --------------------------------------------------------------------------- CLI
@@ -296,9 +348,12 @@ def main(argv=None) -> int:
     ap.add_argument("--host", default="localhost", help="MySQL host (default localhost)")
     ap.add_argument("--port", type=int, default=3306)
     ap.add_argument("--socket", help="connect the admin over this unix socket (root with auth_socket)")
-    ap.add_argument("--admin-user", default="root")
+    ap.add_argument("--admin-user", help="admin user with a password from --admin-password-env (default root)")
     ap.add_argument("--admin-password-env", default="DPC_DB_ADMIN_PASS",
-                    help="environment variable with the admin password (default DPC_DB_ADMIN_PASS)")
+                    help="environment variable with the admin password (default DPC_DB_ADMIN_PASS); "
+                         "when it is not set, the admin login comes from <root>/config/mysql_setup.cnf")
+    ap.add_argument("--root", default=DEFAULT_ROOT, help="DPC root (default ~/INSIGHTZZ)")
+    ap.add_argument("--admin-option-file", help="option file instead of <root>/config/mysql_setup.cnf")
     ap.add_argument("--db", required=True, help="site database name")
     ap.add_argument("--user", required=True, help="program user to create (not root)")
     ap.add_argument("--password-env", default="DPC_DB_PASS",
@@ -311,9 +366,17 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     try:
+        admin_password = os.environ.get(args.admin_password_env) or ""
+        if args.admin_user and not admin_password and not args.socket:
+            # an explicit admin user wants its own password (env or prompt), not the option file
+            admin_password = _password(args.admin_password_env, f"MySQL password for {args.admin_user}: ")
+        if args.socket or admin_password:
+            admin_user = args.admin_user or "root"
+        else:                                   # no admin password: dpc_setup from mysql_setup.cnf (F88)
+            admin_user = None
         req = BootstrapRequest(
-            admin_user=args.admin_user,
-            admin_password=_password(args.admin_password_env, "MySQL admin password: ", allow_empty=bool(args.socket)),
+            admin_user=admin_user, admin_password=admin_password,
+            root=args.root, admin_option_file=args.admin_option_file,
             db_name=args.db, program_user=args.user,
             program_password=_password(args.password_env, f"Password for {args.user}: "),
             serials=args.serial, host=args.host, port=args.port, unix_socket=args.socket,
