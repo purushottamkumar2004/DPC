@@ -105,7 +105,7 @@ Root `<root>` = `~/INSIGHTZZ` (config key `paths.root`), created by `scripts/set
 ```
 code/   config/{site.yaml, rendered/}   logs/   run/
 data/frames/CAM1|CAM2/{live, _tmp, INF, RAW_IMAGES, UI}      data/ui_live/CAM1|CAM2 (reserved)
-data/images/{DEFECTIVE, REPEATED, RAW, PLATE, MAGNET, TEMP}/{LEFT, RIGHT}   data/transfer/{staging, downloads} (transfer service, D-105; created by setup_dpc_layout.sh, checked by dpc-check; never touched by cleanup)
+data/images/{DEFECTIVE, REPEATED, RAW, PLATE, MAGNET, TEMP}/{LEFT, RIGHT}   config/mysql_setup.cnf ([client] user, password; mode 600; the dpc_setup MySQL admin, D-107)   config/site_defaults.yaml (db.name_suffix, db.user, db.password; mode 600; company DB defaults, D-108); both written by install.sh, never in git   data/transfer/{staging, downloads} (transfer service, D-105; created by setup_dpc_layout.sh, checked by dpc-check; never touched by cleanup)
 data/wheel_status/{LEFT, RIGHT, IMAGES/{LEFT, RIGHT}, PDFS} (IMAGES/<SIDE> used by inspection D-073 D4, created by `setup_dpc_layout.sh` and checked by `dpc-check` since F23; the rest assumed, Q13)      data/bolt_data/{LEFT, RIGHT}   data/state   data/models
 ```
 **Frame lifecycle rules (D-031)** [BUILT in `frame_capture_basler`]:
