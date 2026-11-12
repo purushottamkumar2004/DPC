@@ -4,7 +4,9 @@ When the script is empty the test is over and a stop is requested.
 
 For camera_probe: STATE["devices"] lists the cameras that are connected
 ({"serial", "model", "ip", "class", "in_use", "open_error", "grab_ok"}); set them with set_devices().
-"in_use" makes IsDeviceAccessible() False; "open_error" makes Open() raise that text."""
+"in_use" makes IsDeviceAccessible() False; "open_error" makes Open() raise that text.
+In a burst, RetrieveResult() gives frames; "fail_at" / "timeout_at" (1-based frame number) make that
+frame a failed grab / a timeout."""
 import numpy as np
 
 PixelType_BGR8packed = 1
@@ -28,7 +30,7 @@ def set_devices(devices):
     if "script" not in STATE:
         reset([])
     STATE["devices"] = [dict(d) for d in devices]
-    STATE.update(settings={}, opens=0, closed=0, grabs=0)
+    STATE.update(settings={}, opens=0, closed=0, grabs=0, retrieves=0, strategy=None)
 
 
 class DeviceInfo:
@@ -133,7 +135,7 @@ class InstantCamera:
         STATE["opens"] += 1
 
     def StartGrabbing(self, strategy):
-        pass
+        STATE["strategy"] = strategy
 
     def StopGrabbing(self):
         pass
@@ -152,6 +154,12 @@ class InstantCamera:
         return _Result("frame" if self.device.get("grab_ok", True) else "failed")
 
     def RetrieveResult(self, timeout_ms, handling):
+        if self.device:                                  # camera_probe burst
+            STATE["retrieves"] += 1
+            n = STATE["retrieves"]
+            if self.device.get("timeout_at") == n:
+                return _Result("timeout")
+            return _Result("failed" if self.device.get("fail_at") == n else "frame")
         if not STATE["script"]:
             STATE["on_empty"]()
             return _Result("timeout")

@@ -55,8 +55,11 @@ setup wizard (D-103 step 3) and by hand:
 ```
 python3 camera_probe.py list [--driver all|basler|flir] [--json]
 python3 camera_probe.py grab SERIAL OUT_FILE [--exposure US] [--timeout-ms MS] [--driver auto|basler|flir] [--json]
+python3 camera_probe.py burst SERIAL OUT_DIR [--count 20] [--interval-ms 250] [--exposure US] [--timeout-ms MS]
+                              [--driver auto|basler|flir] [--json]
 ```
-In Python: `camera_probe.list_all()`, `camera_probe.grab_one(serial, out_path, exposure_us=None, timeout_ms=5000, driver="auto")`.
+In Python: `camera_probe.list_all()`, `camera_probe.grab_one(serial, out_path, exposure_us=None, timeout_ms=5000, driver="auto")`,
+`camera_probe.burst(serial, out_dir, count=20, interval_ms=250, exposure_us=None, timeout_ms=5000, driver="auto")`.
 
 - `list` gives per camera: driver, serial, model, IP (GigE only), `in_use` (true / false / null when the SDK
   cannot tell), device class and user name. A missing SDK is reported per driver ("Basler SDK not installed",
@@ -67,6 +70,15 @@ In Python: `camera_probe.list_all()`, `camera_probe.grab_one(serial, out_path, e
 - A camera held by another program (normally the running capture) is reported `in_use` and never forced:
   stop that program first. The probe sets TriggerMode Off, and with `--exposure` ExposureAuto Off and the
   exposure; these live in the camera's working memory only, and the capture sets its own values when it starts.
+- `burst` (F89, for the conveyor direction): COUNT frames, one every INTERVAL ms (0 = as fast as the camera
+  delivers; at most 200 frames), into OUT_DIR (created if its parent exists). Files are named by capture time
+  like the capture's frames (`2026_11_12_10_15_03_250114.jpg`, CONTRACTS 4.1), so
+  `measure.py --frames OUT_DIR --count COUNT` reads exactly this burst: it takes the newest COUNT files by name,
+  so pass the same count (or use a fresh folder per burst). The camera keeps grabbing and each tick takes the
+  newest frame; the frame-rate limit is lifted for the burst (working memory only; the capture sets its own rate
+  on start). Same in-use handling and exit codes as `grab`. The result adds `dir`, `count`, `interval_ms`,
+  `saved` and `frames` ([{index, path, t_ms}], t_ms since the first frame). If a frame fails mid-burst the result
+  is `failed` with the message naming the frame, and the frames saved before it stay and are listed.
 - FLIR (Spinnaker, PySpin) is in `flir_probe.py` with the same functions and results; `in_use` comes from the
   camera's access status, read without opening it. Not yet tried on a real FLIR camera.
 - Try it without hardware: `PYLON_CAMEMU=2 python3 camera_probe.py list` (pylon's emulated cameras).

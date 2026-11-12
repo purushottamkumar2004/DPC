@@ -1,6 +1,6 @@
 """Fake PySpin (Spinnaker) for flir_probe tests: only the calls flir_probe makes.
 CAMERAS lists the connected cameras: {"serial", "model", "ip" (int), "access" (DeviceAccessStatus),
-"init_error", "incomplete"}. LOG records the calls that matter for clean-up order."""
+"init_error", "incomplete", "incomplete_at" (1-based image number)}. LOG records the calls that matter for clean-up order."""
 import numpy as np
 
 PixelFormat_BGR8 = 1
@@ -124,6 +124,9 @@ class _Camera:
     def GetTLDeviceNodeMap(self):
         return _NodeMap(self.tl_store, set(self.tl_store))
 
+    def GetTLStreamNodeMap(self):
+        return _NodeMap(self.store, {"StreamBufferHandlingMode"})
+
     def GetNodeMap(self):
         return _NodeMap(self.store, {"TriggerMode", "AcquisitionMode", "ExposureAuto", "ExposureTime"})
 
@@ -142,7 +145,8 @@ class _Camera:
         LOG.append("end")
 
     def GetNextImage(self, timeout_ms):
-        return _Image(self.info.get("incomplete", False))
+        self.images = getattr(self, "images", 0) + 1
+        return _Image(self.info.get("incomplete", False) or self.info.get("incomplete_at") == self.images)
 
 
 class _CameraList:
