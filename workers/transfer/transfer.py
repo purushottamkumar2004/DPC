@@ -8,7 +8,8 @@
   Model update       request <root>/run/transfer.model_update
                      -> newest dated zip in <transfer.models_folder>/<model name>/, download,
                         package, verify, mark ready (never switch: the Supervisor decides)
-  Permission check   python3 transfer.py --check   (with DPC_WORKER_CONFIG set; README, Q18)
+  Permission check   python3 transfer.py --check [--json]   (rendered transfer.json, or the
+                     settings on the command line for the setup wizard: graph_check.py, F91)
   Cancel             request <root>/run/transfer.cancel (content: upload_cycle | model_update;
                      empty = both) -> stop and delete the partial data
 
@@ -305,57 +306,10 @@ def run(s, log) -> None:
         plates.stop()
 
 
-def check_graph(s, graph=None, out=print) -> bool:
-    """`python3 transfer.py --check`: prove the Graph permission works (README, Q18) without a job.
-    Token, drive, the models folder (read), a test file written, read back and deleted in the
-    upload folder (write). Prints one OK/FAIL line per step."""
-    graph = graph or GraphClient(s.graph, s.drive)
-    ok = True
-
-    def step(label, action):
-        nonlocal ok
-        try:
-            detail = action()
-            out(f"OK    {label}" + (f": {detail}" if detail else ""))
-            return True
-        except (TemporaryError, PermanentError) as exc:
-            out(f"FAIL  {label}: {exc}")
-            ok = False
-            return False
-
-    if not step("token (graph.tenant_id / client_id / client_secret)", lambda: graph.token() and None):
-        return False
-    if not step(f"drive {s.drive}", lambda: graph.drive_base().rsplit("/v1.0", 1)[-1]):
-        return False
-    step(f"read models folder {s.models_folder}",
-         lambda: "missing (create it, or no model uploaded yet)" if graph.list_children(s.models_folder) is None
-         else f"{len(graph.list_children(s.models_folder))} item(s)")
-    if s.upload:
-        folder = f"{s.upload.remote_folder}/_check"
-        data = b"DPC transfer permission check\n"
-
-        def write_and_read():
-            graph.ensure_folder(folder)
-            url, _ = graph.create_upload_session(f"{folder}/check.txt")
-            outcome, item = graph.upload_fragment(url, data, 0, len(data))
-            if outcome != "done" or item.get("size") != len(data):
-                raise PermanentError(f"upload ended with {outcome}")
-            graph.delete_item(f"{folder}/check.txt")
-            graph.delete_item(folder)
-            return f"{folder}/check.txt written, read back and deleted"
-
-        step(f"write to {s.upload.remote_folder}", write_and_read)
-    return ok
-
-
 def main() -> int:
-    if "--check" in sys.argv[1:]:
-        try:
-            settings = build_settings(read_raw_config())
-        except ConfigError as exc:
-            print(f"FAIL  transfer.json: {exc}")
-            return 1
-        return 0 if check_graph(settings) else 1
+    if "--check" in sys.argv[1:]:                       # graph_check.py: rendered or direct (F91)
+        from graph_check import check_main
+        return check_main(sys.argv[1:])
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
     root = os.path.dirname(REPO_ROOT)

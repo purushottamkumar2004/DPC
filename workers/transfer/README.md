@@ -109,13 +109,33 @@ Consent `Files.ReadWrite.All` (application). No per-site step, but the app can r
 `transfer.drive` as in A or B.
 
 ### Check it
+On a configured site (rendered `transfer.json`):
 ```bash
 cd ~/INSIGHTZZ/code/workers/transfer
 DPC_WORKER_CONFIG=~/INSIGHTZZ/config/rendered/transfer.json python3 transfer.py --check
 ```
-One `OK`/`FAIL` line per step: token, drive, read the models folder, write/read/delete a test file
-in the upload folder. `HTTP 403 accessDenied` = consent or the site grant (step 3 or 4) is missing;
-`token refused` = wrong tenant/client id/secret, or the secret expired.
+Before Apply (setup wizard step 8b, F91: no `site.yaml`, no rendered file), the settings go on the
+command line and the Graph login on stdin, never as an argument (`ps` shows arguments to everyone):
+```bash
+echo '{"tenant_id": "...", "client_id": "...", "client_secret": "..."}' | \
+  python3 transfer.py --check --json --graph-stdin --site-id tadipatri \
+      --drive-site contoso.sharepoint.com:/sites/DPC        # or --drive-user dpc@contoso.com
+      # optional: --models-folder P  --upload-folder P | --no-upload  (defaults DPC/models/<site.id>,
+      # DPC/data/<site.id>); without --graph-stdin: env DPC_GRAPH_TENANT_ID / _CLIENT_ID / _CLIENT_SECRET
+```
+Steps: `token`, `drive`, `models_folder` (listing; a missing folder is fine on a new site,
+`exists` says which), `upload_write` (a test file written, read back and deleted in
+`<upload folder>/_check/`; `skipped` with `--no-upload`). Each is `ok`, `fail` or `skipped`
+(skipped after a failed token or drive). `--json` prints exactly one object:
+```json
+{"ok": true, "mode": "direct", "drive": {"site": "..."}, "models_folder": "DPC/models/tadipatri",
+ "upload_folder": "DPC/data/tadipatri",
+ "steps": [{"step": "token", "status": "ok", "detail": "login accepted"}, ...], "error": null}
+```
+`error` is set (and `steps` empty) when the check could not run: wrong arguments, missing login.
+Exit 0 = every step that ran passed; 1 = a step failed or `error`; 2 = wrong call (argparse usage).
+Reading: `HTTP 403 accessDenied` = consent or the site grant (step 3 or 4) is missing; `token
+refused` = wrong tenant/client id/secret, or the secret expired; `network` = no route to Microsoft.
 
 Mail keeps its own permission (`Mail.Send`, assumed, not checked here).
 

@@ -184,28 +184,3 @@ class Client(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-
-class Check(unittest.TestCase):
-    def test_permission_check_reports_each_step(self):
-        root = H.temp_root(self)
-        s = H.make_settings(root)
-        graph = H.FakeGraph()
-        graph.token = lambda: "tok"
-        graph.drive_base = lambda: "https://graph.microsoft.com/v1.0/sites/x/drive"
-        lines = []
-        import transfer
-        self.assertTrue(transfer.check_graph(s, graph, out=lines.append))
-        self.assertEqual([line.split()[0] for line in lines], ["OK"] * 4)
-        self.assertEqual(graph.files, {}, "the test file is deleted again")
-
-    def test_permission_refused_is_a_fail_line(self):
-        s = H.make_settings(H.temp_root(self))
-        graph = H.FakeGraph()
-
-        def refused():
-            raise PermanentError("Graph token refused: HTTP 401")
-        graph.token = refused
-        lines = []
-        import transfer
-        self.assertFalse(transfer.check_graph(s, graph, out=lines.append))
-        self.assertTrue(lines[0].startswith("FAIL  token"))
