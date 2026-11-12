@@ -235,13 +235,60 @@ class FakeServerTests(unittest.TestCase):
         connect = mock.Mock()
         cases = [dict(program_user="root"), dict(program_user="admin"), dict(db_name="site-db"),
                  dict(db_name="mysql"), dict(db_name="x; DROP DATABASE y"), dict(program_user="a'b"),
-                 dict(serials=()), dict(serials=("A", "A")), dict(serials=("",)), dict(program_password=""),
+                 dict(serials=("A", "A")), dict(serials=("",)), dict(program_password=""),
                  dict(program_hosts=("bad host",)), dict(program_user="x" * 33)]
         for over in cases:
             with self.subTest(**{k: str(v) for k, v in over.items()}):
                 with self.assertRaises(bs.BootstrapError):
                     bs.bootstrap(request(**over), connect=connect)
         connect.assert_not_called()
+
+
+class NoSerialTests(unittest.TestCase):
+    """F93: serials are optional; without them no health rows, and the report says so."""
+
+    def setUp(self):
+        self.server = FakeServer()
+
+    def run_bs(self, **over):
+        return bs.bootstrap(request(**over), connect=self.server.connect)
+
+    def health_inserts(self):
+        return [s for s, _ in self.server.log if "health_status" in s and s.startswith("INSERT")]
+
+    def test_without_serials_everything_else_runs_and_no_health_row(self):
+        for serials in ((), None, []):
+            with self.subTest(serials=serials):
+                self.server = FakeServer()
+                report = self.run_bs(serials=serials)
+                self.assertTrue(report["ok"], report)
+                self.assertEqual(self.health_inserts(), [])
+                self.assertEqual(results(report, "health row"), [("health row", "(none)", bs.SKIPPED)])
+                skipped = [s for s in report["steps"] if s["result"] == bs.SKIPPED][0]
+                self.assertIn("no camera serials", skipped["detail"])
+                self.assertIn(("database", "site_db", bs.CREATED), results(report))
+                self.assertEqual(results(report, "login check")[0][2], bs.OK)
+
+    def test_default_is_no_serials(self):
+        req = bs.BootstrapRequest(db_name="site_db", program_user="dpc_prog", program_password=PROG_PW,
+                                  admin_user="admin", admin_password=ADMIN_PW)
+        report = bs.bootstrap(req, connect=self.server.connect)
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(self.health_inserts(), [])
+
+    def test_apply_later_with_serials_adds_only_the_health_rows(self):
+        self.run_bs(serials=())
+        before = self.server.snapshot()
+        report = self.run_bs()
+        self.assertTrue(report["ok"], report)
+        changed = [(s["step"], s["item"]) for s in report["steps"] if s["result"] in (bs.CREATED, bs.UPDATED)]
+        self.assertEqual(changed, [("health row", s) for s in SERIALS])
+        self.assertEqual(self.server.snapshot()["users"], before["users"])
+
+    def test_empty_serial_text_is_still_refused(self):
+        for serials in (("",), (" ",), ("x" * 65,)):
+            with self.subTest(serials=serials), self.assertRaises(bs.BootstrapError):
+                self.run_bs(serials=serials)
 
 
 class SqlSplitTests(unittest.TestCase):
@@ -433,6 +480,18 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("DPC_DB_ADMIN_PASS", json.loads(out)["error"])
 
+    def test_without_serial_option(self):
+        argv = [a for a in self.BASE if a not in ("--serial", "TESTCAM1", "TESTCAM2")]
+        code, out = self.run_cli(argv + ["--json"], self.ENV)
+        self.assertEqual(code, 0, out)
+        steps = json.loads(out)["steps"]
+        self.assertIn({"step": "health row", "item": "(none)", "result": "skipped",
+                       "detail": "no camera serials given; run again with the serials once the cameras are chosen"},
+                      steps)
+        code, out = self.run_cli(argv, self.ENV)
+        self.assertEqual(code, 0)
+        self.assertIn("SKIPPED", out)
+
     def test_root_as_program_user_is_refused(self):
         argv = [a if a != "dpc_prog" else "root" for a in self.BASE]
         code, out = self.run_cli(argv + ["--json"], self.ENV)
@@ -565,6 +624,17 @@ class RealServerTests(unittest.TestCase):
         with conn.cursor() as cur:
             cur.execute(f"DROP USER IF EXISTS '{user}'@'localhost'")
         conn.close()
+
+    def test_without_serials_then_with_serials(self):
+        """F93 on a real server: step 2 without cameras, Apply with them."""
+        first = bs.bootstrap(dataclass_replace(self.req, serials=()))
+        self.assertTrue(first["ok"], first)
+        self.assertEqual(self.state()[2], ())                   # no health rows
+        second = bs.bootstrap(self.req)
+        self.assertTrue(second["ok"], second)
+        changed = [(s["step"], s["item"]) for s in second["steps"] if s["result"] in (bs.CREATED, bs.UPDATED)]
+        self.assertEqual(changed, [("health row", s) for s in SERIALS])
+        self.assertEqual(self.state()[2], tuple((s, "NOK") for s in sorted(SERIALS)))
 
     def test_missing_row_and_camera_are_added_on_rerun(self):
         self.assertTrue(bs.bootstrap(self.req)["ok"])
