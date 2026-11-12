@@ -1,4 +1,4 @@
-"""Tests for camera_probe.py and flir_probe.py (STATUS S4).
+"""Tests for camera_probe.py and flir_probe.py (STATUS S4; burst F89).
 
 Basler: a fake pylon (tests/fake_pypylon); FLIR: a fake PySpin (tests/fake_pyspin).
 One class uses the real pylon SDK with its camera emulator (PYLON_CAMEMU) when pypylon is
@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 
 import cv2
 
@@ -211,6 +212,15 @@ class Cli(Base):
         code, text = self.run_cli("list", "--driver", "basler")
         self.assertIn("IN USE", text)
 
+    def test_burst_cli(self):
+        pylon.set_devices([LEFT, dict(RIGHT, in_use=True)])
+        folder = os.path.join(self._tmp.name, "b")
+        code, text = self.run_cli("burst", "24824427", folder, "--count", "3", "--interval-ms", "0", "--json")
+        self.assertEqual((code, json.loads(text)["saved"]), (0, 3))
+        code, text = self.run_cli("burst", "24874775", folder)
+        self.assertEqual(code, 3)
+        self.assertIn("in use", text)
+
     def test_grab_exit_codes(self):
         pylon.set_devices([LEFT, dict(RIGHT, in_use=True)])
         flir_probe._load_pyspin = lambda: None
@@ -219,6 +229,117 @@ class Cli(Base):
         self.assertEqual(self.run_cli("grab", "24874775", self.out)[0], 3)
         self.assertEqual(self.run_cli("grab", "123", self.out)[0], 4)
         self.assertEqual(self.run_cli("grab", "24824427", self.out + ".gif")[0], 2)
+
+
+class BaslerBurst(Base):
+    def setUp(self):
+        super().setUp()
+        pylon.set_devices([LEFT, dict(RIGHT, in_use=True)])
+        self.dir = os.path.join(self._tmp.name, "burst")          # created by the burst
+
+    def names(self):
+        return sorted(os.listdir(self.dir)) if os.path.isdir(self.dir) else []
+
+    def test_frames_named_by_capture_time_in_order(self):
+        result = probe.burst("24824427", self.dir, count=5, interval_ms=40, exposure_us=1800)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual((result["saved"], result["count"], result["interval_ms"]), (5, 5, 40))
+        self.assertEqual((result["width"], result["height"], result["exposure_us"]), (1920, 1080, 1800.0))
+        names = self.names()
+        self.assertEqual(len(names), 5)
+        self.assertEqual([os.path.basename(f["path"]) for f in result["frames"]], names)   # by name = by time
+        times = [datetime.strptime(n[:-4], probe.FRAME_NAME_FORMAT) for n in names]
+        self.assertEqual(times, sorted(set(times)))
+        t_ms = [f["t_ms"] for f in result["frames"]]
+        self.assertTrue(all(b - a >= 35 for a, b in zip(t_ms, t_ms[1:])), t_ms)          # spaced by the interval
+        self.assertEqual(pylon.STATE["strategy"], pylon.GrabStrategy_LatestImageOnly)
+        self.assertIs(pylon.STATE["settings"]["AcquisitionFrameRateEnable"], False)       # newest frame each tick
+        self.assertEqual(pylon.STATE["closed"], 1)
+
+    def test_interval_zero_and_existing_folder(self):
+        os.makedirs(self.dir)
+        result = probe.burst("24824427", self.dir, count=3, interval_ms=0)
+        self.assertEqual((result["status"], len(self.names())), (probe.OK, 3))
+
+    def test_in_use_like_grab(self):
+        result = probe.burst("24874775", self.dir)
+        self.assertEqual(result["status"], probe.IN_USE)
+        self.assertIn("in use by another program", result["message"])
+        self.assertEqual((pylon.STATE["opens"], self.names()), (0, []))
+        pylon.set_devices([dict(LEFT, open_error=IN_USE_ERROR)])
+        self.assertEqual(probe.burst("24824427", self.dir)["status"], probe.IN_USE)
+
+    def test_failure_mid_burst_keeps_the_saved_frames(self):
+        for key, words in (("fail_at", "incomplete"), ("timeout_at", "no frame within")):
+            with self.subTest(key=key):
+                pylon.set_devices([dict(LEFT, **{key: 3})])
+                folder = os.path.join(self._tmp.name, key)
+                result = probe.burst("24824427", folder, count=5, interval_ms=0)
+                self.assertEqual((result["status"], result["saved"]), (probe.FAILED, 2))
+                self.assertIn("frame 3 of 5", result["message"])
+                self.assertIn(words, result["message"])
+                self.assertEqual(len(os.listdir(folder)), 2)
+                self.assertEqual(pylon.STATE["closed"], 1)
+
+    def test_bad_requests_never_touch_a_camera(self):
+        a_file = os.path.join(self._tmp.name, "file.jpg")
+        open(a_file, "w").close()
+        cases = [{"count": 0}, {"count": probe.MAX_BURST_COUNT + 1}, {"count": "x"}, {"interval_ms": -1},
+                 {"out_dir": os.path.join(self._tmp.name, "no", "such")}, {"out_dir": a_file},
+                 {"exposure_us": 0}, {"serial": ""}]
+        for case in cases:
+            args = {"serial": "24824427", "out_dir": self.dir, **case}
+            with self.subTest(case=case):
+                result = probe.burst(args.pop("serial"), args.pop("out_dir"), **args)
+                self.assertEqual(result["status"], probe.BAD_REQUEST)
+                self.assertEqual(result["frames"], [])
+        self.assertEqual(pylon.STATE["opens"], 0)
+        self.assertFalse(os.path.exists(os.path.join(self._tmp.name, "no")))
+
+    def test_names_stay_in_order_when_the_clock_repeats(self):
+        later = datetime.now() + timedelta(seconds=5)
+        path, stamp = probe.frame_path(self.dir, later)
+        self.assertEqual(stamp, later + timedelta(microseconds=1))
+        self.assertTrue(os.path.basename(path).endswith(".jpg"))
+
+    def test_measure_reads_a_burst(self):
+        """The frames are what workers/inspection/measure.py reads: newest N .jpg by name, time from name."""
+        inspection = os.path.join(os.path.dirname(WORKER_DIR), "inspection")
+        sys.path.insert(0, inspection)
+        try:
+            from helpers import frame_time
+            from model_selftest import newest_frames
+        except Exception as exc:                       # inspection needs its own libraries
+            self.skipTest(f"inspection helpers not importable here: {exc}")
+        finally:
+            sys.path.remove(inspection)
+        result = probe.burst("24824427", self.dir, count=4, interval_ms=20)
+        frames = newest_frames(self.dir, 4)
+        self.assertEqual(frames, [f["path"] for f in result["frames"]])
+        times = [frame_time(p) for p in frames]
+        self.assertTrue(all(0 < (b - a).total_seconds() < 2.0 for a, b in zip(times, times[1:])))
+
+
+class FlirBurst(Base):
+    def test_burst(self):
+        PySpin.setup([{"serial": "21012345", "model": "Blackfly S"}])
+        folder = os.path.join(self._tmp.name, "flir")
+        result = probe.burst("21012345", folder, count=3, interval_ms=0, driver="flir")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual((result["driver"], result["saved"], len(os.listdir(folder))), ("flir", 3, 3))
+        self.assertIn("set StreamBufferHandlingMode=NewestOnly", PySpin.LOG)
+        self.assertIn("set AcquisitionMode=Continuous", PySpin.LOG)
+
+    def test_failure_mid_burst_and_clean_up(self):
+        PySpin.setup([{"serial": "21012345", "incomplete_at": 2}])
+        result = flir_probe.burst("21012345", self._tmp.name, count=4, interval_ms=0)
+        self.assertEqual((result["status"], result["saved"]), (probe.FAILED, 1))
+        for done in ("end", "deinit", "system released"):
+            self.assertIn(done, PySpin.LOG)
+
+    def test_in_use(self):
+        PySpin.setup([{"serial": "21012346", "access": "Busy"}])
+        self.assertEqual(probe.burst("21012346", self._tmp.name, driver="flir")["status"], probe.IN_USE)
 
 
 def _real_pylon_available():
@@ -250,6 +371,11 @@ class RealPylonEmulator(unittest.TestCase):
             result = json.loads(text)
             self.assertEqual(code, 0, result)
             self.assertEqual(cv2.imread(out).shape[:2], (result["height"], result["width"]))
+            burst_dir = os.path.join(folder, "burst")
+            code, text = self.run_probe("burst", cameras[0]["serial"], burst_dir, "--count", "4",
+                                        "--interval-ms", "100", "--json")
+            result = json.loads(text)
+            self.assertEqual((code, result["saved"], len(os.listdir(burst_dir))), (0, 4, 4))
 
 
 if __name__ == "__main__":
