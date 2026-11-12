@@ -25,10 +25,18 @@ default with ONE warning each; a recipient, a secret or the DB name is never def
 Heartbeat (D-034, STATUS F69): common/heartbeat.py publishes dpc/worker/mail/health every 10 s
 with last_poll_at, pending_rows, sent_today and flood_active; healthy = a poll finished within
 3 x POLL_SECONDS. Without an `mqtt` block in mail.json the heartbeat is off (one warning).
+Test mail for the setup wizard and commissioning (STATUS F92, D-103 step 8):
+    python3 mail_worker.py --test --json --sender graph --from reports@x.com --to a@x.com,b@x.com [--cc c@x.com]
+Graph login from env DPC_MS_TENANT_ID, DPC_MS_CLIENT_ID, DPC_MS_CLIENT_SECRET (SMTP: --smtp-host,
+--smtp-port, env DPC_SMTP_PASSWORD). A value not given falls back to mail.json when DPC_WORKER_CONFIG
+points to one. Sends ONE mail without attachments and never opens the database (defects_table is
+never read or written); no log file, no last_error. Prints {"ok", "status", "message", ...}; status
+(exit code): ok (0), failed (1, refused by Graph/SMTP), bad_request (2), unreachable (3, network).
 Any unexpected error (config, DB) writes <root>/run/mail.last_error.json (secrets scrubbed)
 and exits 1; the Supervisor restarts the program (D-073 D7, D-079). SIGTERM / SIGINT: exit 0.
 """
 
+import argparse
 import base64
 import datetime
 import json
@@ -496,7 +504,15 @@ def collect_images(rows, max_bytes, log):
 # 5. SENDING (Graph or SMTP). A failure returns False; it never raises for network errors.
 # =================================================================================
 
-def graph_token(s: Settings, log):
+@dataclass
+class SendResult:
+    ok: bool
+    status: str             # ok | failed (refused) | unreachable (network)
+    message: str
+
+
+def _graph_token(s: Settings):
+    """(token, None) or (None, SendResult explaining why not)."""
     try:
         response = requests.post(TOKEN_URL.format(tenant=s.graph_tenant_id), timeout=TOKEN_TIMEOUT_S, data={
             "grant_type": "client_credentials",
@@ -505,18 +521,19 @@ def graph_token(s: Settings, log):
             "scope": "https://graph.microsoft.com/.default",
         })
     except requests.RequestException as e:
-        log.error(f"Graph token failed: {type(e).__name__}")
-        return None
+        return None, SendResult(False, "unreachable", f"Graph token failed: {type(e).__name__}")
     if response.status_code == 200:
-        return response.json().get("access_token")
-    log.error(f"Graph token failed: HTTP {response.status_code} {response.text[:300]}")
-    return None
+        token = response.json().get("access_token")
+        if token:
+            return token, None
+    return None, SendResult(False, "failed",
+                            f"Graph token failed: HTTP {response.status_code} {response.text[:300]}")
 
 
-def send_graph(s: Settings, subject, body, images, to, cc, log) -> bool:
-    token = graph_token(s, log)
-    if not token:
-        return False
+def graph_send_result(s: Settings, subject, body, images, to, cc) -> SendResult:
+    token, problem = _graph_token(s)
+    if problem:
+        return problem
     payload = {
         "message": {
             "subject": subject,
@@ -532,15 +549,13 @@ def send_graph(s: Settings, subject, body, images, to, cc, log) -> bool:
         response = requests.post(SEND_URL.format(sender=s.sender_address), json=payload, timeout=SEND_TIMEOUT_S,
                                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     except requests.RequestException as e:
-        log.error(f"Graph send failed: {type(e).__name__}")
-        return False
+        return SendResult(False, "unreachable", f"Graph send failed: {type(e).__name__}")
     if response.status_code == 202:
-        return True
-    log.error(f"Graph send failed: HTTP {response.status_code} {response.text[:300]}")
-    return False
+        return SendResult(True, "ok", "accepted by Graph (HTTP 202)")
+    return SendResult(False, "failed", f"Graph send failed: HTTP {response.status_code} {response.text[:300]}")
 
 
-def send_smtp(s: Settings, subject, body, images, to, cc, log) -> bool:
+def smtp_send_result(s: Settings, subject, body, images, to, cc) -> SendResult:
     message = MIMEMultipart()
     message['From'] = s.sender_address
     message['To'] = ", ".join(to)
@@ -559,10 +574,25 @@ def send_smtp(s: Settings, subject, body, images, to, cc, log) -> bool:
             server.starttls()
             server.login(s.sender_address, s.smtp_password)      # login user = sender, as before
             server.sendmail(s.sender_address, to + cc, message.as_string())
-        return True
-    except (smtplib.SMTPException, OSError) as e:
-        log.error(f"SMTP send failed: {type(e).__name__}: {str(e)[:300]}")
-        return False
+        return SendResult(True, "ok", "accepted by the SMTP server")
+    except smtplib.SMTPException as e:
+        return SendResult(False, "failed", f"SMTP send failed: {type(e).__name__}: {str(e)[:300]}")
+    except OSError as e:
+        return SendResult(False, "unreachable", f"SMTP send failed: {type(e).__name__}: {str(e)[:300]}")
+
+
+def send_graph(s: Settings, subject, body, images, to, cc, log) -> bool:
+    result = graph_send_result(s, subject, body, images, to, cc)
+    if not result.ok:
+        log.error(result.message)
+    return result.ok
+
+
+def send_smtp(s: Settings, subject, body, images, to, cc, log) -> bool:
+    result = smtp_send_result(s, subject, body, images, to, cc)
+    if not result.ok:
+        log.error(result.message)
+    return result.ok
 
 
 def send_alert(s: Settings, rows, restricted, log) -> bool:
@@ -727,7 +757,168 @@ def poll_once(s: Settings, cur, log, now=None, stats: Optional[PollStats] = None
 
 
 # =================================================================================
-# 9. PROGRAM
+# 9. TEST MAIL (setup wizard step 8 and commissioning, STATUS F92). Never touches the DB.
+# =================================================================================
+
+TEST_OK, TEST_FAILED, TEST_BAD_REQUEST, TEST_UNREACHABLE = "ok", "failed", "bad_request", "unreachable"
+TEST_EXIT_CODES = {TEST_OK: 0, TEST_FAILED: 1, TEST_BAD_REQUEST: 2, TEST_UNREACHABLE: 3}
+TEST_ENV = {"graph_tenant_id": "DPC_MS_TENANT_ID", "graph_client_id": "DPC_MS_CLIENT_ID",
+            "graph_client_secret": "DPC_MS_CLIENT_SECRET", "smtp_password": "DPC_SMTP_PASSWORD"}
+
+
+class _Sources:
+    """Takes a value from the command line / environment first, else from mail.json; remembers which."""
+
+    def __init__(self, raw: dict):
+        self.raw = raw or {}
+        self.used_cli = False
+        self.used_json = False
+
+    def pick(self, given, json_key):
+        if given not in (None, "", []):
+            self.used_cli = True
+            return given
+        value = _Reader(self.raw).lookup(json_key)
+        if value not in (_MISSING, None, "", []):
+            self.used_json = True
+            return value
+        return None
+
+    def described(self) -> str:
+        if self.used_json and self.used_cli:
+            return "mail.json + command line"
+        return "mail.json" if self.used_json else "command line"
+
+
+def _address_list(values) -> List[str]:
+    """--to a,b --to c -> [a, b, c]; a list from mail.json stays a list."""
+    out = []
+    for value in values or []:
+        out += [part.strip() for part in str(value).split(",") if part.strip()]
+    return out
+
+
+def _bad_addresses(addresses) -> List[str]:
+    return [a for a in addresses if "@" not in a or " " in a]
+
+
+def test_mail_settings(args, env, raw):
+    """(Settings for one test send, settings_from) or raise ConfigError naming what is missing."""
+    src = _Sources(raw)
+    sender = src.pick(args.sender, "mail.sender") or "graph"
+    if sender not in ("graph", "smtp"):
+        raise ConfigError(f"sender must be graph or smtp, got {sender!r}")
+    sender_address = src.pick(args.sender_address, "mail.sender_address")
+    to = _address_list(src.pick(_address_list(args.to), "mail.to"))
+    cc = _address_list(src.pick(_address_list(args.cc), "mail.cc"))
+    project = src.pick(args.project_name, "mail.project_name") or _Reader(raw or {}).lookup("site.name")
+    project = project if isinstance(project, str) and project else "DPC"
+
+    missing = []
+    if not sender_address:
+        missing.append("--from")
+    if not to:
+        missing.append("--to")
+    bad = _bad_addresses(([sender_address] if sender_address else []) + to + cc)
+    if bad:
+        raise ConfigError(f"not an e-mail address: {', '.join(bad)}")
+
+    s = Settings(root="", logs_dir="", state_dir="", backup_count=0, db_host="", db_port=0, db_name="",
+                 db_user="", db_password="", sender=sender, sender_address=sender_address or "",
+                 project_name=project, to=to, cc=cc, report_url=None, max_alert_age_hours=None, flood=None)
+    if sender == "graph":
+        for attr, json_key in (("graph_tenant_id", "graph.tenant_id"), ("graph_client_id", "graph.client_id"),
+                               ("graph_client_secret", "graph.client_secret")):
+            value = src.pick(env.get(TEST_ENV[attr]), json_key)
+            if not value:
+                missing.append(TEST_ENV[attr])
+            setattr(s, attr, value or "")
+    else:
+        s.smtp_host = src.pick(args.smtp_host, "mail.smtp.host") or ""
+        port = src.pick(args.smtp_port, "mail.smtp.port")
+        s.smtp_port = int(port) if port else 0
+        s.smtp_password = src.pick(env.get(TEST_ENV["smtp_password"]), "mail.smtp.password") or ""
+        missing += [name for name, value in (("--smtp-host", s.smtp_host), ("--smtp-port", s.smtp_port),
+                                             (TEST_ENV["smtp_password"], s.smtp_password)) if not value]
+    if missing:
+        raise ConfigError("missing: " + ", ".join(missing))
+    return s, src.described()
+
+
+def test_mail_content(project_name, now=None):
+    now = now or datetime.datetime.now()
+    subject = f"DPC test mail: {project_name}"
+    body = (f"Dear All,<br><br>"
+            f"This is a test mail from the {project_name} defect-alert program, sent "
+            f"{now.strftime('%Y-%m-%d %H:%M:%S')}.<br>"
+            f"It confirms that defect alerts can reach this address. It reports no defect.<br><br>"
+            f"Thanks & Regards,<br>Insightzz Team")
+    return subject, body
+
+
+def run_test_mail(args, env=None, raw=None, raw_error=None) -> dict:
+    """Send one test mail. Returns the result dict; never raises for mail or settings trouble."""
+    env = os.environ if env is None else env
+    result = {"ok": False, "status": TEST_BAD_REQUEST, "action": "test_mail", "message": "",
+              "sender": None, "to_count": 0, "cc_count": 0, "settings_from": None}
+    try:
+        s, settings_from = test_mail_settings(args, env, raw)
+    except ConfigError as e:
+        result["message"] = str(e) + (f" (mail.json: {raw_error})" if raw_error else "")
+        return result
+    result.update(sender=s.sender, to_count=len(s.to), cc_count=len(s.cc), settings_from=settings_from)
+    subject, body = test_mail_content(s.project_name)
+    send = graph_send_result if s.sender == "graph" else smtp_send_result
+    sent = send(s, subject, body, [], s.to, s.cc)
+    message = sent.message
+    for secret in sorted({x for x in s.secrets() if x}, key=len, reverse=True):
+        message = message.replace(secret, "***")
+    result.update(ok=sent.ok, status=TEST_OK if sent.ok else sent.status, message=message)
+    return result
+
+
+def _optional_mail_json():
+    """(raw mail.json or None, error text or None). For the test mail the file is optional."""
+    path = os.environ.get("DPC_WORKER_CONFIG", "")
+    if not path or not os.path.isfile(path):
+        return None, None
+    try:
+        return read_raw_config(), None
+    except ConfigError as e:
+        return None, str(e)
+
+
+def _parse_args(argv):
+    parser = argparse.ArgumentParser(description="DPC immediate defect-alert mail (no options = the service)")
+    test = parser.add_argument_group("test mail (setup wizard / commissioning; never touches the DB)")
+    test.add_argument("--test", action="store_true", help="send one test mail and exit")
+    test.add_argument("--json", action="store_true", help="print the result as JSON (for the UI)")
+    test.add_argument("--sender", choices=("graph", "smtp"), help="default: mail.json, else graph")
+    test.add_argument("--from", dest="sender_address", help="sender address")
+    test.add_argument("--to", action="append", help="recipient(s), comma-separated, may repeat")
+    test.add_argument("--cc", action="append", help="cc address(es), comma-separated, may repeat")
+    test.add_argument("--project-name", dest="project_name", help="name in the subject and text")
+    test.add_argument("--smtp-host", dest="smtp_host")
+    test.add_argument("--smtp-port", dest="smtp_port", type=int)
+    args = parser.parse_args(argv)
+    test_only = ("json", "sender", "sender_address", "to", "cc", "project_name", "smtp_host", "smtp_port")
+    if not args.test and any(getattr(args, name) not in (None, False) for name in test_only):
+        parser.error("these options belong to --test")
+    return args
+
+
+def test_mail_main(args) -> int:
+    raw, raw_error = _optional_mail_json()
+    result = run_test_mail(args, raw=raw, raw_error=raw_error)
+    if args.json:
+        print(json.dumps(result))
+    else:
+        print(f"{result['status']}: {result['message']}")
+    return TEST_EXIT_CODES[result["status"]]
+
+
+# =================================================================================
+# 10. SERVICE
 # =================================================================================
 
 _stop = False
@@ -789,7 +980,10 @@ def run(s: Settings, log):
             pass
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
+    if args.test:
+        return test_mail_main(args)
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
     raw, secrets = {}, []

@@ -481,6 +481,163 @@ class PollTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------------------------
+# Test mail for the setup wizard (STATUS F92): fake Graph, the DB must never be touched
+# ---------------------------------------------------------------------------------------------
+GRAPH_ENV = {"DPC_MS_TENANT_ID": "tenant-x", "DPC_MS_CLIENT_ID": "client-x", "DPC_MS_CLIENT_SECRET": FAKE_SECRET}
+
+
+class EchoSecretGraph(FakeGraph):
+    """A token endpoint that refuses and echoes the request (worst case for leaking a secret)."""
+
+    def post(self, url, **kwargs):
+        if "oauth2" in url:
+            return FakeResponse(401, {"error": "invalid_client", "echo": kwargs.get("data")})
+        return super().post(url, **kwargs)
+
+
+class FakeSmtp:
+    sent = []
+
+    def __init__(self, host, port, timeout=None):
+        self.host, self.port = host, port
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def starttls(self):
+        pass
+
+    def login(self, user, password):
+        self.login_as = (user, password)
+
+    def sendmail(self, sender, recipients, text):
+        FakeSmtp.sent.append((sender, recipients, text))
+
+
+class TestMailTests(unittest.TestCase):
+    def setUp(self):
+        self.graph = FakeGraph()
+        self._real_post = M.requests.post
+        M.requests.post = self.graph.post
+        self.addCleanup(setattr, M.requests, "post", self._real_post)
+        # the test mail must never open the database
+        for name in ("connect_db",):
+            real = getattr(M, name)
+            setattr(M, name, self._db_forbidden)
+            self.addCleanup(setattr, M, name, real)
+        real_connect = M.pymysql.connect
+        M.pymysql.connect = self._db_forbidden
+        self.addCleanup(setattr, M.pymysql, "connect", real_connect)
+
+    @staticmethod
+    def _db_forbidden(*args, **kwargs):
+        raise AssertionError("the test mail touched the database")
+
+    def run_test(self, argv, env=GRAPH_ENV, raw=None):
+        return M.run_test_mail(M._parse_args(["--test"] + argv), env=dict(env), raw=raw)
+
+    def test_graph_ok_sends_one_plain_mail(self):
+        r = self.run_test(["--from", "reports@example.com", "--to", "a@example.com,b@example.com",
+                           "--cc", "c@example.com", "--project-name", "Tadipatri DPC"])
+        self.assertEqual((r["ok"], r["status"], r["to_count"], r["cc_count"]), (True, "ok", 2, 1))
+        self.assertEqual(r["settings_from"], "command line")
+        self.assertEqual(len(self.graph.mails), 1)
+        mail = self.graph.mails[0]
+        self.assertEqual(mail["subject"], "DPC test mail: Tadipatri DPC")
+        self.assertEqual([x["emailAddress"]["address"] for x in mail["toRecipients"]], ["a@example.com", "b@example.com"])
+        self.assertEqual([x["emailAddress"]["address"] for x in mail["ccRecipients"]], ["c@example.com"])
+        self.assertEqual(mail["attachments"], [])
+        self.assertIn("reports no defect", mail["body"]["content"])
+
+    def test_graph_refused_is_failed(self):
+        self.graph.send_status = 403
+        r = self.run_test(["--from", "reports@example.com", "--to", "a@example.com"])
+        self.assertEqual((r["ok"], r["status"]), (False, "failed"))
+        self.assertIn("HTTP 403", r["message"])
+        self.assertEqual(M.TEST_EXIT_CODES[r["status"]], 1)
+
+    def test_network_error_is_unreachable(self):
+        def no_network(url, **kwargs):
+            raise M.requests.ConnectionError("no route")
+        M.requests.post = no_network
+        r = self.run_test(["--from", "reports@example.com", "--to", "a@example.com"])
+        self.assertEqual((r["status"], M.TEST_EXIT_CODES[r["status"]]), ("unreachable", 3))
+
+    def test_missing_settings_are_a_bad_request_and_nothing_is_sent(self):
+        env = dict(GRAPH_ENV)
+        del env["DPC_MS_CLIENT_SECRET"]
+        r = self.run_test([], env=env)
+        self.assertEqual(r["status"], "bad_request")
+        for name in ("--from", "--to", "DPC_MS_CLIENT_SECRET"):
+            self.assertIn(name, r["message"])
+        self.assertEqual(self.graph.mails, [])
+        self.assertEqual(M.TEST_EXIT_CODES[r["status"]], 2)
+
+    def test_bad_address_is_a_bad_request(self):
+        r = self.run_test(["--from", "reports@example.com", "--to", "not-an-address"])
+        self.assertEqual(r["status"], "bad_request")
+        self.assertIn("not-an-address", r["message"])
+
+    def test_values_fall_back_to_mail_json_and_the_command_line_wins(self):
+        raw = mail_json("/tmp/r")
+        r = self.run_test([], env={}, raw=raw)
+        self.assertEqual((r["status"], r["to_count"], r["cc_count"], r["settings_from"]), ("ok", 2, 1, "mail.json"))
+        self.assertEqual(self.graph.mails[-1]["subject"], "DPC test mail: Test_dpc")
+        r = self.run_test(["--to", "only@example.com"], env={}, raw=raw)
+        self.assertEqual((r["to_count"], r["settings_from"]), (1, "mail.json + command line"))
+
+    def test_a_secret_never_appears_in_the_result(self):
+        M.requests.post = EchoSecretGraph().post
+        r = self.run_test(["--from", "reports@example.com", "--to", "a@example.com"])
+        self.assertEqual(r["status"], "failed")
+        self.assertNotIn(FAKE_SECRET, json.dumps(r))
+        self.assertIn("***", r["message"])
+
+    def test_smtp_path(self):
+        real_smtp = M.smtplib.SMTP
+        M.smtplib.SMTP = FakeSmtp
+        self.addCleanup(setattr, M.smtplib, "SMTP", real_smtp)
+        FakeSmtp.sent = []
+        r = self.run_test(["--sender", "smtp", "--from", "reports@example.com", "--to", "a@example.com",
+                           "--smtp-host", "smtp.example.com", "--smtp-port", "587"],
+                          env={"DPC_SMTP_PASSWORD": "smtp-pw"})
+        self.assertEqual(r["status"], "ok")
+        self.assertEqual(FakeSmtp.sent[0][1], ["a@example.com"])
+        r = self.run_test(["--sender", "smtp", "--from", "reports@example.com", "--to", "a@example.com"], env={})
+        self.assertEqual(r["status"], "bad_request")
+        for name in ("--smtp-host", "--smtp-port", "DPC_SMTP_PASSWORD"):
+            self.assertIn(name, r["message"])
+
+
+class TestMailCliTests(unittest.TestCase):
+    """The real command line, in a subprocess (no network needed: bad requests only)."""
+
+    def run_cli(self, argv, extra_env=None):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("DPC_")}
+        env.update(extra_env or {})
+        proc = subprocess.run([sys.executable, os.path.join(WORKER_DIR, "mail_worker.py")] + argv,
+                              env=env, capture_output=True, text=True, timeout=60, cwd=root)
+        return proc, root
+
+    def test_json_result_and_exit_code_2_without_settings(self):
+        proc, root = self.run_cli(["--test", "--json"])
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        result = json.loads(proc.stdout)
+        self.assertEqual((result["ok"], result["status"], result["action"]), (False, "bad_request", "test_mail"))
+        self.assertEqual(os.listdir(root), [])          # no log, no last_error, no state
+
+    def test_test_options_without_test_are_refused(self):
+        proc, _ = self.run_cli(["--to", "a@example.com"])
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("belong to --test", proc.stderr)
+
+
+# ---------------------------------------------------------------------------------------------
 # Crash behaviour (whole program in a subprocess)
 # ---------------------------------------------------------------------------------------------
 class CrashTests(unittest.TestCase):
