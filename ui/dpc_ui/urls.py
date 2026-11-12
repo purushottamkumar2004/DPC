@@ -5,6 +5,7 @@ runs on 127.0.0.1 for one kiosk browser, so no web server or CDN is needed (D-09
   /side/<SIDE>/          LEFT / RIGHT page (level 2), tabs Live and Detections
   /defects/              Defects
   /system/programs/      System > Programs (logs), /system/health/, /system/alerts/
+  /setup/                Setup wizard (D-103), /setup/commissioning/ after Apply
 Older addresses (/programs/, /alerts/, /health/, /cameras/<SIDE>/) keep working.
 """
 from django.conf import settings
@@ -12,7 +13,7 @@ from django.shortcuts import redirect
 from django.urls import path, re_path
 from django.views.static import serve
 
-from monitor.views import alerts, cameras, dashboard, defects, health, overview_page, programs, side_page
+from monitor.views import alerts, cameras, dashboard, defects, health, overview_page, programs, setup_page, side_page
 
 urlpatterns = [
     path("", overview_page.page, name="overview"),
@@ -49,6 +50,20 @@ urlpatterns = [
     path("defects/export.csv", defects.export_csv, name="defects-csv"),
     path("defects/<int:defect_id>/", defects.detail, name="defect"),
     path("defects/<int:defect_id>/image.jpg", defects.image, name="defect-image"),
+
+    path("setup/", setup_page.start, name="setup"),
+    path("setup/mode.json", setup_page.mode_json, name="setup-mode"),
+    path("setup/apply/", setup_page.apply_start, name="setup-apply"),
+    path("part/setup/apply/", setup_page.apply_part, name="part-setup-apply"),
+    path("part/setup/job/", setup_page.job_part, name="part-setup-job"),
+    path("setup/cameras/resume/", setup_page.resume_cameras, name="setup-resume-cameras"),
+    re_path(r"^setup/frame/(?P<serial>[\w.-]+)/(?P<name>[\w.-]+\.jpg)$", setup_page.frame, name="setup-frame"),
+    path("setup/commissioning/", setup_page.commissioning_page, name="commissioning"),
+    path("part/setup/commissioning/", setup_page.commissioning_part, name="part-commissioning"),
+    path("setup/commissioning/do/<str:name>/", setup_page.commissioning_action, name="commissioning-action"),
+    path("setup/report/<str:name>.html", setup_page.report, name="commissioning-report"),
+    path("setup/<str:step>/", setup_page.step_page, name="setup-step"),
+    path("setup/<str:step>/do/<str:name>/", setup_page.action, name="setup-action"),
 
     re_path(r"^static/(?P<path>.*)$", serve, {"document_root": settings.STATIC_DIR}),
 ]

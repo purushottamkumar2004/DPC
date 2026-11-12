@@ -16,6 +16,10 @@ def _context(oob=False):
 
 @require_GET
 def page(request):
+    from django.shortcuts import redirect
+    from monitor.setup.env import mode
+    if mode() == "setup":                         # D-103/D-107: a site in setup mode opens on the wizard
+        return redirect("/setup/")
     return render(request, "monitor/overview.html", _context())
 
 

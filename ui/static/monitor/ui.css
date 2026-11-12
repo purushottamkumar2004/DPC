@@ -248,3 +248,36 @@ a.tile:hover { border-color: var(--hover); }
 .pair .row, #side-roi .row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 0.5px solid var(--row); }
 .sidecol .facts.four { grid-template-columns: 1fr 1fr; }
 .main.page > section.pair { margin: 0; }
+
+/* ---------------- setup wizard (S8, D-103) ---------------- */
+.wizsteps { flex-wrap: wrap; }
+.wizard .explain { font-size: 15px; margin: 0 0 12px; }
+.fields { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 10px 16px; margin-bottom: 12px; }
+.fields.three { grid-template-columns: repeat(3, minmax(160px, 1fr)); }
+.fields.five { grid-template-columns: repeat(5, minmax(120px, 1fr)); }
+.field { display: flex; flex-direction: column; gap: 3px; }
+.field .flabel { font-size: 12px; color: var(--muted); }
+.field.bad input { border-color: var(--err); }
+.ferr { color: var(--err); font-size: 12.5px; }
+fieldset.choice { border: 0.5px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 0 0 12px; }
+fieldset.choice legend { padding: 0 6px; font-weight: 600; }
+fieldset.choice > label { display: block; margin: 4px 0; }
+.wiznav { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.btn.primary { background: var(--ok-bg); border-color: var(--ok); color: var(--ok); font-weight: 600; }
+.btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+.result { margin: 6px 0; } .plainlines { margin: 4px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+.spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: spin 0.9s linear infinite; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.camgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 12px; }
+.camcard.chosen { border-color: var(--ok); }
+.camcard .img { margin: 6px 0; }
+.sidepick { margin: 8px 0; display: flex; gap: 6px; align-items: center; }
+.direction { border-top: 0.5px solid var(--row); margin-top: 8px; padding-top: 8px; }
+.browser { margin-top: 10px; max-height: 260px; overflow: auto; background: var(--tile); border-radius: 6px; padding: 6px 10px; }
+.browser a { text-decoration: underline; }
+.reviewgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.reviewgrid h3 { margin-top: 10px; }
+.checkrow .tick { font-weight: 700; margin-right: 6px; }
+.row form { display: inline; }
+.camcard .fields.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.field input, .field select { width: 100%; min-width: 0; }

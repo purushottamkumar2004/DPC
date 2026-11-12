@@ -1,0 +1,1 @@
+{% if r %}<div class="result lvl-{{ r.level }}"><span class="{% if r.level == 'ok' %}c-ok{% elif r.level == 'warning' %}c-warn{% else %}c-err{% endif %}">{{ r.sentence }}</span>{% if r.lines %}<ul class="plainlines">{% for l in r.lines %}<li>{{ l }}</li>{% endfor %}</ul>{% endif %}</div>{% endif %}

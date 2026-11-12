@@ -1,0 +1,8 @@
+{% comment %}Background tool state (one at a time). Polled every second while a job runs.{% endcomment %}
+<div id="jobstate" data-finished="{{ job.finished_at|default:'' }}" {% if job.running %}hx-get="/part/setup/job/" hx-trigger="every 1s" hx-target="#job" hx-swap="innerHTML"{% endif %}>
+  {% for k, v in errors.items %}<p class="note lvl-warning">{{ v }}</p>{% endfor %}
+  {% if job.running %}<p><span class="spin"></span> {{ job.title }}… {{ job.elapsed_s }} s</p>
+  {% elif plain %}<div class="result lvl-{{ plain.level }}"><p class="{% if plain.level == 'ok' %}c-ok{% elif plain.level == 'warning' %}c-warn{% else %}c-err{% endif %}">{{ job.title }}: {{ plain.sentence }}</p>
+    {% if plain.lines %}<ul class="plainlines">{% for l in plain.lines %}<li>{{ l }}</li>{% endfor %}</ul>{% endif %}</div>
+  {% else %}<p class="muted">Nothing is running. Buttons that talk to the machine show their result here.</p>{% endif %}
+</div>

@@ -1,0 +1,7 @@
+{% if busy %}<p class="note lvl-warning">Please wait: {{ busy }} is still running.</p>
+{% elif state == "running" %}<div hx-get="/part/setup/apply/" hx-trigger="every 1s" hx-swap="outerHTML"><p><span class="spin"></span> Writing the settings and checking the database…</p></div>
+{% elif state == "waiting" %}<div hx-get="/part/setup/apply/" hx-trigger="every 1s" hx-swap="outerHTML"><p><span class="spin"></span> Settings written{% if result.backup %} (old file kept as {{ result.backup }}){% endif %}. Waiting for the Supervisor to check them and switch to normal mode…</p></div>
+{% elif state == "ok" %}<div id="applyok"><p class="c-ok">The Supervisor accepted the setup and is starting every program. This screen restarts too; the Overview opens by itself.</p>
+  <script>(function wait(){ fetch("/setup/mode.json",{cache:"no-store"}).then(function(r){return r.json();}).then(function(m){ if(m.mode==="normal"){ location.href="/"; } else { setTimeout(wait, 2000); } }).catch(function(){ setTimeout(wait, 2000); }); })();</script></div>
+{% elif state == "refused" %}<div class="result lvl-error"><p class="c-err">Not applied. Nothing is running yet; correct these points and apply again:</p>
+  <ul class="plainlines">{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul></div>{% endif %}

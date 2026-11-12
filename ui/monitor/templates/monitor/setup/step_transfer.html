@@ -1,0 +1,19 @@
+{% extends "monitor/setup/frame.html" %}
+{% block step %}
+<fieldset class="choice"><legend>Data transfer (SharePoint)</legend>
+  <label><input type="radio" name="enabled" value="no" {% if not answers.transfer %}checked{% endif %}> Not now</label>
+  <label><input type="radio" name="enabled" value="yes" {% if answers.transfer %}checked{% endif %}> Use the SharePoint drive of the DPC site for training data and model updates</label>
+</fieldset>
+<div class="fields">
+  {% with name="drive_site" label="SharePoint site" value=answers.transfer.drive.site placeholder="contoso.sharepoint.com:/sites/DPC" help="Or leave empty and give a user's OneDrive below" %}{% include "monitor/setup/field.html" %}{% endwith %}
+  {% with name="drive_user" label="OneDrive of a user" value=answers.transfer.drive.user placeholder="dpc@contoso.com" %}{% include "monitor/setup/field.html" %}{% endwith %}
+</div>
+<label><input type="checkbox" name="upload" {% if answers.transfer.upload|default_if_none:True %}checked{% endif %}> Upload training data when asked (one cycle per click)</label>
+<p>Microsoft 365 login: {% if graph_set %}<span class="c-ok">set</span>{% else %}<span class="c-warn">not set</span>: enter it in the Mail step, or here:{% endif %}</p>
+{% if not graph_set %}<div class="fields three"><label class="field"><span class="flabel">Tenant id</span><input type="password" name="graph_tenant_id"></label>
+  <label class="field"><span class="flabel">Client id</span><input type="password" name="graph_client_id"></label>
+  <label class="field"><span class="flabel">Client secret</span><input type="password" name="graph_client_secret"></label></div>{% endif %}
+<p><button class="btn" hx-post="/setup/transfer/do/test/" hx-include="#stepform" hx-target="#job" data-tip="Login, drive, models folder and (with upload) a small test file written and deleted">Test</button></p>
+{% with r=result %}{% include "monitor/setup/result.html" %}{% endwith %}
+{% for k, v in errors.items %}<p class="ferr">{{ v }}</p>{% endfor %}
+{% endblock %}

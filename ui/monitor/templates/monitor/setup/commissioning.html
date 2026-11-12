@@ -1,0 +1,6 @@
+{% extends "monitor/base.html" %}
+{% block content %}
+<header class="card top pagetop"><div><div class="site">Setup · Commissioning</div><div class="muted">The checklist after Apply (D-103); ticks come live from the programs.</div></div></header>
+{% if mode == "setup" %}<p class="card note lvl-warning">The setup is not applied yet: the programs do not run, so nothing can be ticked. Finish the wizard first.</p>{% endif %}
+<div hx-get="/part/setup/commissioning/" hx-trigger="every 3s" hx-swap="innerHTML">{% include "monitor/setup/commissioning_body.html" %}</div>
+{% endblock %}

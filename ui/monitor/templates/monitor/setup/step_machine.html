@@ -1,0 +1,8 @@
+{% extends "monitor/setup/frame.html" %}
+{% block step %}
+<div class="fields">
+{% with name="total_wheel_count" label="Wheels per revolution" value=form.total_wheel_count|default:answers.machine.total_wheel_count help="Count the wheels of one full turn of the conveyor (any number)." %}{% include "monitor/setup/field.html" %}{% endwith %}
+{% with name="expected_cycle_total" label="Expected cycle total" value=form.expected_cycle_total|default:answers.machine.expected_cycle_total help="Normally the same number; left empty, it is the wheel count." %}{% include "monitor/setup/field.html" %}{% endwith %}
+</div>
+<p class="muted">Commissioning checks it: one revolution must count exactly this number.</p>
+{% endblock %}

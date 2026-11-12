@@ -1,0 +1,45 @@
+{% extends "monitor/setup/frame.html" %}
+{% block step %}
+<div data-paused="{{ paused|join:',' }}">
+<p><button class="btn" hx-post="/setup/cameras/do/search/" hx-target="#job">Search</button>
+  {% with r=search %}{% include "monitor/setup/result.html" %}{% endwith %}</p>
+{% if paused %}<p class="note lvl-warning">Paused for the test: {{ paused|join:", " }}. Its inspection side is paused too.
+  <button class="btn" hx-post="/setup/cameras/do/resume/" hx-target="#job">Start them again</button> (also happens when you leave this step)</p>{% endif %}
+{% for k, v in errors.items %}{% if k == "cameras" %}<p class="ferr">{{ v }}</p>{% endif %}{% endfor %}
+<div class="camgrid">
+{% for c in cams %}
+<div class="card camcard{% if c.side %} chosen{% endif %}">
+  <div class="h"><span>{{ c.serial }}</span><span class="muted">{{ c.driver }} {{ c.model|default:"" }} {{ c.ip|default:"" }}</span></div>
+  <div class="img whole">{% if c.grab %}<img src="/setup/frame/{{ c.serial }}/{{ c.grab }}" alt="camera {{ c.serial }}">{% else %}<span class="nolive" style="display:flex">no image yet: Grab</span>{% endif %}</div>
+  {% with r=c.result %}{% include "monitor/setup/result.html" %}{% endwith %}
+  {% if c.result.level == "warning" and mode == "normal" %}<p><button class="btn" hx-post="/setup/cameras/do/pause/" hx-vals='{"serial": "{{ c.serial }}"}' hx-target="#job" data-tip="Stops this camera's capture program (and so its inspection side) until you leave this step">Pause this camera for the test</button></p>{% endif %}
+  <div class="sidepick">This is
+    <button class="btn{% if c.side == 'LEFT' %} primary{% endif %}" formaction="/setup/cameras/do/assign/" name="side" value="LEFT" onclick="this.form.serial.value='{{ c.serial }}'">LEFT</button>
+    <button class="btn{% if c.side == 'RIGHT' %} primary{% endif %}" formaction="/setup/cameras/do/assign/" name="side" value="RIGHT" onclick="this.form.serial.value='{{ c.serial }}'">RIGHT</button>
+    <button class="btn{% if not c.side %} primary{% endif %}" formaction="/setup/cameras/do/assign/" name="side" value="" onclick="this.form.serial.value='{{ c.serial }}'">not used</button></div>
+  <div class="fields three">
+    {% with name="exposure_us_"|add:c.serial label="Exposure (µs)" value=c.exposure_us %}{% include "monitor/setup/field.html" %}{% endwith %}
+    {% with name="fps_"|add:c.serial label="Frame rate (fps)" value=c.fps help="About 4" %}{% include "monitor/setup/field.html" %}{% endwith %}
+    <label class="field"><span class="flabel">Rotate</span><select name="rotate_{{ c.serial }}">
+      <option value="0" {% if c.rotate == 0 %}selected{% endif %}>0°</option><option value="90" {% if c.rotate == 90 %}selected{% endif %}>90°</option>
+      <option value="180" {% if c.rotate == 180 %}selected{% endif %}>180°</option><option value="270" {% if c.rotate == 270 %}selected{% endif %}>270°</option></select></label>
+  </div>
+  <p><button class="btn" hx-post="/setup/cameras/do/grab/" hx-vals='{"serial": "{{ c.serial }}"}' hx-include="[name='exposure_us_{{ c.serial }}']" hx-target="#job" data-tip="Takes one image with this exposure">Grab again</button></p>
+  {% if c.side %}
+  <div class="direction"><b>Direction</b> <span class="muted">Start the conveyor, then record a few seconds of frames.</span>
+    <p><button class="btn" hx-post="/setup/cameras/do/burst/" hx-vals='{"serial": "{{ c.serial }}"}' hx-target="#job">Record frames</button>
+      {% if c.burst %}<button class="btn" hx-post="/setup/cameras/do/direction/" hx-vals='{"serial": "{{ c.serial }}"}' hx-target="#job">Detect direction</button>{% endif %}</p>
+    {% with r=c.burst_result %}{% include "monitor/setup/result.html" %}{% endwith %}
+    {% if c.detected %}<p>Detected: <b>{% if c.detected.value == "rtl" %}right to left{% elif c.detected.value == "ltr" %}left to right{% else %}unknown{% endif %}</b>
+      <span class="muted">{{ c.detected.reason|default:"" }}{% if c.detected.consistency %} · {{ c.detected.consistency }} of the steps agree{% endif %}</span></p>{% endif %}
+    {% if not model_ready and c.burst %}<p class="muted">The direction is detected with the model: after the Model step, come back or use "Detect direction" there. You may also choose it.</p>{% endif %}
+    <p>Use: <button class="btn{% if c.motion == 'rtl' %} primary{% endif %}" formaction="/setup/cameras/do/motion/" name="motion" value="rtl" onclick="this.form.serial.value='{{ c.serial }}'">right to left</button>
+      <button class="btn{% if c.motion == 'ltr' %} primary{% endif %}" formaction="/setup/cameras/do/motion/" name="motion" value="ltr" onclick="this.form.serial.value='{{ c.serial }}'">left to right</button></p>
+    {% for k, v in errors.items %}{% if k == "motion_"|add:c.serial %}<span class="ferr">{{ v }}</span>{% endif %}{% endfor %}
+  </div>{% endif %}
+</div>
+{% empty %}<p class="muted">No camera yet: press Search.</p>{% endfor %}
+</div>
+<input type="hidden" name="serial" value="">
+</div>
+{% endblock %}

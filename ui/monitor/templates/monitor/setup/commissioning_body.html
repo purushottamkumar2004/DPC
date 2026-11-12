@@ -1,0 +1,30 @@
+<section class="card">
+  <div class="h"><span>Checklist</span><span class="muted">{{ items|length }} checks</span></div>
+  {% for i in items %}<div class="row checkrow" data-tip="{{ i.hint|default:i.detail }}">
+    <span>{% if i.ok %}<span class="c-ok tick">✓</span>{% else %}<span class="c-off tick">○</span>{% endif %} {{ i.title }}</span>
+    <span class="muted">{{ i.detail }}{% if i.at %} · ticked {{ i.at|slice:"11:16" }}{% endif %}</span></div>{% endfor %}
+</section>
+<section class="card"><div class="h"><span>Auto-ROI</span><span class="muted">learn, watch in observe mode, then filter</span></div>
+  {% for r in roi %}<div class="row"><span>{{ r.side }}: {% if r.learned %}<span class="c-ok">learned</span>{% else %}not learned{% endif %} · mode {{ r.mode }} · {{ r.learning }}</span>
+    <form method="post" action="/setup/commissioning/do/learn/">{% csrf_token %}<input type="hidden" name="worker" value="{{ r.worker }}">
+      <button class="btn" data-tip="Inspection learns the regions over the next full cycle (plate to plate)"{% if r.requested %} disabled{% endif %}>Learn now</button></form></div>{% endfor %}
+  <form method="post" action="/setup/commissioning/do/roi_mode/" onsubmit="return confirm('Change the auto-ROI mode? Both inspections restart and pause until the next plate.')">{% csrf_token %}
+    <p>Mode for the site: <button class="btn" name="mode" value="observe">Observe</button> <button class="btn" name="mode" value="filter">Filter</button>
+      <span class="muted">Changing it writes site.yaml and restarts both inspections; they pause until the next plate.</span></p></form>
+  {% if roi_job %}<p class="muted">Last change: {% if roi_job.result.ok %}<span class="c-ok">mode {{ roi_job.result.mode }} applied</span>{% else %}<span class="c-err">{{ roi_job.error|default:"failed" }}</span>{% endif %}</p>{% endif %}
+</section>
+{% if mail_configured %}<section class="card"><div class="h"><span>Mail</span></div>
+  <form method="post" action="/setup/commissioning/do/mail/">{% csrf_token %}<button class="btn">Send test mail</button></form>
+  {% with r=tests.mail %}{% include "monitor/setup/result.html" %}{% endwith %}</section>{% endif %}
+{% if transfer %}<section class="card"><div class="h"><span>Data transfer</span></div>
+  <div class="row"><form method="post" action="/setup/commissioning/do/transfer_check/">{% csrf_token %}<button class="btn">Check access</button></form>
+    <form method="post" action="/setup/commissioning/do/model_update/">{% csrf_token %}<button class="btn" data-tip="Looks for a newer model zip; downloads and prepares it, never switches">Check for model update</button></form>
+    <form method="post" action="/setup/commissioning/do/upload_cycle/">{% csrf_token %}<button class="btn" data-tip="Uploads the next full revolution of both sides">Upload one cycle</button></form>
+    <form method="post" action="/setup/commissioning/do/cancel/">{% csrf_token %}<button class="btn">Cancel</button></form></div>
+  {% with r=tests.transfer %}{% include "monitor/setup/result.html" %}{% endwith %}
+  {% for k, b in progress_blocks.items %}{% if b.state %}<p class="muted">{{ k }}: {{ b.state }}{% if b.bytes_total %} · {% widthratio b.bytes_done b.bytes_total 100 %} %{% endif %}{% if b.message %} · {{ b.message }}{% endif %}</p>{% endif %}{% endfor %}
+</section>{% endif %}
+<section class="card"><div class="h"><span>Report</span></div>
+  <form method="post" action="/setup/commissioning/do/report/">{% csrf_token %}<button class="btn primary">Save commissioning report</button></form>
+  {% for r in reports %}<p><a href="/setup/report/{{ r }}.html" target="_blank">{{ r }}</a> (printable)</p>{% endfor %}
+</section>

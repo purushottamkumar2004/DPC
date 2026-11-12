@@ -213,7 +213,8 @@ class SystemAndSidebarTests(Base):
         nav = html[html.index('class="sb"'):html.index("</nav>")]
         labels = re.findall(r'<a [^>]*aria-label="([^"]+)">', nav)
         self.assertEqual(labels[:6], ["Overview", "LEFT", "RIGHT", "Defects", "System", "Setup"])
-        self.assertIn('class=" later" data-tip="Site setup wizard: coming"', nav)
+        # S8 enabled Setup (was greyed "Site setup wizard: coming" in UI-1c)
+        self.assertIn('href="/setup/" class="" data-tip="Setup: the site setup wizard and commissioning"', nav)
         for gone in ("Alerts", "Programs", "Health", "Cameras", "Models", "Auto-ROI"):
             self.assertNotIn(f'aria-label="{gone}"', nav)
 
