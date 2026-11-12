@@ -16,17 +16,16 @@ Today you run them by hand in MySQL Workbench; `bootstrap.py` runs the same file
 | `test_seed.py` | Builds a scratch DB `dpc_seed_test` from the files above (twice), runs every DB statement the repo programs use, and checks the reference coverage, CONTRACTS section 5 and "no site values". Never touches a site DB. | After every change in `db/` |
 
 ## New site with bootstrap.py (recommended)
-Needs `pip install pymysql` and a MySQL admin login. Passwords come from the environment or a prompt, never from the command line:
+Needs `pip install pymysql`. On a machine set up by `install/install.sh` no MySQL admin password is typed: without one, the admin login (`dpc_setup`) is read from `<root>/config/mysql_setup.cnf` (written by install.sh step 5, D-107; F88). The program password comes from the environment or a prompt, never from the command line:
 ```bash
-export DPC_DB_ADMIN_PASS='<admin password>'   # or leave unset to be asked
 export DPC_DB_PASS='<program user password>'  # the same value goes into site.yaml db.password
 python3 db/bootstrap.py --db <site_db> --user <program_user> --serial <CAM1 serial> --serial <CAM2 serial>
 ```
-- Admin is `root` by default (`--admin-user`). If root logs in only through the socket (Ubuntu's auth_socket), run it with `sudo` and `--socket /var/run/mysqld/mysqld.sock`.
-- The program user is created for `localhost` and `127.0.0.1` (`--program-host` to change) with `ALL PRIVILEGES` on the site database only; `root` or the admin user is refused as program user. Sites may still run on root (D-050); this gives them the dedicated user.
+- Admin login, in this order: `DPC_DB_ADMIN_PASS` set (user `--admin-user`, default `root`); `--socket /var/run/mysqld/mysqld.sock` (root over auth_socket, run with `sudo`); otherwise `mysql_setup.cnf` under `--root` (default `~/INSIGHTZZ`; `--admin-option-file` for another path). If that file is missing: "run install/install.sh (it creates dpc_setup)". `--admin-user` without a password asks for it (or fails without a terminal); it never falls back to the file.
+- The program user is created for `localhost` and `127.0.0.1` (`--program-host` to change) with `ALL PRIVILEGES` on the site database only. `root`, `dpc_setup` and the admin user are refused as program user. Sites may still run on root (D-050); this gives them the dedicated user.
 - Run it again at any time: nothing changes, every step says "already there". A missing fixed row (e.g. `wheel_counter_table` row 1 on Tadipatri, D-101) or a new camera's health row is added.
 - An existing program user keeps its password; the last step ("login check") says whether the password you gave works. `--reset-password` sets it.
-- `--json` prints the report for the UI. Exit code 0 = all ok, 1 = a step failed.
+- `--json` prints the report for the UI (`admin` says which login was used, never a password). Exit code 0 = all ok, 1 = a step failed.
 
 ## New site in MySQL Workbench (by hand)
 1. Create an empty schema with the site's DB name and select it (double-click it so it is bold).
