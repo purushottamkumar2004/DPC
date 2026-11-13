@@ -2,7 +2,8 @@
 
   1. secrets: the D-108 standard login is refilled from site_defaults.yaml; any other missing
      secret refuses Apply (the review shows which, "not set")
-  2. db/bootstrap.py again with the chosen camera serials (idempotent: adds the health rows)
+  2. db/bootstrap.py --seed-only again with the chosen camera serials (D-112, F97: seeds the existing
+     database the person created; idempotent; adds the health rows; never creates a DB or a user)
   3. site_from_draft -> site_writer.write_site (loader, backup, atomic, mode 600)
   4. workers_file.write_workers_file (mail disabled when the draft has no mail)
   5. <root>/run/setup_finish = {"id": ...}; the Supervisor answers in setup_finish.result.json
@@ -39,15 +40,19 @@ def run(answers):
     if missing:
         raise ApplyRefused([f"{k} is not set: enter it again (it is kept only until the screen restarts)" for k in missing])
 
-    serials = [c["serial"] for c in answers.get("cameras") or [] if c.get("side")]
-    cmd = [env.python(), env.tool_path("bootstrap"), "--db", answers["database"]["name"], "--user", vault.get("db.user"),
-           "--root", env.root(), "--json"] + [x for s in serials for x in ("--serial", str(s))]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
-                          env=dict(os.environ, DPC_DB_PASS=vault.get("db.password") or ""))
+    from monitor.setup import tools
     from monitor.setup.jobs import parse_output
+    serials = [c["serial"] for c in answers.get("cameras") or [] if c.get("side")]
+    cmd, secret_env = tools.seed_command(answers, serials)
+    proc = subprocess.run([str(c) for c in cmd], capture_output=True, text=True, timeout=300,
+                          env=dict(os.environ, **secret_env))
     boot = parse_output(proc.stdout) or {}
     if proc.returncode != 0 or not boot.get("ok"):
-        raise ApplyRefused([f"database: {boot.get('error') or 'a step failed'}"] +
+        error = boot.get("error") or (proc.stderr or "").strip().splitlines()[-1:] or ["a step failed"]
+        error = error if isinstance(error, str) else error[0]
+        if "--seed-only" in error or "unrecognized arguments" in error:
+            raise ApplyRefused(["database: Apply needs the newer db/bootstrap.py (F97, --seed-only); update the programs"])
+        raise ApplyRefused([f"database: {tools.seed_error_sentence(error, answers['database'].get('name'))}"] +
                            [f"database {s.get('step')} {s.get('item')}: {s.get('result')}" for s in boot.get("steps") or []
                             if s.get("result") == "failed"])
 

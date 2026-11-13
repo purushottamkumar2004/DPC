@@ -132,7 +132,59 @@ class DraftTests(WizardBase):
 
 
 # ------------------------------------------------------------------------------------- steps 1, 2
+class FakeCursor:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=None):
+        self.conn.sql.append((sql, params))
+        if sql.startswith("USE") and self.conn.use_error:
+            raise self.conn.use_error
+        self.last = sql
+
+    def fetchone(self):
+        return ("x",) if self.conn.exists else None
+
+    def fetchall(self):
+        return [(t,) for t in self.conn.tables]
+
+
+class FakeConn:
+    def __init__(self, exists=True, tables=(), use_error=None):
+        self.exists, self.tables, self.use_error, self.sql = exists, list(tables), use_error, []
+
+    def cursor(self):
+        return FakeCursor(self)
+
+    def close(self):
+        pass
+
+
 class SiteAndDatabaseTests(WizardBase):
+    """F96 / D-112: the person creates the database and its login; the step tests and seeds only."""
+    FORM = {"host": "localhost", "port": "3306", "name": "baga_db", "user": "dpc_app", "password_choice": "standard"}
+
+    def setUp(self):
+        super().setUp()
+        from monitor.setup import dbcheck
+        self.dbcheck = dbcheck
+        self.addCleanup(setattr, dbcheck, "connect", dbcheck._connect)
+        self.connects = []
+
+    def use_db(self, conn=None, error=None):
+        def connect(host, port, user, password, database=None):
+            self.connects.append((host, port, user, password))
+            if error:
+                raise error
+            return conn
+        self.dbcheck.connect = connect
+
     def test_site_validation(self):
         r = self.client.post("/setup/site/", {"name": "", "go": "next"})
         self.assertEqual(r.status_code, 400)
@@ -140,53 +192,116 @@ class SiteAndDatabaseTests(WizardBase):
         r = self.client.post("/setup/site/", {"name": "X", "id": "Bad Id", "go": "next"})
         self.assertContains(r, "lowercase letters, digits, - or _", status_code=400)
 
-    def test_database_defaults_from_site_defaults(self):
+    def test_fields_prefilled_from_site_defaults(self):
         self.set_answers({"site": {"id": "baga", "name": "Baga"}}, step="database")
         page = self.client.get("/setup/database/").content.decode()
-        self.assertIn('value="baga_db"', page)                                    # D-108 <site.id>_db
-        self.assertIn('value="dpc_app"', page)
+        for value in ('name="host" value="localhost"', 'name="port" value="3306"', 'name="name" value="baga_db"',
+                      'name="user" value="dpc_app"'):
+            self.assertIn(value, page)
         self.assertIn("Standard password set", page)
         self.assertNotIn(STANDARD, page)                                          # never shown
+        self.assertIn("Test connection", page)
+        self.assertIn("Prepare tables", page)
+        self.assertNotIn("Create database", page)
+
+    def test_root_allowed_with_one_warning(self):
+        self.set_answers({"site": {"id": "baga", "name": "Baga"}}, step="database")
+        r = self.client.post("/setup/database/", dict(self.FORM, user="root", go="next"))
+        self.assertEqual(r.url, "/setup/cameras/")                                # allowed
+        self.assertEqual(vault.get("db.user"), "root")
+        page = self.client.get("/setup/database/").content.decode()
+        self.assertIn("The programs will use root: allowed", page)
 
     def test_without_site_defaults_it_asks(self):
         os.remove(os.path.join(self.root, "config", "site_defaults.yaml"))
         self.set_answers({"site": {"id": "baga", "name": "Baga"}}, step="database")
-        page = self.client.get("/setup/database/").content.decode()
-        self.assertIn("no stored company defaults", page)
-        r = self.client.post("/setup/database/", {"name": "", "user": "", "go": "next"})
-        self.assertContains(r, "Use letters, digits and _ only", status_code=400)
-        self.assertContains(r, "No standard password is stored", status_code=400)
+        self.assertIn("no stored company defaults", self.client.get("/setup/database/").content.decode())
+        r = self.client.post("/setup/database/", {"host": "bad host", "port": "99999", "name": "", "user": "", "go": "next"})
+        for text in ("Type the MySQL host", "Port must be between 1 and 65535", "Type the database name",
+                     "Type the MySQL user", "No standard password is stored"):
+            self.assertContains(r, text, status_code=400)
 
-    def test_admin_users_and_short_password_refused(self):
+    def test_draft_keeps_the_connection_but_no_login(self):
         self.set_answers({"site": {"id": "baga", "name": "Baga"}}, step="database")
-        r = self.client.post("/setup/database/", {"name": "baga_db", "user": "root", "go": "next"})
-        self.assertContains(r, "root is an admin account", status_code=400)
-        r = self.client.post("/setup/database/", {"name": "baga_db", "user": "dpc_app", "password_choice": "custom",
-                                                  "password": "short", "go": "next"})
-        self.assertContains(r, "at least 8 characters", status_code=400)
+        self.client.post("/setup/database/", dict(self.FORM, host="192.168.1.20", port="3307", password_choice="custom",
+                                                  password="Own-Pass-77", go="next"))
+        db = self.draft()["answers"]["database"]
+        self.assertEqual((db["host"], db["port"], db["name"], db["standard_login"]), ("192.168.1.20", 3307, "baga_db", False))
+        text = open(os.path.join(self.root, "data", "state", "ui", "setup_draft.json")).read()
+        self.assertNotIn("Own-Pass-77", text)
+        self.assertNotIn("dpc_app", text)
 
-    def test_create_database_with_the_standard_password_in_env_only(self):
+    def test_connection_ok_seeded_or_empty(self):
+        self.set_answers({"site": {"id": "baga", "name": "Baga"}}, step="database")
+        self.use_db(FakeConn(exists=True, tables=[]))
+        self.post("/setup/database/do/test/", self.FORM)
+        self.assertEqual(self.connects[0], ("localhost", 3306, "dpc_app", STANDARD))
+        page = self.client.get("/setup/database/").content.decode()
+        self.assertIn("Connected. The database baga_db exists and is empty: press Prepare tables.", page)
+        self.use_db(FakeConn(exists=True, tables=["defects_table", "wheel_counter_table", "health_status", "x"]))
+        self.post("/setup/database/do/test/", self.FORM)
+        self.assertIn("exists and has its tables (4).", self.client.get("/setup/database/").content.decode())
+
+    def test_missing_database_says_create_it_first(self):
+        self.set_answers({"site": {"id": "baga", "name": "Baga"}}, step="database")
+        self.use_db(FakeConn(exists=False))
+        self.post("/setup/database/do/test/", self.FORM)
+        page = self.client.get("/setup/database/").content.decode()
+        self.assertIn("Create the database baga_db first, for example in MySQL Workbench, then press Test connection again",
+                      page)
+        for hint in ("install.sh", "sudo", "terminal", "mysql -u"):
+            self.assertNotIn(hint, page)
+
+    def test_login_refused_unreachable_and_no_rights(self):
+        import pymysql
+        self.set_answers({"site": {"id": "baga", "name": "Baga"}}, step="database")
+        cases = ((pymysql.err.OperationalError(1045, "Access denied"), "MySQL refused the login of user dpc_app"),
+                 (pymysql.err.OperationalError(2003, "Can't connect"), "No MySQL answers at localhost:3306"))
+        for error, sentence in cases:
+            self.use_db(error=error)
+            self.post("/setup/database/do/test/", self.FORM)
+            self.assertIn(sentence, self.client.get("/setup/database/").content.decode())
+        self.use_db(FakeConn(exists=True, use_error=pymysql.err.OperationalError(1044, "Access denied for user")))
+        self.post("/setup/database/do/test/", self.FORM)
+        self.assertIn("User dpc_app may not use the database baga_db", self.client.get("/setup/database/").content.decode())
+
+    def test_prepare_tables_seeds_only_with_the_password_in_env(self):
         self.set_answers({"site": {"id": "baga", "name": "Baga"}}, step="database")
         self.fake("bootstrap", {"ok": True, "database": "baga_db", "steps": [
-            {"step": "database", "item": "baga_db", "result": "created", "detail": ""},
-            {"step": "user", "item": "dpc_app@localhost", "result": "already there", "detail": "password not changed"}]})
-        self.post("/setup/database/do/create/", {"name": "baga_db", "user": "dpc_app", "password_choice": "standard"})
+            {"step": "schema", "item": "baga_db", "result": "created", "detail": ""},
+            {"step": "fixed_rows", "item": "wheel_counter_table", "result": "already there", "detail": ""}]})
+        self.post("/setup/database/do/prepare/", self.FORM)
         call = self.calls("bootstrap")[0]
-        self.assertEqual(call["argv"][:4], ["--db", "baga_db", "--user", "dpc_app"])
+        self.assertEqual(call["argv"][:2], ["--seed-only", "--json"])
+        self.assertEqual(call["argv"][2:10], ["--host", "localhost", "--port", "3306", "--db", "baga_db", "--user", "dpc_app"])
         self.assertNotIn(STANDARD, " ".join(call["argv"]))
         self.assertEqual(call["env"]["DPC_DB_PASS"], STANDARD)
-        self.assertNotIn("DPC_DB_ADMIN_PASS", call["env"])                       # F88: dpc_setup from the cnf
+        self.assertNotIn("DPC_DB_ADMIN_PASS", call["env"])                       # no admin login (D-112)
         page = self.client.get("/setup/database/").content.decode()
-        self.assertIn("The database is ready.", page)
-        self.assertIn("database baga_db: created", page)
-        self.assertIn("already there", page)
+        self.assertIn("The tables are ready.", page)
+        self.assertIn("schema baga_db: created", page)
 
-    def test_bootstrap_error_shown_as_is(self):
+    def test_prepare_errors_in_plain_words_never_a_terminal_instruction(self):
         self.set_answers({"site": {"id": "baga", "name": "Baga"}}, step="database")
-        message = "no MySQL admin login: config/mysql_setup.cnf is missing; run install/install.sh"
-        self.fake("bootstrap", {"ok": False, "error": message, "steps": []}, code=1)
-        self.post("/setup/database/do/create/", {"name": "baga_db", "user": "dpc_app", "password_choice": "standard"})
-        self.assertContains(self.client.get("/setup/database/"), message)
+        for error, sentence in (("(1049, \"Unknown database 'baga_db'\")", "Create the database baga_db first"),
+                                ("cannot connect: run install/install.sh as root", "No MySQL answers at this host and port"),
+                                ("schema failed; see sudo mysql output", "Preparing the tables failed. Check the connection")):
+            self.fake("bootstrap", {"ok": False, "database": "baga_db", "error": error, "steps": []}, code=1)
+            self.post("/setup/database/do/prepare/", self.FORM)
+            page = self.client.get("/setup/database/").content.decode()
+            self.assertIn(sentence, page)
+            self.assertNotIn("install.sh", page)
+            self.assertNotIn("sudo", page)
+
+    def test_prepare_without_f97_says_so(self):
+        self.set_answers({"site": {"id": "baga", "name": "Baga"}}, step="database")
+        script = os.path.join(self.fakes, "old_bootstrap.py")
+        with open(script, "w") as f:
+            f.write("import sys\nsys.stderr.write('usage: bootstrap.py\\nbootstrap.py: error: unrecognized arguments: "
+                    "--seed-only\\n')\nsys.exit(2)\n")
+        setup_env.set_tool_override({"bootstrap": script})
+        self.post("/setup/database/do/prepare/", self.FORM)
+        self.assertIn("needs the newer db/bootstrap.py (F97, --seed-only)", self.client.get("/setup/database/").content.decode())
 
 
 # ------------------------------------------------------------------------------------- step 3
@@ -456,7 +571,10 @@ class ReviewAndApplyTests(WizardBase):
         self.fake("bootstrap", {"ok": True, "steps": [{"step": "health", "item": "40112233", "result": "created"}]})
         r = self.post("/setup/apply/", {"confirm": "yes"})
         self.assertEqual(r.status_code, 200)
-        self.assertIn("--serial", self.calls("bootstrap")[0]["argv"])
+        argv = self.calls("bootstrap")[0]["argv"]                                 # F96: seed again with the serials
+        self.assertEqual(argv[:2], ["--seed-only", "--json"])
+        self.assertEqual([argv[i + 1] for i, a in enumerate(argv) if a == "--serial"], ["40112233", "40114455"])
+        self.assertEqual(self.calls("bootstrap")[0]["env"]["DPC_DB_PASS"], STANDARD)
         site_yaml = os.path.join(self.root, "config", "site.yaml")
         self.assertEqual(oct(os.stat(site_yaml).st_mode & 0o777), "0o600")
         self.assertIn("baga_db", open(site_yaml).read())
@@ -486,6 +604,13 @@ class ReviewAndApplyTests(WizardBase):
         self.post("/setup/apply/", {"confirm": "yes"})
         page = self.client.get("/part/setup/apply/").content.decode()
         self.assertIn("db.user is not set", page)
+        self.assertFalse(os.path.exists(os.path.join(self.root, "config", "site.yaml")))
+
+    def test_apply_refused_when_the_database_is_missing(self):
+        self.fake("bootstrap", {"ok": False, "error": "(1049, \"Unknown database 'baga_db'\")", "steps": []}, code=1)
+        self.post("/setup/apply/", {"confirm": "yes"})
+        page = self.client.get("/part/setup/apply/").content.decode()
+        self.assertIn("Create the database baga_db first", page)
         self.assertFalse(os.path.exists(os.path.join(self.root, "config", "site.yaml")))
 
     def test_old_answer_is_not_mistaken_for_this_one(self):

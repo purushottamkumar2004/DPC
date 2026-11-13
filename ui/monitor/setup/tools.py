@@ -19,13 +19,29 @@ def _py(tool, *args):
 
 
 # ------------------------------------------------------------------------------- step 2 database
-def create_database(answers, serials=()):
-    db = answers.get("database") or {}
-    cmd = _py("bootstrap", "--db", db.get("name"), "--user", vault.get("db.user") or "", "--root", env.root(), "--json")
+# D-112: the person creates the database and its login (e.g. MySQL Workbench); the wizard only
+# tests the connection and seeds the existing database. It never creates a database or a user,
+# needs no admin login and never shows a terminal instruction.
+def test_connection(answers):
+    from monitor.setup import dbcheck, steps
+    host, port, database, user, password = steps.connection(answers)
+    jobs.start("database.test", "Testing the database connection",
+               func=lambda: dbcheck.check(host, port, database, user, password), timeout=60)
+
+
+def seed_command(answers, serials=()):
+    """db/bootstrap.py --seed-only (F97) with the program login; the password goes in DPC_DB_PASS."""
+    from monitor.setup import steps
+    host, port, database, user, password = steps.connection(answers)
+    cmd = _py("bootstrap", "--seed-only", "--json", "--host", host, "--port", port, "--db", database, "--user", user)
     for serial in serials:
         cmd += ["--serial", str(serial)]
-    # no admin password: bootstrap uses dpc_setup from config/mysql_setup.cnf (F88)
-    jobs.start("database.create", "Creating the database", cmd, env={"DPC_DB_PASS": vault.get("db.password") or ""})
+    return cmd, {"DPC_DB_PASS": password}
+
+
+def prepare_tables(answers, serials=()):
+    cmd, secret_env = seed_command(answers, serials)
+    jobs.start("database.prepare", "Preparing the tables", cmd, env=secret_env, timeout=300)
 
 
 # ------------------------------------------------------------------------------- step 3 cameras
@@ -225,7 +241,13 @@ def plain(kind, job):
         return None
     r, code = job.get("result"), job.get("exit_code")
     if r is None:
-        return {"level": "error", "sentence": f"{job.get('title', 'The test')} did not answer: {job.get('error') or 'no result'}",
+        error = job.get("error") or ""
+        if kind == "database.prepare":
+            if "--seed-only" in error or "unrecognized arguments" in error:
+                return {"level": "error", "lines": [], "sentence": "Prepare tables needs the newer db/bootstrap.py "
+                        "(F97, --seed-only), which is not on this machine yet. Update the programs, then try again."}
+            return {"level": "error", "sentence": seed_error_sentence(error), "lines": []}
+        return {"level": "error", "sentence": f"{job.get('title', 'The test')} did not answer: {error or 'no result'}",
                 "lines": []}
     base = kind.split(".")[0] + "." + kind.split(".")[1] if "." in kind else kind
     describe = DESCRIBE.get(base)
@@ -234,13 +256,40 @@ def plain(kind, job):
     return out
 
 
+TERMINAL_HINTS = ("install.sh", "sudo ", "mysql -u", "run install", "terminal", "$ ")
+
+
+def seed_error_sentence(error, database=""):
+    """A --seed-only error in plain words; never a terminal instruction (D-112)."""
+    from monitor.setup.dbcheck import MISSING
+    text = str(error or "")
+    low = text.lower()
+    if "unknown database" in low or "does not exist" in low or "database missing" in low or "db_missing" in low:
+        return MISSING.format(db=database or "of this site")
+    if "access denied" in low and ("create" in low or "command denied" in low or "rights" in low):
+        return ("The user may not create tables in this database. Give it the rights to the database "
+                "(for example in MySQL Workbench), then press Prepare tables again.")
+    if "access denied" in low:
+        return "MySQL refused the login: check the user and the password with Test connection."
+    if "can't connect" in low or "cannot connect" in low or "connection refused" in low:
+        return "No MySQL answers at this host and port: check them with Test connection."
+    if any(h in low for h in TERMINAL_HINTS):
+        return "Preparing the tables failed. Check the connection with Test connection, then try again."
+    return f"Preparing the tables failed: {text[:200]}"
+
+
 def _bootstrap(r, code):
     words = {"failed": "FAILED"}                 # the other results are plain already: created, already there, ...
     lines = [f"{s.get('step')} {s.get('item') or ''}: {words.get(s.get('result'), s.get('result'))}" for s in r.get("steps") or []]
-    if r.get("error"):
-        return {"level": "error", "sentence": r["error"], "lines": lines}
+    if r.get("error") or r.get("status") in ("db_missing", "cannot_connect", "no_rights"):
+        return {"level": "error", "sentence": seed_error_sentence(r.get("error") or r.get("status"), r.get("database")),
+                "lines": lines}
     return {"level": "ok" if r.get("ok") else "error",
-            "sentence": "The database is ready." if r.get("ok") else "A database step failed (see below).", "lines": lines}
+            "sentence": "The tables are ready." if r.get("ok") else "A step failed (see below).", "lines": lines}
+
+
+def _dbcheck(r, code):
+    return {"level": "ok" if r.get("ok") else "error", "sentence": r.get("sentence") or "", "lines": []}
 
 
 def _probe_list(r, code):
@@ -321,7 +370,7 @@ def _transfer(r, code):
             "lines": lines}
 
 
-DESCRIBE = {"database.create": _bootstrap, "cameras.search": _probe_list, "cameras.grab": _probe_grab,
+DESCRIBE = {"database.prepare": _bootstrap, "database.test": _dbcheck, "cameras.search": _probe_list, "cameras.grab": _probe_grab,
             "cameras.burst": _probe_grab, "cameras.direction": _measure, "sizes.measure": _measure,
             "plc.read": _plc, "plc.light": _plc, "plc.pulse": _plc, "model.package": _package,
             "model.selftest": _selftest, "mail.test": _mail, "transfer.test": _transfer}
