@@ -81,9 +81,30 @@ class Generate(unittest.TestCase):
         data = wf.generate_workers(cfg)
         self.assertEqual(self.ids(data)[:2], ["frame_capture_cam2", "inspection_right"])
         self.assertEqual((data["workers"][0]["command"], data["workers"][0]["working_directory"]),
-                         ("python3 FrameCapture.py", f"{self.root}/code/workers/frame_capture"))
+                         ("python3 FrameCapture_Flir.py", f"{self.root}/code/workers/frame_capture_flir"))   # F86
         code, out = self.check_config(cfg)
         self.assertEqual(code, 0, out)
+
+    def test_mixed_site_basler_and_flir(self):                      # F100 done when (Hirmi: one of each)
+        def edit(d):
+            d["capture"]["cameras"][1].update(driver="flir",
+                                              flir={"interface": "GEV Interface 1", "throughput_bps": 19662239})
+        cfg = self.config(edit)
+        data = wf.generate_workers(cfg)
+        captures = {w["id"]: (w["command"], w["working_directory"]) for w in data["workers"] if w["type"] == "frame_capture"}
+        self.assertEqual(captures, {
+            "frame_capture_cam1": ("python3 FrameCapture_Basler.py", f"{self.root}/code/workers/frame_capture_basler"),
+            "frame_capture_cam2": ("python3 FrameCapture_Flir.py", f"{self.root}/code/workers/frame_capture_flir")})
+        follows = {w["id"]: w["follows"] for w in data["workers"] if w["type"] == "inspection"}
+        self.assertEqual(follows, {"inspection_left": "frame_capture_cam1", "inspection_right": "frame_capture_cam2"})
+        cam2 = next(w for w in data["workers"] if w["id"] == "frame_capture_cam2")
+        self.assertEqual(cam2["health"]["path"], f"{self.root}/data/frames/CAM2/live/IMG_1.jpg")   # same outputs
+        code, out = self.check_config(cfg)
+        self.assertEqual(code, 0, out)
+        self.assertIn("OK - 9 enabled worker(s) in start order: frame_capture_cam1, frame_capture_cam2", out)
+
+    def test_no_legacy_capture_program(self):
+        self.assertNotIn("frame_capture", [folder for folder, _ in wf.CAPTURE_PROGRAM.values()])
 
     def test_mail_disabled_and_no_transfer(self):
         cfg = self.config(lambda d: d.pop("transfer"))

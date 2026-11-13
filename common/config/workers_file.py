@@ -7,7 +7,7 @@
 
 What a site gets (only what site.yaml says it has):
   - one capture per camera, by its driver: basler -> workers/frame_capture_basler/FrameCapture_Basler.py,
-    flir -> workers/frame_capture/FrameCapture.py;
+    flir -> workers/frame_capture_flir/FrameCapture_Flir.py (F86); a mixed site gets one of each;
   - one inspection per side, following that side's camera (D-068);
   - cleanup, plc, ui always; mail always, enabled or disabled (mail_enabled; a site without a
     mail section gets it disabled); transfer only with a transfer section (D-105).
@@ -30,7 +30,7 @@ HEADER = ("# DPC Supervisor workers file, generated from site.yaml by common/con
 
 CAPTURE_PROGRAM = {   # driver -> (folder under code/workers, command)
     "basler": ("frame_capture_basler", "python3 FrameCapture_Basler.py"),
-    "flir": ("frame_capture", "python3 FrameCapture.py"),
+    "flir": ("frame_capture_flir", "python3 FrameCapture_Flir.py"),     # F86, F100: rendered JSON like Basler
 }
 SIDE_WORKER = {"LEFT": "inspection_left", "RIGHT": "inspection_right"}
 
