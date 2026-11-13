@@ -47,23 +47,30 @@ class FakeServer:
         self.log = []                       # (sql, params) of every statement
         self.fail_on = None                 # regex: raise when a statement matches
         self.connect_calls = []             # keyword arguments of every connect()
+        self.refuse_connect = None          # exception connect() raises (cannot connect, no rights)
+        self.deny = None                    # regex: statements refused with 1142 (no rights)
 
     ADMINS = {"admin": ADMIN_PW, "dpc_setup": SETUP_PW}
 
     def connect(self, user=None, password=None, database=None, read_default_file=None, **kwargs):
-        self.connect_calls.append(dict(kwargs, user=user, password=password, read_default_file=read_default_file))
+        self.connect_calls.append(dict(kwargs, user=user, password=password, database=database,
+                                       read_default_file=read_default_file))
         if read_default_file:          # like pymysql: arguments win, the file fills what is missing
             import configparser
             cfg = configparser.ConfigParser()
             cfg.read(read_default_file)
             user = user or cfg.get("client", "user", fallback=None)
             password = password or cfg.get("client", "password", fallback=None)
+        if self.refuse_connect:
+            raise self.refuse_connect
+        if database and database not in self.state["dbs"]:
+            raise RuntimeError(1049, f"Unknown database '{database}'")
         if user not in self.ADMINS:
             users = self.state["users"]
             if password not in (users.get((user, kwargs.get("host", "localhost"))), users.get((user, "%"))):
-                raise RuntimeError(f"(1045, \"Access denied for user '{user}'\")")
+                raise RuntimeError(1045, f"Access denied for user '{user}'")
         elif password != self.ADMINS[user]:
-            raise RuntimeError(f"(1045, 'Access denied for user {user}')")
+            raise RuntimeError(1045, f"Access denied for user '{user}'")
         return FakeConnection(self, database)
 
     def snapshot(self):
@@ -100,6 +107,8 @@ class FakeCursor:
         self.server.log.append((s, params))
         if self.server.fail_on and re.search(self.server.fail_on, s):
             raise RuntimeError(f"near '{s} {params}'")     # like MySQL: echoes the statement
+        if self.server.deny and re.search(self.server.deny, s):
+            raise RuntimeError(1142, f"command denied to user for table, near {params}")
         self._rows, self.rowcount = [], 0
         m = None
         if s.startswith("SELECT SCHEMA_NAME"):
@@ -289,6 +298,141 @@ class NoSerialTests(unittest.TestCase):
         for serials in (("",), (" ",), ("x" * 65,)):
             with self.subTest(serials=serials), self.assertRaises(bs.BootstrapError):
                 self.run_bs(serials=serials)
+
+
+SEED_PW = "Seed-pw_123'x"
+
+
+def seed_server(db="site_db", users=(("dpc_app", "localhost"), ("root", "localhost"))):
+    """A server where the person already created the database and the login (D-112)."""
+    server = FakeServer()
+    if db:
+        server.state["dbs"][db] = {"tables": set(), "rows": {}}
+    for user in users:
+        server.state["users"][user] = SEED_PW
+    return server
+
+
+def seed_request(**over):
+    values = dict(db_name="site_db", user="dpc_app", password=SEED_PW, serials=SERIALS)
+    values.update(over)
+    return bs.SeedRequest(**values)
+
+
+class SeedOnlyTests(unittest.TestCase):
+    """F97 / D-112: seed an existing database with the given login; create nothing else."""
+
+    def setUp(self):
+        self.server = seed_server()
+
+    def run_seed(self, **over):
+        return bs.seed(seed_request(**over), connect=self.server.connect)
+
+    def assert_creates_no_db_user_or_grant(self):
+        for stmt, _ in self.server.log:
+            self.assertNotRegex(stmt.upper(), r"^(CREATE (DATABASE|SCHEMA|USER)|GRANT|ALTER USER|DROP)")
+
+    def test_seeds_an_existing_empty_database(self):
+        report = self.run_seed()
+        self.assertTrue(report["ok"], report)
+        self.assertIsNone(report["error"])
+        self.assertEqual(report["mode"], "seed-only")
+        call = self.server.connect_calls[0]
+        self.assertEqual((call["user"], call["password"], call["database"], call["host"], call["port"]),
+                         ("dpc_app", SEED_PW, "site_db", "localhost", 3306))
+        self.assertEqual(len(self.server.connect_calls), 1)
+        self.assertEqual(results(report, "login")[0][2], bs.OK)
+        self.assertEqual(results(report, "database"), [("database", "site_db", bs.ALREADY)])
+        self.assertEqual({r for _, _, r in results(report, "table")}, {bs.CREATED})
+        self.assertIn(("fixed row", "wheel_counter_table row 1", bs.CREATED), results(report))
+        self.assertEqual(results(report, "health row"), [("health row", x, bs.CREATED) for x in SERIALS])
+        self.assertEqual(results(report, "user"), [])
+        self.assertEqual(results(report, "grant"), [])
+        self.assert_creates_no_db_user_or_grant()
+        self.assertEqual(set(self.server.state["dbs"]), {"site_db"})
+        self.assertNotIn(SEED_PW, json.dumps(report))
+
+    def test_second_run_changes_nothing(self):
+        self.run_seed()
+        before = self.server.snapshot()
+        report = self.run_seed()
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(self.server.snapshot(), before)
+        self.assertEqual([x for x in report["steps"] if x["result"] in (bs.CREATED, bs.UPDATED)], [])
+
+    def test_without_serials_health_rows_are_skipped(self):
+        report = self.run_seed(serials=())
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(results(report, "health row"), [("health row", "(none)", bs.SKIPPED)])
+
+    def test_root_is_allowed_with_a_warning(self):
+        report = self.run_seed(user="root")
+        self.assertTrue(report["ok"], report)
+        login = [x for x in report["steps"] if x["step"] == "login"][0]
+        self.assertIn("D-050", login["detail"])
+        self.assert_creates_no_db_user_or_grant()
+
+    def test_missing_database_says_create_it_first(self):
+        self.server = seed_server(db=None)
+        report = self.run_seed()
+        self.assertFalse(report["ok"])
+        self.assertIn("does not exist", report["error"])
+        self.assertIn("create it first, e.g. in MySQL Workbench", report["error"])
+        self.assertEqual(self.server.log, [])
+        self.assertEqual(self.server.state["dbs"], {})
+
+    def test_login_refused(self):
+        report = self.run_seed(password="wrong")
+        self.assertFalse(report["ok"])
+        self.assertIn("login refused for user 'dpc_app'", report["error"])
+        self.assertIn("check the user and the password", report["error"])
+
+    def test_cannot_connect_and_no_rights_on_database(self):
+        cases = [(RuntimeError(2003, "Can't connect to MySQL server on 'localhost'"), "cannot connect to MySQL on"),
+                 (RuntimeError(2005, "Unknown MySQL server host 'x'"), "is MySQL running"),
+                 (RuntimeError(1044, "Access denied for user to database 'site_db'"), "has no rights on database"),
+                 (RuntimeError("something else"), "cannot connect to MySQL on")]
+        for exc, text in cases:
+            with self.subTest(exc=exc):
+                self.server.refuse_connect = exc
+                report = self.run_seed()
+                self.assertFalse(report["ok"])
+                self.assertIn(text, report["error"])
+                self.assertEqual(results(report)[0][:1], ("login",))
+
+    def test_no_rights_to_create_tables(self):
+        self.server.deny = r"^CREATE TABLE"
+        report = self.run_seed()
+        self.assertFalse(report["ok"])
+        self.assertIn("no rights to create the tables and fixed rows in 'site_db'", report["error"])
+        self.assertIn("Workbench", report["error"])
+        self.assertEqual(results(report, "health row"), [])
+
+    def test_no_rights_to_insert_health_rows(self):
+        self.server.deny = r"INTO health_status"
+        report = self.run_seed()
+        self.assertFalse(report["ok"])
+        self.assertIn("no rights to insert the health rows", report["error"])
+
+    def test_password_is_redacted_from_errors(self):
+        self.server.refuse_connect = RuntimeError(f"bad login with {SEED_PW}")
+        report = self.run_seed()
+        self.assertNotIn(SEED_PW, json.dumps(report))
+        self.server.refuse_connect = None
+        self.server.deny = r"^CREATE TABLE"   # the fake echoes params; schema has none, so echo the password:
+        with mock.patch.object(FakeCursor, "execute", autospec=True,
+                               side_effect=lambda cur, sql, params=None: (_ for _ in ()).throw(
+                                   RuntimeError(1142, f"denied {SEED_PW}"))):
+            report = self.run_seed()
+        self.assertNotIn(SEED_PW, json.dumps(report))
+
+    def test_bad_input_is_refused_before_connecting(self):
+        connect = mock.Mock()
+        for over in (dict(db_name="site-db"), dict(db_name="mysql"), dict(db_name=""), dict(user=" "),
+                     dict(serials=("A", "A")), dict(serials=("",))):
+            with self.subTest(**{k: str(v) for k, v in over.items()}), self.assertRaises(bs.BootstrapError):
+                bs.seed(seed_request(**over), connect=connect)
+        connect.assert_not_called()
 
 
 class SqlSplitTests(unittest.TestCase):
@@ -492,6 +636,49 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("SKIPPED", out)
 
+    def run_seed_cli(self, argv, env, server=None):
+        out = io.StringIO()
+        server = server or seed_server()
+        module = types.SimpleNamespace(connect=server.connect)
+        with mock.patch.dict(os.environ, env, clear=False), mock.patch.dict(sys.modules, {"pymysql": module}), \
+                mock.patch.object(sys.stdin, "isatty", return_value=False), contextlib.redirect_stdout(out):
+            code = bs.main(argv)
+        return code, out.getvalue(), server
+
+    SEED = ["--seed-only", "--db", "site_db", "--user", "dpc_app", "--serial", "TESTCAM1"]
+
+    def test_seed_only_json(self):
+        code, out, server = self.run_seed_cli(self.SEED + ["--json"], {"DPC_DB_PASS": SEED_PW})
+        self.assertEqual(code, 0, out)
+        report = json.loads(out)
+        self.assertEqual((report["ok"], report["mode"], report["error"]), (True, "seed-only", None))
+        self.assertNotIn(SEED_PW, out)
+        self.assertEqual(len(server.connect_calls), 1)       # no admin login, no login check
+
+    def test_seed_only_text_and_root(self):
+        argv = [a if a != "dpc_app" else "root" for a in self.SEED]
+        code, out, _ = self.run_seed_cli(argv, {"DPC_DB_PASS": SEED_PW})
+        self.assertEqual(code, 0, out)
+        self.assertIn("D-050", out)
+        self.assertTrue(out.strip().endswith("OK"))
+
+    def test_seed_only_missing_database_text(self):
+        code, out, _ = self.run_seed_cli(self.SEED, {"DPC_DB_PASS": SEED_PW}, seed_server(db=None))
+        self.assertEqual(code, 1)
+        self.assertIn("ERROR database 'site_db' does not exist", out)
+        self.assertTrue(out.strip().endswith("FAILED"))
+
+    def test_seed_only_refuses_create_options_and_needs_a_password(self):
+        code, out, server = self.run_seed_cli(self.SEED + ["--reset-password", "--json"], {"DPC_DB_PASS": SEED_PW})
+        self.assertEqual(code, 1)
+        self.assertIn("--reset-password not used with --seed-only", json.loads(out)["error"])
+        self.assertEqual(server.connect_calls, [])
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DPC_DB_PASS", None)
+            code, out, _ = self.run_seed_cli(self.SEED + ["--json"], {})
+        self.assertEqual(code, 1)
+        self.assertIn("DPC_DB_PASS", json.loads(out)["error"])
+
     def test_root_as_program_user_is_refused(self):
         argv = [a if a != "dpc_prog" else "root" for a in self.BASE]
         code, out = self.run_cli(argv + ["--json"], self.ENV)
@@ -635,6 +822,67 @@ class RealServerTests(unittest.TestCase):
         changed = [(s["step"], s["item"]) for s in second["steps"] if s["result"] in (bs.CREATED, bs.UPDATED)]
         self.assertEqual(changed, [("health row", s) for s in SERIALS])
         self.assertEqual(self.state()[2], tuple((s, "NOK") for s in sorted(SERIALS)))
+
+    def _create_db_and_login(self, privileges="ALL PRIVILEGES"):
+        """What the person does in Workbench (D-112): database + login with rights on it."""
+        admin = self.pymysql.connect(**self.admin)
+        with admin.cursor() as cur:
+            cur.execute(f"CREATE DATABASE `{TEST_DB}`")
+            for host in self.req.program_hosts:
+                cur.execute(f"CREATE USER '{TEST_USER}'@'{host}' IDENTIFIED BY %s", (PROG_PW,))
+                cur.execute(f"GRANT {privileges} ON `{TEST_DB}`.* TO '{TEST_USER}'@'{host}'")
+        admin.close()
+
+    def seed_req(self, **over):
+        values = dict(db_name=TEST_DB, user=TEST_USER, password=PROG_PW, serials=SERIALS,
+                      host=self.req.host, port=self.req.port)
+        values.update(over)
+        return bs.SeedRequest(**values)
+
+    def test_seed_only_on_a_database_made_by_hand_twice(self):
+        self._create_db_and_login()
+        first = bs.seed(self.seed_req(serials=()))
+        self.assertTrue(first["ok"], first)
+        self.assertEqual(set(self.state()[0]), set(bs.read_schema_tables()))
+        self.assertEqual(self.state()[2], ())
+        with_serials = bs.seed(self.seed_req())
+        self.assertTrue(with_serials["ok"], with_serials)
+        before = self.state()
+        again = bs.seed(self.seed_req())
+        self.assertTrue(again["ok"], again)
+        self.assertEqual([x for x in again["steps"] if x["result"] in (bs.CREATED, bs.UPDATED)], [])
+        self.assertEqual(self.state(), before)
+        self.assertEqual(before[1], ((1, "0"),))
+        self.assertNotIn(PROG_PW, json.dumps(first) + json.dumps(again))
+
+    def test_seed_only_as_admin_login_like_root(self):
+        self._create_db_and_login()
+        report = bs.seed(self.seed_req(user=self.admin["user"], password=self.admin["password"]))
+        self.assertTrue(report["ok"], report)
+
+    def test_seed_only_errors_on_a_real_server(self):
+        missing = bs.seed(self.seed_req(user=self.admin["user"], password=self.admin["password"]))
+        self.assertFalse(missing["ok"])
+        self.assertIn("create it first, e.g. in MySQL Workbench", missing["error"])
+        admin = self.pymysql.connect(**self.admin)
+        with admin.cursor() as cur:
+            cur.execute("SHOW DATABASES LIKE %s", (TEST_DB,))
+            self.assertIsNone(cur.fetchone())          # seed-only did not create it
+        admin.close()
+
+        self._create_db_and_login(privileges="SELECT, INSERT, UPDATE, DELETE")
+        no_create = bs.seed(self.seed_req())
+        self.assertFalse(no_create["ok"])
+        self.assertIn("no rights to create the tables", no_create["error"])
+
+        other = bs.seed(self.seed_req(db_name="dpc_s3_test_missing"))   # MySQL answers 1044 here
+        self.assertIn("or it does not exist", other["error"])
+        self.assertIn("create it first if needed", other["error"])
+
+        wrong = bs.seed(self.seed_req(password="wrong-password"))
+        self.assertIn("login refused", wrong["error"])
+        no_server = bs.seed(self.seed_req(port=1))
+        self.assertIn("cannot connect to MySQL", no_server["error"])
 
     def test_missing_row_and_camera_are_added_on_rerun(self):
         self.assertTrue(bs.bootstrap(self.req)["ok"])

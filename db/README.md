@@ -12,10 +12,21 @@ Today you run them by hand in MySQL Workbench; `bootstrap.py` runs the same file
 | `migrations/NNNN_<what>.sql` (from `0002`) | One file per change, numbered, append-only. Brings an **existing** site DB up to the current `schema.sql`. | Existing sites, in number order |
 | `reference/<site>/schema_<date>.sql` | Structure-only export of a live site DB, kept as a record. Never run on a new site. | Read when reconciling `schema.sql` |
 | `schema_version` table | Created by `schema.sql`; each migration inserts its number. Shows which changes a site has. | Read it to see where a site stands |
-| `bootstrap.py` | Builds or checks a whole site DB in one go (S3): creates the database, a program user with rights on that database only (D-050), runs `schema.sql` + `fixed_rows.sql`, one health row per camera serial (if serials are given, F93), then logs in as the program user. Idempotent; reports each step as created / already there; never prints a password. Function `bootstrap()` for the UI wizard, CLI with `--json`. | New site (installer / wizard Apply), or to repair a site DB that was never seeded |
+| `bootstrap.py` | `--seed-only` (D-112, F97): seeds a database the person created, with their login. Create mode (S3): creates the database, a program user with rights on that database only (D-050), runs `schema.sql` + `fixed_rows.sql`, one health row per camera serial (if serials are given, F93), then logs in as the program user. Idempotent; reports each step as created / already there; never prints a password. Function `bootstrap()` for the UI wizard, CLI with `--json`. | New site (installer / wizard Apply), or to repair a site DB that was never seeded |
 | `test_seed.py` | Builds a scratch DB `dpc_seed_test` from the files above (twice), runs every DB statement the repo programs use, and checks the reference coverage, CONTRACTS section 5 and "no site values". Never touches a site DB. | After every change in `db/` |
 
-## New site with bootstrap.py (recommended)
+## New site: seed a database you created (D-112, the wizard's way)
+Create the database and its login yourself (e.g. MySQL Workbench: Create Schema, then Users and Privileges with all rights on that schema; root is allowed, D-050). Then only seed it:
+```bash
+export DPC_DB_PASS='<that login's password>'
+python3 db/bootstrap.py --seed-only --db <site_db> --user <login> [--serial <CAM1 serial> --serial <CAM2 serial>] [--json]
+```
+- Loads `schema.sql` and `fixed_rows.sql` and the health rows for the serials given (none: `skipped`). Never runs CREATE DATABASE, CREATE USER or GRANT, and needs no admin login.
+- Idempotent: a second run reports "already there" everywhere and changes nothing.
+- Errors say what to do: cannot connect (MySQL running? host and port?), database does not exist ("create it first, e.g. in MySQL Workbench"), login refused (user or password), no rights on the database or to create tables. A user without rights who names a missing database gets "no rights ..., or it does not exist" because MySQL does not tell them apart.
+- Function for the UI: `seed(SeedRequest(db_name, user, password, serials, host, port))` returns `{ok, mode, database, user, error, steps}`; `error` is one sentence or null.
+
+## New site with bootstrap.py, create mode (before D-112)
 Needs `pip install pymysql`. On a machine set up by `install/install.sh` no MySQL admin password is typed: without one, the admin login (`dpc_setup`) is read from `<root>/config/mysql_setup.cnf` (written by install.sh step 5, D-107; F88). The program password comes from the environment or a prompt, never from the command line:
 ```bash
 export DPC_DB_PASS='<program user password>'  # the same value goes into site.yaml db.password
