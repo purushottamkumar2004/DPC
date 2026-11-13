@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests for install.sh step 6 (database login, D-108/D-110/D-111) with a fake MySQL.
-# Made-up passwords only; no MySQL, no sudo.
+# Tests for install.sh step 6 (company DB defaults, D-108, D-112): site_defaults.yaml only;
+# the installer never logs in to MySQL. Made-up passwords only; no MySQL, no sudo.
 #
 #   bash install/tests/test_db_setup.sh
 
@@ -25,7 +25,7 @@ mode_of() { stat -c %a "$1"; }
 lacks() { ! grep -qF -- "$2" <<<"$1"; }
 
 export FAKE="$WORK/fake"
-make_fake_machine "$FAKE"
+make_fake_machine "$FAKE"          # a fake mysql in PATH logs any call: there must be none
 export PATH="$FAKE/bin:$PATH"
 
 # step6 <root> [VAR=value ...]: runs step 6 in a subshell with the installer's functions
@@ -39,53 +39,38 @@ step6() {
     local assignment
     for assignment in "$@"; do eval "$assignment"; done
     ask_db_password
-    step_database_login
+    step_site_defaults
   )
 }
 
-yaml_password() {
-  python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["db"]["password"], end="")' "$1"
+yaml_value() {   # yaml_value <file> <key under db>
+  python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["db"][sys.argv[2]], end="")' "$1" "$2"
 }
 
-test_yaml_and_reset() {
-  local root="$WORK/a/INSIGHTZZ" file out tricky="made-up 'quoted': value #x"
+test_write_keep_reset() {
+  local root="$WORK/a/INSIGHTZZ" file out tricky="made-up 'quoted': value #x \"dq\" \\bs"
   file="$root/config/site_defaults.yaml"
-  echo "$tricky" >"$FAKE/mysql_root_password"
   out="$(DPC_DB_PASSWORD="$tricky" step6 "$root" 2>&1)"
-  check "defaults mode 600" [ "$(mode_of "$file")" = 600 ]
+  check "written, mode 600" [ "$(mode_of "$file")" = 600 ]
   check "password never printed" lacks "$out" "made-up 'quoted'"
+  check "no temporary file left" [ -z "$(find "$root/config" -name '.site_defaults*')" ]
   if python3 -c "import yaml" 2>/dev/null; then
-    check "YAML password round-trips exactly" [ "$(yaml_password "$file")" = "$tricky" ]
+    check "YAML password round-trips exactly (quotes, #, \\)" [ "$(yaml_value "$file" password)" = "$tricky" ]
+    check "YAML db.user dpc_app" [ "$(yaml_value "$file" user)" = dpc_app ]
+    check "YAML db.name_suffix _db" [ "$(yaml_value "$file" name_suffix)" = _db ]
   else
     echo "SKIP  PyYAML not installed"
   fi
-  check "cnf written for root (tricky password accepted)" grep -qx "user=root" "$root/config/mysql_setup.cnf"
 
   local before; before="$(cat "$file")"
   out="$(DPC_DB_PASSWORD="another made-up" step6 "$root" 2>&1)"
-  check "re-run keeps site_defaults.yaml" [ "$(cat "$file")" = "$before" ]
+  check "re-run keeps the file" [ "$(cat "$file")" = "$before" ]
+  check "re-run says KEPT" grep -q "KEPT" <<<"$out"
 
-  echo "another made-up" >"$FAKE/mysql_root_password"
   out="$(DPC_DB_PASSWORD="another made-up" step6 "$root" RESET_DEFAULTS=1 2>&1)"
-  check "--reset-defaults rewrites site_defaults.yaml" grep -q "another made-up" "$file"
-  check "--reset-defaults rewrites the cnf" grep -qx 'password="another made-up"' "$root/config/mysql_setup.cnf"
+  check "--reset-defaults rewrites it" grep -q "another made-up" "$file"
   check "--reset-defaults keeps mode 600" [ "$(mode_of "$file")" = 600 ]
-}
-
-test_unwritable_password() {
-  local root="$WORK/f/INSIGHTZZ" out
-  out="$(DPC_DB_PASSWORD='made"up' step6 "$root" 2>&1)"
-  check 'password with a double quote: no cnf, clear reason' grep -q "option file cannot hold" <<<"$out"
-  check 'password with a double quote: site_defaults.yaml still written' [ -f "$root/config/site_defaults.yaml" ]
-}
-
-test_password_from_existing_defaults() {
-  local root="$WORK/b/INSIGHTZZ" out
-  echo "kept made-up" >"$FAKE/mysql_root_password"
-  DPC_DB_PASSWORD="kept made-up" step6 "$root" >/dev/null 2>&1
-  rm "$root/config/mysql_setup.cnf"
-  out="$(step6 "$root" </dev/null 2>&1)"     # no env, no terminal: the kept file has the password
-  check "cnf rebuilt from the kept site_defaults.yaml, no prompt" grep -qx "user=root" "$root/config/mysql_setup.cnf"
+  check "--reset-defaults does not print it" lacks "$out" "another made-up"
 }
 
 test_no_terminal_refused() {
@@ -95,31 +80,22 @@ test_no_terminal_refused() {
   check "refusal names DPC_DB_PASSWORD" grep -q "DPC_DB_PASSWORD" <<<"$out"
 }
 
-test_mysql_down() {
-  local root="$WORK/d/INSIGHTZZ" out rc=0
-  touch "$FAKE/mysql_down"
-  out="$(DPC_DB_PASSWORD="made-up" step6 "$root" 2>&1)" || rc=$?
-  rm -f "$FAKE/mysql_down"
-  check "MySQL down: step continues (exit $rc)" [ "$rc" -eq 0 ]
-  check "MySQL down: reason shown" grep -q "Can't connect" <<<"$out"
-  check "MySQL down: no cnf" [ ! -e "$root/config/mysql_setup.cnf" ]
-}
-
 test_dry_run_writes_nothing() {
   local root="$WORK/e/INSIGHTZZ"
-  echo "made-up" >"$FAKE/mysql_root_password"
   DPC_DB_PASSWORD="made-up" step6 "$root" DRY_RUN=1 >/dev/null 2>&1
   check "dry-run: no site_defaults.yaml" [ ! -e "$root/config/site_defaults.yaml" ]
-  check "dry-run: no cnf" [ ! -e "$root/config/mysql_setup.cnf" ]
   check "dry-run: no temporary file left" [ -z "$(find "$root/config" -name '.*')" ]
 }
 
+test_never_mysql() {
+  check "no MySQL call in any of these runs (D-112)" [ ! -e "$FAKE/mysql.log" ]
+  check "no mysql_setup.cnf written anywhere" [ -z "$(find "$WORK" -name mysql_setup.cnf)" ]
+}
+
 if [[ $EUID -eq 0 ]]; then echo "Run the tests as a normal user." >&2; exit 2; fi
-test_yaml_and_reset
-test_password_from_existing_defaults
-test_unwritable_password
+test_write_keep_reset
 test_no_terminal_refused
-test_mysql_down
 test_dry_run_writes_nothing
+test_never_mysql
 echo
 if [[ $FAILS -eq 0 ]]; then echo "ALL PASSED"; else echo "$FAILS FAILED"; exit 1; fi

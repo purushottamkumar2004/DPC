@@ -2,7 +2,7 @@
 # install.sh : DPC installer for a PREPARED site machine (D-111, STATUS F95).
 #
 # Insightzz site machines arrive prepared: Ubuntu 22.04, NVIDIA driver, CUDA, torch, detectron2,
-# the camera SDK, Firefox, and MySQL server with root using the company-standard password.
+# the camera SDK, Firefox, and MySQL server.
 # This script CHECKS those (it never installs, upgrades or reconfigures them) and adds only the
 # small DPC pieces. It is the only terminal step; everything after it happens in the UI (D-110).
 #
@@ -14,8 +14,8 @@
 #   4  layout            <root>/{code,config,logs,run,data} via scripts/setup_dpc_layout.sh
 #   5  Python libraries  only the missing ones (paho-mqtt, pymysql, PyYAML, pymodbus, requests, Django,
 #                        waitress, numpy only if absent); numpy/torch/torchvision are never upgraded
-#   6  database login    checks that MySQL root accepts the company-standard password; writes
-#                        config/site_defaults.yaml (D-108) and config/mysql_setup.cnf (user=root)
+#   6  DB defaults       config/site_defaults.yaml: the company-standard DB login, the wizard's
+#                        pre-fill (D-108). No MySQL login: the person creates the database (D-112)
 #   7  boot service      supervisor/install_service.sh (systemd unit dpc-supervisor)
 #   8  kiosk             autostart entry: Firefox full-screen on the UI at login
 #   9  start             starts the Supervisor; on a fresh machine it runs in setup mode (only the UI)
@@ -38,14 +38,14 @@
 #   --python PATH     the python3 for the Supervisor and every worker (default: python3 in PATH)
 #   --repo URL        git repository (default: the DPC repo on GitHub)
 #   --no-kiosk        no kiosk screen (machine without a screen); Firefox is then not checked
-#   --reset-defaults  ask the company-standard DB password again, rewrite both DB files
+#   --reset-defaults  ask the company-standard DB password again, rewrite site_defaults.yaml
 #   --dry-run         print every step, change nothing (checks still run: they only read)
 #   --check-only      only the checks, then the table
 #   -h, --help        this text
 #
 # The company-standard DB password (D-108) is asked once per machine, hidden, at the start (or set
-# DPC_DB_PASSWORD in the environment of that one command). It is never printed. MySQL root is only
-# used to log in: this script never runs "sudo mysql" and never changes a MySQL password.
+# DPC_DB_PASSWORD in the environment of that one command). It is never printed. This script never
+# logs in to MySQL, never runs "sudo mysql" and never creates or changes a database or a login.
 #
 # Exit: 0 done (MISSING items are in the table), 1 a step failed, 2 wrong usage,
 #       3 (--check-only) something is missing.
@@ -58,7 +58,6 @@ REPO_URL_DEFAULT="https://github.com/purushottamkumar2004/DPC.git"
 APT_BROKER_PACKAGES=(mosquitto mosquitto-clients)
 SERVICE_NAME="dpc-supervisor"
 MYSQL_SERVICE="mysql"
-MYSQL_ADMIN_USER="root"            # D-110/D-111: the wizard creates the site DB as root
 # Python libraries the DPC programs import: "import name|pip requirement". Installed only when the
 # import fails; a library that is present is never upgraded (prepared machines stay as delivered).
 PY_LIBRARIES=(
@@ -467,14 +466,12 @@ step_python_libraries() {
   rm -f "$constraints"
 }
 
-# ---------------------------------------------------------------- 6 database login (D-108, D-110, D-111)
-# The machine arrives with MySQL root using the company-standard password. The installer only LOGS
-# IN to check it: never "sudo mysql", never a password change, no extra MySQL account.
-#   site_defaults.yaml  the standard login for the programs (dpc_app), pre-filled in the wizard (D-108)
-#   mysql_setup.cnf     [client] user=root + password: db/bootstrap.py creates the site DB with it
-# Both: <root>/config, mode 600, outside code/ and git.
+# ---------------------------------------------------------------- 6 company DB defaults (D-108, D-112)
+# The person creates the site database and its login (for example in MySQL Workbench); the wizard
+# only seeds it (D-112). The installer never logs in to MySQL: it only keeps the company-standard
+# login as the wizard's pre-fill.
+#   site_defaults.yaml  db.name_suffix, db.user, db.password; <root>/config, mode 600, outside code/ and git
 site_defaults_file() { echo "$ROOT/config/site_defaults.yaml"; }
-mysql_setup_cnf()    { echo "$ROOT/config/mysql_setup.cnf"; }
 
 # The password is needed only when site_defaults.yaml must be (re)written.
 need_db_password() {
@@ -506,18 +503,6 @@ ask_db_password() {
   DB_PASSWORD="$first"
 }
 
-# The password stored in an existing site_defaults.yaml (the format this script writes).
-password_from_site_defaults() {
-  "$PY" - "$(site_defaults_file)" <<'EOF'
-import re, sys
-for line in open(sys.argv[1], encoding="utf-8"):
-    m = re.match(r"^\s+password:\s*'(.*)'\s*$", line)
-    if m:
-        print(m.group(1).replace("''", "'"), end="")
-        break
-EOF
-}
-
 yaml_single_quoted() {   # any text as a YAML single-quoted scalar (a ' inside is written '')
   local q="'"
   printf "'%s'" "${1//$q/$q$q}"
@@ -543,16 +528,6 @@ write_secret_file() {
   mv -f "$tmp" "$path"
 }
 
-# mysql_login_error <cnf>: empty when the login in that option file works, else MySQL's message
-# (MySQL's error text names the user, never the password).
-mysql_login_error() {
-  local err
-  if err="$(mysql --defaults-file="$1" -e "SELECT 1" 2>&1 >/dev/null)"; then return 0; fi
-  echo "${err:-login failed}" | head -1
-}
-
-cnf_user() { sed -n 's/^user=//p' "$1" 2>/dev/null | head -1; }
-
 write_site_defaults() {
   local file
   file="$(site_defaults_file)"
@@ -571,65 +546,20 @@ write_site_defaults() {
   fi
 }
 
-write_mysql_setup_cnf() {
-  local cnf tmp error
-  cnf="$(mysql_setup_cnf)"
-  # A working root login is kept as it is (re-runs change nothing).
-  if [[ $RESET_DEFAULTS -eq 0 && "$(cnf_user "$cnf")" == "$MYSQL_ADMIN_USER" ]] && [[ -z "$(mysql_login_error "$cnf")" ]]; then
-    [[ $DRY_RUN -eq 1 || $CHECK_ONLY -eq 1 ]] || chmod 600 "$cnf"
-    report KEPT "mysql_setup.cnf" "root logs in"
-    return 0
-  fi
-  if [[ -z "$DB_PASSWORD" ]]; then
-    report "$([[ $DRY_RUN -eq 1 ]] && echo PLANNED || echo MISSING)" "mysql_setup.cnf" "root login not checked (no password given in this run)"
-    return 0
-  fi
-  if ! command -v mysql >/dev/null 2>&1; then
-    report MISSING "MySQL root login" "no 'mysql' command to check it; the wizard asks on its page"
-    return 0
-  fi
-  # In an option file the value is written in double quotes (a # or a space inside stays part of
-  # it); a " or \ cannot be written so that both the mysql client and pymysql read the same value.
-  if [[ "$DB_PASSWORD" == *[\"\\]* ]]; then
-    report MISSING "mysql_setup.cnf" "the standard password contains \" or \\, which an option file cannot hold; the wizard asks on its page"
-    return 0
-  fi
-  # Check with a temporary option file (mode 600 in config/, password never on a command line).
-  tmp="$(umask 077 && mktemp "$ROOT/config/.mysql_setup.cnf.XXXXXX")"
-  printf '[client]\nuser=%s\npassword="%s"\n' "$MYSQL_ADMIN_USER" "$DB_PASSWORD" >"$tmp"
-  error="$(mysql_login_error "$tmp")"
-  if [[ -n "$error" ]]; then
-    rm -f "$tmp"
-    report MISSING "MySQL root login" "root does not accept the company-standard password ($error)"
-    note "MySQL root did not accept the company-standard password, so config/mysql_setup.cnf was not written.
-        Nothing was changed in MySQL. The wizard's database step asks for the MySQL admin login on its page."
-    return 0
-  fi
-  if [[ $DRY_RUN -eq 1 || $CHECK_ONLY -eq 1 ]]; then
-    rm -f "$tmp"
-    report "$([[ $DRY_RUN -eq 1 ]] && echo PLANNED || echo FOUND)" "MySQL root login" "root accepts the standard password"
-    return 0
-  fi
-  [[ -f "$cnf" && "$(cnf_user "$cnf")" != "$MYSQL_ADMIN_USER" ]] && say "  replacing the old $(cnf_user "$cnf") login in mysql_setup.cnf by root (D-110)"
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$cnf"
-  report FOUND "MySQL root login" "root accepts the standard password"
-  report WRITTEN "mysql_setup.cnf" "mode 600, user=root (password not shown)"
-}
-
-step_database_login() {
-  step "6  Database login (MySQL root, company-standard password)"
+step_site_defaults() {
+  step "6  Company DB defaults (the wizard's pre-fill)"
   if [[ ! -d "$ROOT/config" ]]; then
-    report "$([[ $DRY_RUN -eq 1 ]] && echo PLANNED || echo MISSING)" "DB login files" "$ROOT/config does not exist yet (written by a real run)"
+    report "$([[ $DRY_RUN -eq 1 ]] && echo PLANNED || echo MISSING)" "site_defaults.yaml" "$ROOT/config does not exist yet (written by a real run)"
     return 0
-  fi
-  # A kept site_defaults.yaml is the source of the password for the root check.
-  if [[ -z "$DB_PASSWORD" && -f "$(site_defaults_file)" && $RESET_DEFAULTS -eq 0 ]]; then
-    DB_PASSWORD="$(password_from_site_defaults)"
   fi
   write_site_defaults
-  write_mysql_setup_cnf
   DB_PASSWORD=""
+  # Written by F85/F95 installers; nothing reads it since D-112. Left in place (it holds a login
+  # the person may still want); deleting it is their choice.
+  if [[ -f "$ROOT/config/mysql_setup.cnf" ]]; then
+    note "config/mysql_setup.cnf is no longer used (D-112: the wizard only seeds a database you created).
+        It holds a MySQL login; delete it when you no longer need it:  rm $ROOT/config/mysql_setup.cnf"
+  fi
 }
 
 # ---------------------------------------------------------------- 7 boot service
@@ -786,7 +716,7 @@ main() {
     ask_db_password
     step_prepared_checks
     step_python_libraries
-    step_database_login
+    step_site_defaults
     print_table
     [[ $MISSING_COUNT -eq 0 ]] || return 3
     return 0
@@ -800,7 +730,7 @@ main() {
   step_code
   step_layout
   step_python_libraries
-  step_database_login
+  step_site_defaults
   step_service
   step_kiosk
   step_start
