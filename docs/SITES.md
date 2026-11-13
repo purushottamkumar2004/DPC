@@ -53,3 +53,7 @@ CLEANUP (legacy deleter config, old layout under /home/ddpc_maihar/INSIGHTZZ/COD
 
 SITE: baga   (details to collect)
 MAIL: runs a mail variant that is not in the repo (Graph + false-alarm flood breaker, hardcoded recipient, thresholds and report URL; reads `image_path` instead of `view_defect`); see STATUS F35. Its MAIL_SERVICE_CONFIG.xml (Graph secret, MySQL root password) was pasted in a chat (D-042 allows chats; the file itself must never be committed).
+
+
+## Hirmi (new site, setup started 2026-11-13)
+Machine `Dpc-inspection-hirmi`, user `dpc_inspection_hirmi`, Ubuntu 22.04, prepared machine (D-111). Cameras: **one Basler and one FLIR** (mixed; which side has which: from the wizard). First install with v0.2 stopped at the browser (Snap store timeouts) and at the database step; continue with v0.3. Values (serials, PLC, wheels per revolution, model) come from the wizard; recorded here after commissioning. Needs F86, F100, F101 before the FLIR camera can be set up.
