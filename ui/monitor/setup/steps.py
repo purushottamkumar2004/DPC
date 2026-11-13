@@ -124,42 +124,55 @@ def validate_site(form, answers):
     return {"site": {"id": site_id, "name": name}}, errors
 
 
+HOST_RE = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
+
+
 def database_defaults(answers):
-    """Pre-fill (D-108): <site.id><name_suffix>, the standard user and password from
-    site_defaults.yaml; {} values when the installer wrote no defaults (the step then asks)."""
+    """Pre-fill (D-108, D-112): host localhost, port 3306, <site.id><name_suffix>, the user and the
+    standard password from site_defaults.yaml. Empty values when the installer wrote no defaults."""
     d = env.site_defaults()
     site_id = (answers.get("site") or {}).get("id", "")
-    return {"name": (site_id + d["name_suffix"]) if site_id and d.get("name_suffix") else "",
+    return {"host": "localhost", "port": 3306,
+            "name": (site_id + d["name_suffix"]) if site_id and d.get("name_suffix") else "",
             "user": d.get("user", ""), "has_standard": bool(d.get("password")), "defaults": bool(d)}
 
 
 def validate_database(form, answers):
+    """The connection the person created themselves (D-112): the wizard never creates a database or a
+    user. root is allowed (the template shows the D-050 warning)."""
     errors = {}
     defaults = database_defaults(answers)
+    host = (form.get("host") or "").strip() or defaults["host"]
+    if not HOST_RE.match(host):
+        errors["host"] = "Type the MySQL host, e.g. localhost or 192.168.1.20."
+    port = _int(form, "port", errors, "Port", 1, 65535, default=defaults["port"])
     name = (form.get("name") or "").strip() or defaults["name"]
     if not DB_NAME_RE.match(name or ""):
-        errors["name"] = "Use letters, digits and _ only (at most 64)."
-    user = (form.get("user") or "").strip() or defaults["user"]
+        errors["name"] = "Type the database name: letters, digits and _ only (at most 64)."
+    user = (form.get("user") or "").strip() or vault.get("db.user") or defaults["user"]
     if not DB_USER_RE.match(user or ""):
-        errors["user"] = "The program user is needed: letters, digits and _ only."
-    elif user in ("root", "dpc_setup"):
-        errors["user"] = f"{user} is an admin account; the programs get their own user (D-050)."
+        errors["user"] = "Type the MySQL user: letters, digits and _ only."
     standard = form.get("password_choice", "standard") == "standard" and defaults["has_standard"]
     password = form.get("password") or ""
-    if not standard:
-        if not password and not vault.get("db.password"):
-            errors["password"] = ("Type the password for the program user." if defaults["has_standard"] else
-                                  "No standard password is stored on this machine (site_defaults.yaml); type one.")
-        elif password and len(password) < 8:
-            errors["password"] = "Use at least 8 characters."
+    if not standard and not password and not vault.get("db.password"):
+        errors["password"] = ("Type the password of this user." if defaults["has_standard"] else
+                              "No standard password is stored on this machine (site_defaults.yaml); type the password.")
     if not errors:
         vault.put("db.user", user)
         if standard:
             vault.put("db.password", env.site_defaults().get("password"))
         elif password:
             vault.put("db.password", password)
-    part = {"host": "localhost", "port": 3306, "name": name, "standard_login": bool(standard)}
+    part = {"host": host, "port": port, "name": name, "standard_login": bool(standard)}
     return {"database": part}, errors
+
+
+def connection(answers):
+    """(host, port, database, user, password) for the tools; password from the vault (memory)."""
+    refill_standard(answers)
+    db = answers.get("database") or {}
+    return (db.get("host") or "localhost", int(db.get("port") or 3306), db.get("name") or "",
+            vault.get("db.user") or "", vault.get("db.password") or "")
 
 
 def validate_cameras(form, answers):

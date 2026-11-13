@@ -1,17 +1,22 @@
 {% extends "monitor/setup/frame.html" %}
-{% load monitor_tags %}
 {% block step %}
-{% if not db_defaults.defaults %}<p class="note lvl-warning">This machine has no stored company defaults (config/site_defaults.yaml from install.sh), so type the database name, the program user and its password.</p>{% endif %}
-<div class="fields">
-{% with name="name" label="Database name" value=form.name|default:answers.database.name|default:db_defaults.name help="Made from the site id (company rule D-108); you may change it." %}{% include "monitor/setup/field.html" %}{% endwith %}
-{% with name="user" label="Program user" value=form.user|default:user_value help="The account the programs use. Not root." %}{% include "monitor/setup/field.html" %}{% endwith %}
+<p class="muted">Create the database and its login yourself (for example in MySQL Workbench) and enter them here. This step only tests the connection and prepares the tables; it never creates a database or a user.</p>
+{% if not db_defaults.defaults %}<p class="note lvl-warning">This machine has no stored company defaults (config/site_defaults.yaml), so type every value.</p>{% endif %}
+<div class="fields three">
+{% with name="host" label="Host" value=form.host|default:answers.database.host|default:db_defaults.host %}{% include "monitor/setup/field.html" %}{% endwith %}
+{% with name="port" label="Port" value=form.port|default:answers.database.port|default:db_defaults.port %}{% include "monitor/setup/field.html" %}{% endwith %}
+{% with name="name" label="Database" value=form.name|default:answers.database.name|default:db_defaults.name help="Made from the site id (D-108); you may change it." %}{% include "monitor/setup/field.html" %}{% endwith %}
+{% with name="user" label="User" value=form.user|default:user_value %}{% include "monitor/setup/field.html" %}{% endwith %}
 </div>
-<fieldset class="choice"><legend>Password of the program user</legend>
-  {% if db_defaults.has_standard %}<label><input type="radio" name="password_choice" value="standard" {% if answers.database.standard_login|default_if_none:True %}checked{% endif %}> Standard password set <span class="muted">(the company password stored on this machine; never shown)</span></label>{% endif %}
-  <label><input type="radio" name="password_choice" value="custom" {% if not db_defaults.has_standard or answers.database.standard_login is False %}checked{% endif %}> Another password for this site:
-    <input type="password" name="password" autocomplete="new-password" placeholder="at least 8 characters"></label>
+{% if form.user|default:user_value == "root" %}<p class="note lvl-warning">The programs will use root: allowed, but a user with rights to this database only is safer (D-050).</p>{% endif %}
+<fieldset class="choice"><legend>Password</legend>
+  {% if db_defaults.has_standard %}<label><input type="radio" name="password_choice" value="standard" {% if answers.database.standard_login|default_if_none:True %}checked{% endif %}> Standard password set <span class="muted">(stored on this machine; never shown)</span></label>{% endif %}
+  <label><input type="radio" name="password_choice" value="custom" {% if not db_defaults.has_standard or answers.database.standard_login is False %}checked{% endif %}> Another password:
+    <input type="password" name="password" autocomplete="new-password"></label>
   {% for k, v in errors.items %}{% if k == "password" %}<span class="ferr">{{ v }}</span>{% endif %}{% endfor %}
 </fieldset>
-<p><button class="btn" hx-post="/setup/database/do/create/" hx-include="#stepform" hx-target="#job" data-tip="Creates the database, the program user, the tables and the fixed rows. Running it again changes nothing.">Create database</button></p>
-{% with r=result %}{% include "monitor/setup/result.html" %}{% endwith %}
+<p><button class="btn" hx-post="/setup/database/do/test/" hx-include="#stepform" hx-target="#job" data-tip="Connects with this login and checks that the database exists">Test connection</button>
+  <button class="btn" hx-post="/setup/database/do/prepare/" hx-include="#stepform" hx-target="#job" data-tip="Creates the inspection tables and fixed rows in this database; running it again changes nothing">Prepare tables</button></p>
+{% with r=test_result %}{% include "monitor/setup/result.html" %}{% endwith %}
+{% with r=seed_result %}{% include "monitor/setup/result.html" %}{% endwith %}
 {% endblock %}

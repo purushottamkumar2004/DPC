@@ -151,7 +151,8 @@ def _step_extra(step, answers):
     if step == "database":
         extra["db_defaults"] = steps.database_defaults(answers)
         extra["user_value"] = vault.get("db.user") or extra["db_defaults"]["user"]
-        extra["result"] = tools.plain("database.create", jobs.last("database.create"))
+        extra["test_result"] = tools.plain("database.test", jobs.last("database.test"))
+        extra["seed_result"] = tools.plain("database.prepare", jobs.last("database.prepare"))
     elif step == "cameras":
         extra["cams"] = [dict(c, grab=os.path.basename(tools.latest_grab(c["serial"]) or ""),
                               burst=tools.has_burst(c["serial"]),
@@ -215,13 +216,15 @@ def action(request, step, name):
     answers = draft["answers"]
     p = request.POST
     try:
-        if step == "database" and name == "create":
+        if step == "database" and name in ("test", "prepare"):
             answers, errors = steps.apply_step("database", p, answers)
             if errors:
                 return _panel(request, errors=errors)
             steps.save(answers, "database")
-            serials = [c["serial"] for c in answers.get("cameras") or [] if c.get("side")]
-            tools.create_database(answers, serials)
+            if name == "test":
+                tools.test_connection(answers)
+            else:                                     # health rows come at Apply, once the cameras are chosen
+                tools.prepare_tables(answers, [c["serial"] for c in answers.get("cameras") or [] if c.get("side")])
         elif step == "cameras":
             serial = p.get("serial", "")
             if name == "search":
