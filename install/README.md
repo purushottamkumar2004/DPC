@@ -1,6 +1,6 @@
 # install/ : the DPC installer for prepared site machines (D-111, STATUS F95)
 
-Owned by the INSTALLER role (OWNERS.md). Insightzz site machines arrive **prepared**: Ubuntu 22.04, NVIDIA driver, CUDA, torch, detectron2, the camera SDK (pylon or Spinnaker), Firefox, and MySQL server with root using the company-standard password. `install.sh` **checks** those and never installs, upgrades or reconfigures them; it adds only the small DPC pieces. It is the only terminal step: everything after it happens in the UI (D-110).
+Owned by the INSTALLER role (OWNERS.md). Insightzz site machines arrive **prepared**: Ubuntu 22.04, NVIDIA driver, CUDA, torch, detectron2, the camera SDK (pylon or Spinnaker), Firefox, and MySQL server. `install.sh` **checks** those and never installs, upgrades or reconfigures them; it adds only the small DPC pieces. It is the only terminal step: everything after it happens in the UI (D-110).
 
 | File | What it is |
 |---|---|
@@ -28,24 +28,23 @@ Never with `sudo` or as root. Then open the setup wizard on the screen (the URL 
 | 3 | Code | `git clone --branch <tag>` into `~/INSIGHTZZ/code` (detached at the release, D-039) | switch code without `--tag`, or over hand edits |
 | 4 | Layout | `scripts/setup_dpc_layout.sh` | move or delete anything |
 | 5 | Python libraries | `pip install --user` of **only the missing ones** among paho-mqtt, pymysql, PyYAML, pymodbus (3.x), requests, Django 5.2, waitress, numpy (only if absent) | upgrade a library that is present; numpy/torch/torchvision are pinned to their installed versions |
-| 6 | Database login | logs in as MySQL **root** with the standard password; writes `config/site_defaults.yaml` and, when root accepts it, `config/mysql_setup.cnf` | `sudo mysql`, change a MySQL password, create a MySQL account |
+| 6 | DB defaults | writes `config/site_defaults.yaml`, the wizard's pre-fill (standard password asked once) | log in to MySQL, create a database or a login (D-112) |
 | 7 | Boot service | `supervisor/install_service.sh` (systemd `dpc-supervisor`, D-052) | - |
 | 8 | Kiosk | `~/.config/autostart/dpc-kiosk.desktop` runs `install/kiosk.sh` (Firefox) at login | install a browser (no Chromium, no Snap store) |
 | 9 | Start | `systemctl start dpc-supervisor` (setup mode on a fresh machine: only the UI); waits until the UI answers | restart a Supervisor in normal mode (it prints the command instead) |
 
 At the end a **table** lists every item: `FOUND`, `INSTALLED`, `WRITTEN`, `KEPT`, `SKIPPED`, `PLANNED` (dry-run) or **`MISSING`** with the reason. The install continues past a missing item; the wizard opens anyway. After fixing one: `bash ~/INSIGHTZZ/code/install/install.sh --check-only` (exit 0 = nothing missing, 3 = something missing).
 
-## The two DB files (D-108, D-110, D-111)
-Both in `~/INSIGHTZZ/config/` (folder mode 700), mode 600, owned by the site user, outside `code/`, so never in git. Passwords are never printed or logged.
+## Database: site_defaults.yaml only (D-108, D-112)
+The person creates the site database and its login (for example in MySQL Workbench) and enters the connection in the wizard's database step, which only **seeds** that database (tables, fixed rows, health rows). The installer never logs in to MySQL; it checks only that the MySQL server runs (step 1) and writes the wizard's pre-fill:
 
 | File | Content | Read by |
 |---|---|---|
-| `site_defaults.yaml` | `db: {name_suffix: '_db', user: 'dpc_app', password: '<standard>'}` | the wizard's database step (pre-filled) |
-| `mysql_setup.cnf` | `[client]` `user=root`, `password="<standard>"` | `db/bootstrap.py` (the wizard's database step) |
+| `~/INSIGHTZZ/config/site_defaults.yaml` (mode 600, outside `code/` and git) | `db: {name_suffix: '_db', user: 'dpc_app', password: '<standard>'}` | the wizard's database step: pre-fills `<site.id>_db`, `dpc_app` and the password |
 
-The password is asked once per machine at the start (typed twice, hidden), or given for that one command: ` DPC_DB_PASSWORD='...' bash install.sh --tag v0.<n>` (the leading space keeps it out of the bash history). Re-runs keep both files and ask nothing; `--reset-defaults` asks again and rewrites both. A `mysql_setup.cnf` from v0.2 (`user=dpc_setup`) is replaced by root once root accepts the password.
+The password is asked once per machine at the start (typed twice, hidden), or given for that one command: ` DPC_DB_PASSWORD='...' bash install.sh --tag v0.<n>` (the leading space keeps it out of the bash history). It is never printed or logged. Re-runs keep the file and ask nothing; `--reset-defaults` asks again and rewrites it.
 
-**When root does not accept the password** (or MySQL is down), the table says `MISSING  MySQL root login` with MySQL's own message, `mysql_setup.cnf` is not written, nothing is changed in MySQL, and the wizard's database step asks for the MySQL admin login on its page (D-110 point 3). A password containing `"` or `\` cannot be stored in an option file the same way for the mysql client and pymysql; then too the wizard asks.
+A `config/mysql_setup.cnf` from an older installer (v0.2 or the F95 build) is no longer read by anything. The installer leaves it in place and prints a note; delete it when you no longer need the MySQL login it holds.
 
 ## Re-running and updating
 `bash ~/INSIGHTZZ/code/install/install.sh` is safe at any time: every step checks first, nothing present is reinstalled, the code is not switched without `--tag`.
@@ -66,7 +65,7 @@ It refuses when files inside `code/` were changed by hand. It adds any library t
 bash install/tests/test_install.sh      # as a normal user; needs git, python3; shellcheck optional
 bash install/tests/test_db_setup.sh
 ```
-No sudo, network, MySQL, apt, pip download or Firefox needed: `tests/fakes.sh` provides logging fakes and a python3 wrapper whose `-m pip` only records the request. Covered: dry-run changes nothing; a first run on a prepared machine installs only mosquitto and the missing libraries, writes both files after the root check, never runs `sudo mysql`, never prints the password (output and log); a second run changes nothing and asks nothing; root refusing the password (continues, no cnf, reason shown); an old `dpc_setup` cnf replaced; `--check-only` on a bare machine names every missing item and writes nothing; YAML round-trip, `--reset-defaults`, no terminal without `DPC_DB_PASSWORD`, MySQL down; the code step; the Firefox kiosk.
+No sudo, network, MySQL, apt, pip download or Firefox needed: `tests/fakes.sh` provides logging fakes and a python3 wrapper whose `-m pip` only records the request. Covered: dry-run changes nothing; a first run on a prepared machine installs only mosquitto and the missing libraries, writes `site_defaults.yaml`, never calls MySQL (the fake `mysql` is a tripwire), never prints the password (output and log); a second run changes nothing and asks nothing; `--no-kiosk` without Firefox; an old `mysql_setup.cnf` left untouched with a note; `--check-only` on a bare machine names every missing item and writes nothing; YAML round-trip (quotes, `#`, `\`), `--reset-defaults`, no terminal without `DPC_DB_PASSWORD`; the code step; the Firefox kiosk.
 
 ## Limits
 Ubuntu 22.04 (24.04 refuses `pip install --user` into the system Python: use `--python` with a venv); internet needed for git, pip and apt (mosquitto only).

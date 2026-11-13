@@ -6,7 +6,7 @@
 #   make_fake_machine <dir>    creates <dir>/bin, <dir>/py (a python3 wrapper), <dir>/mods
 #   fake_module <dir> <name> [python code]   an importable module in <dir>/mods
 #
-# State files in <dir>: mysql_root_password, active_<service>, enabled_<service>, apt_installed,
+# State files in <dir>: active_<service>, enabled_<service>, apt_installed,
 # gpu; logs: sudo.log, apt.log, pip.log, firefox.log, systemctl.log, mysql.log.
 
 make_fake_machine() {
@@ -46,17 +46,11 @@ case "$1" in
   *) exit 0 ;;
 esac
 EOF
-  # mysql --defaults-file=F -e ...: logs in when F says user=root and the fake root password
+  # mysql: present (the "server installed" check looks for the command) but the installer must
+  # never call it (D-112); any call is logged and fails, and the tests check the log stays absent.
   cat >"$fake/bin/mysql" <<'EOF'
 #!/usr/bin/env bash
-echo "mysql $1" >>"$FAKE/mysql.log"
-file="${1#--defaults-file=}"
-[[ "$1" == --defaults-file=* && -r "$file" ]] || { echo "mysql: [ERROR] Failed to open required defaults file: $file" >&2; exit 1; }
-[[ -e "$FAKE/mysql_down" ]] && { echo "ERROR 2002 (HY000): Can't connect to local MySQL server through socket" >&2; exit 1; }
-user="$(sed -n 's/^user=//p' "$file")"; password="$(sed -n 's/^password=//p' "$file")"
-password="${password#\"}"; password="${password%\"}"
-if [[ "$user" == root && "$password" == "$(cat "$FAKE/mysql_root_password" 2>/dev/null)" ]]; then exit 0; fi
-echo "ERROR 1045 (28000): Access denied for user '$user'@'localhost' (using password: YES)" >&2
+echo "mysql $*" >>"$FAKE/mysql.log"
 exit 1
 EOF
   printf '#!/usr/bin/env bash\nexit 1\n' >"$fake/bin/mysqladmin"

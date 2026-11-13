@@ -7,8 +7,8 @@
 #   bash install/tests/test_install.sh
 #
 # Covers: shellcheck; --dry-run; a full first run (installs only the missing small pieces, writes
-# both DB files after the root check, never "sudo mysql"); a second run (changes nothing);
-# root refusing the password (continues, no cnf); an old dpc_setup cnf replaced by root;
+# site_defaults.yaml, never logs in to MySQL: D-112); a second run (changes nothing);
+# --no-kiosk; an old mysql_setup.cnf left in place with a note;
 # --check-only on a machine without the GPU stack; the code step; the kiosk (Firefox).
 # Step 6 details (YAML, --reset-defaults, prompts): tests/test_db_setup.sh.
 
@@ -110,12 +110,11 @@ test_dry_run() {
   check "wrong option exit 2 (was $rc)" [ "$rc" -eq 2 ]
 }
 
-# Fresh prepared machine: GPU stack, MySQL (root = standard password), Firefox; no mosquitto,
+# Fresh prepared machine: GPU stack, MySQL running, Firefox; no mosquitto,
 # some Python libraries missing.
 test_first_and_second_run() {
   local fake="$WORK/f_ok" home="$WORK/h_ok" root="$WORK/ok/INSIGHTZZ" out rc=0 cnf defaults log
   make_fake_machine "$fake"; make_prepared_stack "$fake"
-  echo "$TEST_PASSWORD" >"$fake/mysql_root_password"
   fake_module "$fake" yaml; fake_module "$fake" pymysql
   prepare_root "$root"
   cnf="$root/config/mysql_setup.cnf"; defaults="$root/config/site_defaults.yaml"
@@ -129,8 +128,8 @@ test_first_and_second_run() {
   check "first run: pip asked for the missing libraries" \
     grep -qF "paho-mqtt>=1.6 pymodbus>=3,<4 requests Django>=5.2,<5.3 waitress>=3.0,<4" "$fake/pip.log"
   check "first run: pip not asked for present ones (numpy, PyYAML, pymysql)" file_lacks "$fake/pip.log" "(^| )(numpy|PyYAML|pymysql)"
-  check "first run: cnf written, mode 600" [ "$(mode_of "$cnf")" = 600 ]
-  check "first run: cnf user=root" grep -qx "user=root" "$cnf"
+  check "first run: no mysql_setup.cnf (D-112)" [ ! -e "$cnf" ]
+  check "first run: never logs in to MySQL" [ ! -e "$fake/mysql.log" ]
   check "first run: defaults written, mode 600" [ "$(mode_of "$defaults")" = 600 ]
   check "first run: password not printed" lacks "$out" "$TEST_PASSWORD"
   log="$(cat "$root"/logs/install_*.log)"
@@ -142,43 +141,40 @@ test_first_and_second_run() {
   check "first run: kiosk entry written" grep -q "install/kiosk.sh" "$home/.config/autostart/dpc-kiosk.desktop"
   check "first run: no Chromium, no snap" file_lacks "$fake/sudo.log" "snap|chromium"
 
-  local apt_before pip_before cnf_before
-  apt_before="$(count_lines "$fake/apt.log")"; pip_before="$(count_lines "$fake/pip.log")"; cnf_before="$(cat "$cnf")"
+  local apt_before pip_before defaults_before
+  apt_before="$(count_lines "$fake/apt.log")"; pip_before="$(count_lines "$fake/pip.log")"; defaults_before="$(cat "$defaults")"
   rc=0
   out="$(run_installer "$fake" "$home" --root "$root" 2>&1)" || rc=$?
   check "second run exit 0, no password asked (was $rc)" [ "$rc" -eq 0 ]
   check "second run: no apt call" [ "$(count_lines "$fake/apt.log")" = "$apt_before" ]
   check "second run: no pip call" [ "$(count_lines "$fake/pip.log")" = "$pip_before" ]
-  check "second run: cnf kept" [ "$(cat "$cnf")" = "$cnf_before" ]
-  check "second run: table says KEPT" has "$out" "KEPT       mysql_setup.cnf"
+  check "second run: site_defaults.yaml kept" [ "$(cat "$defaults")" = "$defaults_before" ]
+  check "second run: table says KEPT" has "$out" "KEPT       site_defaults.yaml"
   check "second run: code kept" has "$out" "KEPT       code"
   check "second run: password not printed" lacks "$out" "$TEST_PASSWORD"
 }
 
-test_root_refuses() {
-  local fake="$WORK/f_no" root="$WORK/no/INSIGHTZZ" out rc=0
+test_no_kiosk() {
+  local fake="$WORK/f_nk" root="$WORK/nk/INSIGHTZZ" out rc=0
   make_fake_machine "$fake"; make_prepared_stack "$fake"
-  echo "the-other-made-up-root-password" >"$fake/mysql_root_password"
+  rm -f "$fake/bin/firefox"
   prepare_root "$root"
-  out="$(DPC_DB_PASSWORD="$TEST_PASSWORD" run_installer "$fake" "$WORK/h_no" --tag v0.900 --root "$root" --no-kiosk 2>&1)" || rc=$?
-  check "root refuses: install continues (exit $rc)" [ "$rc" -eq 0 ]
-  check "root refuses: no cnf" [ ! -e "$root/config/mysql_setup.cnf" ]
-  check "root refuses: site_defaults still written" [ -f "$root/config/site_defaults.yaml" ]
-  check "root refuses: MISSING row with MySQL's reason" has "$out" "Access denied for user 'root'"
-  check "root refuses: says the wizard asks" has "$out" "The wizard's database step asks"
-  check "root refuses: no temporary file left" [ -z "$(find "$root/config" -name '.mysql_setup*')" ]
-  check "root refuses: password not printed" lacks "$out" "$TEST_PASSWORD"
-  check "--no-kiosk: kiosk SKIPPED, Firefox not checked" has "$out" "SKIPPED    kiosk"
+  out="$(DPC_DB_PASSWORD="$TEST_PASSWORD" run_installer "$fake" "$WORK/h_nk" --tag v0.900 --root "$root" --no-kiosk 2>&1)" || rc=$?
+  check "--no-kiosk: exit 0 without Firefox (was $rc)" [ "$rc" -eq 0 ]
+  check "--no-kiosk: kiosk SKIPPED" has "$out" "SKIPPED    kiosk"
+  check "--no-kiosk: Firefox not reported missing" lacks "$out" "MISSING    Firefox"
 }
 
-test_old_dpc_setup_cnf_replaced() {
-  local fake="$WORK/f_up" root="$WORK/up/INSIGHTZZ"
+test_old_mysql_setup_cnf_left_alone() {
+  local fake="$WORK/f_up" root="$WORK/up/INSIGHTZZ" out old
   make_fake_machine "$fake"; make_prepared_stack "$fake"
-  echo "$TEST_PASSWORD" >"$fake/mysql_root_password"
   prepare_root "$root"
-  printf '[client]\nuser=dpc_setup\npassword=old-made-up\n' >"$root/config/mysql_setup.cnf"
-  DPC_DB_PASSWORD="$TEST_PASSWORD" run_installer "$fake" "$WORK/h_up" --tag v0.900 --root "$root" --no-kiosk >/dev/null 2>&1 || true
-  check "old dpc_setup cnf replaced by root" grep -qx "user=root" "$root/config/mysql_setup.cnf"
+  printf '[client]\nuser=root\npassword="old-made-up"\n' >"$root/config/mysql_setup.cnf"
+  old="$(cat "$root/config/mysql_setup.cnf")"
+  out="$(DPC_DB_PASSWORD="$TEST_PASSWORD" run_installer "$fake" "$WORK/h_up" --tag v0.900 --root "$root" --no-kiosk 2>&1)" || true
+  check "old mysql_setup.cnf left untouched" [ "$(cat "$root/config/mysql_setup.cnf")" = "$old" ]
+  check "old mysql_setup.cnf: note says it is unused" has "$out" "mysql_setup.cnf is no longer used"
+  check "old mysql_setup.cnf: its password not printed" lacks "$out" "old-made-up"
 }
 
 test_check_only_missing() {
@@ -252,8 +248,8 @@ REMOTE="$(make_test_remote)"
 start_fake_ui
 test_dry_run
 test_first_and_second_run
-test_root_refuses
-test_old_dpc_setup_cnf_replaced
+test_no_kiosk
+test_old_mysql_setup_cnf_left_alone
 test_check_only_missing
 test_code_step
 test_kiosk
