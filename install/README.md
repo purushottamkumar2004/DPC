@@ -1,108 +1,72 @@
-# install/ : the DPC installer (D-103 phase 0, STATUS S7)
+# install/ : the DPC installer for prepared site machines (D-111, STATUS F95)
 
-Owned by the INSTALLER role (OWNERS.md). One command turns a fresh Ubuntu 22.04 machine with internet into a DPC machine that shows the setup wizard. Everything a site differs by (cameras, PLC, wheel count, DB, model, mail) is entered later in the wizard, never here.
+Owned by the INSTALLER role (OWNERS.md). Insightzz site machines arrive **prepared**: Ubuntu 22.04, NVIDIA driver, CUDA, torch, detectron2, the camera SDK (pylon or Spinnaker), Firefox, and MySQL server with root using the company-standard password. `install.sh` **checks** those and never installs, upgrades or reconfigures them; it adds only the small DPC pieces. It is the only terminal step: everything after it happens in the UI (D-110).
 
 | File | What it is |
 |---|---|
 | `install.sh` | The installer. Run as the site user; asks for sudo itself. |
-| `kiosk.sh` | Opens the UI full-screen; started at every login by `~/.config/autostart/dpc-kiosk.desktop`. |
-| `tests/test_install.sh` | Shellcheck, dry-run, re-run and kiosk tests (no network, no sudo). |
+| `kiosk.sh` | Opens the UI full-screen in Firefox; started at every login by `~/.config/autostart/dpc-kiosk.desktop`. |
+| `tests/` | `test_install.sh` (whole runs on a fake prepared machine), `test_db_setup.sh` (step 6), `fakes.sh` (fake mysql, pip, apt, systemctl, sudo, Firefox, nvidia-smi). |
 
 ## First install
-Before: Ubuntu 22.04 installed, the site user created (it is the user every program runs as, D-030), the machine on the internet. Log in as that user, then:
+Log in as the site user (every program runs as that user, D-030), then:
 ```bash
 TAG=v0.<n>                                  # the release for this site (SITES.md)
 curl -fsSLO "https://raw.githubusercontent.com/purushottamkumar2004/DPC/$TAG/install/install.sh"
 bash install.sh --dry-run --tag "$TAG"      # read what it will do
-bash install.sh --tag "$TAG"
+bash install.sh --tag "$TAG"                # asks the company-standard DB password once (hidden)
 rm install.sh                               # the installer now lives in ~/INSIGHTZZ/code/install/
 ```
-Never with `sudo` or as root: the files and the service must belong to the site user.
+Never with `sudo` or as root. Then open the setup wizard on the screen (the URL is printed at the end).
 
 ## What it does
-| # | Step | Details | Re-run |
+| # | Step | Does | Never |
 |---|---|---|---|
-| 0 | Checks | not root, Ubuntu 22.04 (other versions: a note), Python 3.10 or newer, `sudo -v` | - |
-| 1 | System packages | `git python3-pip mysql-server mosquitto mosquitto-clients curl`; MySQL and mosquitto enabled and started | installs only what is missing |
-| 2 | Browser | Chromium (on 22.04 only as a snap: `snap install chromium`) | skipped when present |
-| 3 | Code | `git clone --branch <tag>` into `~/INSIGHTZZ/code` (detached at the release, D-039) | see "Updating" |
-| 4 | Layout | `scripts/setup_dpc_layout.sh` (code, config, logs, run, data incl. `data/transfer`) | creates only missing folders |
-| 5 | MySQL admin account | `dpc_setup@localhost` with a random password, created through `sudo mysql` (root via auth_socket); login in `config/mysql_setup.cnf` (D-107) | kept while it logs in; a broken login gets a new password |
-| 6 | Company DB defaults | `config/site_defaults.yaml`: `db.name_suffix _db`, `db.user dpc_app`, `db.password` = the company-standard password (D-108) | kept; `--reset-defaults` asks again |
-| 7 | Python packages | `requests paho-mqtt numpy pymysql PyYAML pymodbus` (3.x), `opencv-python-headless` (only when no `cv2` imports yet), `supervisor/requirements.txt`, `ui/requirements.txt` (Django, waitress); `--user` for the system Python | pip skips what is installed; installed `numpy`, `torch`, `torchvision` are never upgraded (constraints file) |
-| 8 | Manual items | checks only, see below | - |
-| 9 | Boot service | `supervisor/install_service.sh` (systemd `dpc-supervisor`, D-052) | rewrites the same unit |
-| 10 | Kiosk | `~/.config/autostart/dpc-kiosk.desktop` runs `install/kiosk.sh` at login | written only when different |
-| 11 | Start | `systemctl start dpc-supervisor`: with no `site.yaml` it runs in **setup mode**, only the UI (S1); waits until the UI answers | see "Updating" |
+| 0 | Checks | not root, Ubuntu 22.04 (else a note), Python 3.10+, `sudo -v` | - |
+| 1 | Prepared programs | **checks**: MySQL server running, NVIDIA driver (`nvidia-smi`), torch + CUDA (GPU visible), detectron2, pypylon or PySpin, OpenCV, Firefox (unless `--no-kiosk`), git, pip | installs, upgrades or changes any of them |
+| 2 | MQTT broker | `apt-get install --no-upgrade mosquitto mosquitto-clients` **only when missing**; enabled and started | a full `apt upgrade` |
+| 3 | Code | `git clone --branch <tag>` into `~/INSIGHTZZ/code` (detached at the release, D-039) | switch code without `--tag`, or over hand edits |
+| 4 | Layout | `scripts/setup_dpc_layout.sh` | move or delete anything |
+| 5 | Python libraries | `pip install --user` of **only the missing ones** among paho-mqtt, pymysql, PyYAML, pymodbus (3.x), requests, Django 5.2, waitress, numpy (only if absent) | upgrade a library that is present; numpy/torch/torchvision are pinned to their installed versions |
+| 6 | Database login | logs in as MySQL **root** with the standard password; writes `config/site_defaults.yaml` and, when root accepts it, `config/mysql_setup.cnf` | `sudo mysql`, change a MySQL password, create a MySQL account |
+| 7 | Boot service | `supervisor/install_service.sh` (systemd `dpc-supervisor`, D-052) | - |
+| 8 | Kiosk | `~/.config/autostart/dpc-kiosk.desktop` runs `install/kiosk.sh` (Firefox) at login | install a browser (no Chromium, no Snap store) |
+| 9 | Start | `systemctl start dpc-supervisor` (setup mode on a fresh machine: only the UI); waits until the UI answers | restart a Supervisor in normal mode (it prints the command instead) |
 
-The installer itself was cloned with the code, so step 3 must come before step 4 (the layout script is in the repo); `setup_dpc_layout.sh` keeps the existing `code/` checkout.
+At the end a **table** lists every item: `FOUND`, `INSTALLED`, `WRITTEN`, `KEPT`, `SKIPPED`, `PLANNED` (dry-run) or **`MISSING`** with the reason. The install continues past a missing item; the wizard opens anyway. After fixing one: `bash ~/INSIGHTZZ/code/install/install.sh --check-only` (exit 0 = nothing missing, 3 = something missing).
 
-The UI address is `http://127.0.0.1:<ui.port>/`: the port comes from `config/rendered/ui.json` (rendered from `site.yaml`), else `8080`. `bash ~/INSIGHTZZ/code/install/kiosk.sh --url` prints it.
-
-Log of each run: `~/INSIGHTZZ/logs/install_<date>_<time>.log`.
-
-## MySQL admin account and company DB defaults (D-107, D-108)
-Both files are in `~/INSIGHTZZ/config/` (folder mode 700), mode 600, owned by the site user, outside `code/`, so never in git. The installer never prints the passwords.
+## The two DB files (D-108, D-110, D-111)
+Both in `~/INSIGHTZZ/config/` (folder mode 700), mode 600, owned by the site user, outside `code/`, so never in git. Passwords are never printed or logged.
 
 | File | Content | Read by |
 |---|---|---|
-| `mysql_setup.cnf` | `[client]` `user=dpc_setup`, `password=<random, 32 characters>` | the wizard's database step through `db/bootstrap.py` (creates the site DB and the program user) |
-| `site_defaults.yaml` | `db: {name_suffix: '_db', user: 'dpc_app', password: '<company standard>'}` | the wizard's database step (pre-filled; can be changed per site) |
+| `site_defaults.yaml` | `db: {name_suffix: '_db', user: 'dpc_app', password: '<standard>'}` | the wizard's database step (pre-filled) |
+| `mysql_setup.cnf` | `[client]` `user=root`, `password="<standard>"` | `db/bootstrap.py` (the wizard's database step) |
 
-**The company-standard DB password** is asked once per machine, at the start of the run (typed twice, not shown). Without a terminal, give it for that one command: `DPC_DB_PASSWORD='...' bash install.sh --tag v0.<n>` (put a space before the command so bash does not keep it in the history). To change it: `bash ~/INSIGHTZZ/code/install/install.sh --reset-defaults`.
+The password is asked once per machine at the start (typed twice, hidden), or given for that one command: ` DPC_DB_PASSWORD='...' bash install.sh --tag v0.<n>` (the leading space keeps it out of the bash history). Re-runs keep both files and ask nothing; `--reset-defaults` asks again and rewrites both. A `mysql_setup.cnf` from v0.2 (`user=dpc_setup`) is replaced by root once root accepts the password.
 
-`dpc_setup` has all rights on this MySQL (it creates databases and users); the site programs never use it. **When `sudo mysql` cannot log in** (a MySQL whose root has a password, for example an older site), the installer says so and continues; create the account by hand, then re-run the installer (it keeps a working file):
-```bash
-mysql -u root -p      # then, with a password of your choice:
-#   CREATE USER 'dpc_setup'@'localhost' IDENTIFIED BY '<password>';
-#   GRANT ALL PRIVILEGES ON *.* TO 'dpc_setup'@'localhost' WITH GRANT OPTION;
-printf '[client]\nuser=dpc_setup\npassword=%s\n' '<password>' > ~/INSIGHTZZ/config/mysql_setup.cnf
-chmod 600 ~/INSIGHTZZ/config/mysql_setup.cnf
-```
+**When root does not accept the password** (or MySQL is down), the table says `MISSING  MySQL root login` with MySQL's own message, `mysql_setup.cnf` is not written, nothing is changed in MySQL, and the wizard's database step asks for the MySQL admin login on its page (D-110 point 3). A password containing `"` or `\` cannot be stored in an option file the same way for the mysql client and pymysql; then too the wizard asks.
 
-## What stays manual (checked, not installed)
-Step 8 checks these and prints `OK` / `MISSING` with what to do. The wizard opens anyway; its camera and model steps need them.
-
-| Item | Check | How to install |
-|---|---|---|
-| NVIDIA driver | `nvidia-smi` answers | `sudo ubuntu-drivers install`, reboot |
-| PyTorch with CUDA | `import torch`, `torch.cuda.is_available()` | the build for this driver from pytorch.org, **with the same Python** the installer used |
-| Detectron2 | `import detectron2` | 0.6 from source after PyTorch (`docs/INSTALL.md` step 2) |
-| Camera SDK | `import pypylon` or `import PySpin` | Basler: `python3 -m pip install --user pypylon` (or pylon from baslerweb.com); FLIR: Spinnaker SDK + its PySpin wheel |
-| Automatic login (WARN only) | `/etc/gdm3/custom.conf` | Settings > Users > Automatic Login, so the screen comes back after a power cut |
-
-Also manual: cabling, the camera network port coming up on boot (`docs/INSTALL.md` step 1), model training.
-
-After installing one of them: `bash ~/INSIGHTZZ/code/install/install.sh --check-only` (exit 0 = all present, 3 = something missing).
-
-## Re-running
-`bash ~/INSIGHTZZ/code/install/install.sh` is safe at any time: every step checks first, nothing is moved or deleted, the code is not switched without `--tag`, and a running Supervisor is not restarted unless the code changed while it is in setup mode. Use it to repair a half-finished install (for example after a lost internet connection).
-
-## Updating a site later
+## Re-running and updating
+`bash ~/INSIGHTZZ/code/install/install.sh` is safe at any time: every step checks first, nothing present is reinstalled, the code is not switched without `--tag`.
 ```bash
 bash ~/INSIGHTZZ/code/install/install.sh --dry-run --tag v0.<n+1>
 bash ~/INSIGHTZZ/code/install/install.sh --tag v0.<n+1>
 ```
-It refuses when files inside `code/` were changed by hand (`git status` shows them). It installs any new package of the new release. In **setup mode** it restarts the Supervisor itself (only the UI runs). In **normal mode** it does **not** restart: restarting stops inspection until the next plate and loses the wheel counter, so it prints the command and the person chooses the moment:
-```bash
-sudo systemctl restart dpc-supervisor
-python3 ~/INSIGHTZZ/code/scripts/dpc_check.py
-```
-Rollback = the same with the older tag. Read the handoffs between the two tags for `Install impact:` lines. Record the tag in `SITES.md`.
+It refuses when files inside `code/` were changed by hand. It adds any library the new release needs. In setup mode it restarts the Supervisor itself; in normal mode it does **not** (inspection would pause until the next plate) and prints `sudo systemctl restart dpc-supervisor` for a quiet moment. Rollback = the same with the older tag. Record the tag in `SITES.md`.
 
 ## Options
-`--tag TAG`, `--ref BRANCH` (test machines only, never a site), `--root DIR` (default `~/INSIGHTZZ`), `--python PATH` (default `python3` in PATH; a venv is allowed), `--repo URL`, `--no-kiosk` (no screen), `--reset-defaults` (ask the company-standard DB password again), `--dry-run`, `--check-only`. Exit codes: 0 done, 1 a step failed, 2 wrong usage, 3 `--check-only` found a missing item.
+`--tag TAG`, `--ref BRANCH` (test machines only), `--root DIR` (default `~/INSIGHTZZ`), `--python PATH` (default `python3`; a venv is allowed), `--repo URL`, `--no-kiosk` (no screen; Firefox not checked), `--reset-defaults`, `--dry-run`, `--check-only`. Exit codes: 0 done, 1 a step failed, 2 wrong usage, 3 `--check-only` found something missing.
 
-## Kiosk
-`kiosk.sh` waits for the UI (up to 3 min after boot), turns off GNOME screen blanking and lock, opens Chromium `--kiosk`, and reopens it if it is closed. To leave it: Alt+F4, then `pkill -f install/kiosk.sh`. It is started again at the next login. Machines without a screen: install with `--no-kiosk`.
+## Kiosk (Firefox)
+`kiosk.sh` waits for the UI (up to 3 min after boot), turns off GNOME screen blanking and lock, and opens `firefox --kiosk --no-remote --profile <root>/data/state/kiosk/firefox <url>`. The own profile keeps the person's Firefox untouched and switches off the "restore session" page after a power cut, welcome tabs and update prompts. It reopens Firefox if it is closed; to leave: Alt+F4, then `pkill -f install/kiosk.sh`. The port comes from `config/rendered/ui.json`, else 8080 (`kiosk.sh --url` prints the address). For the screen to come back after a power cut, turn on automatic login (Settings > Users).
 
 ## Tests
 ```bash
-bash install/tests/test_install.sh          # as a normal user; needs git, optional shellcheck
-bash install/tests/test_db_setup.sh         # steps 5 and 6 with a fake MySQL; made-up passwords only
+bash install/tests/test_install.sh      # as a normal user; needs git, python3; shellcheck optional
+bash install/tests/test_db_setup.sh
 ```
-`test_db_setup.sh` covers: cnf written with mode 600 and a 32-character password, never printed, kept on the second run, renewed when its login fails, nothing written when `sudo mysql` fails; `site_defaults.yaml` mode 600 and exact YAML round-trip (quotes, colon, `#`), kept on re-run, rewritten with `--reset-defaults`, refused without terminal and without `DPC_DB_PASSWORD`; `--dry-run` writes nothing.
-Covers: shellcheck clean; `--dry-run` prints every step and creates nothing; an unknown tag is refused with the list of tags; the code step clones, is unchanged on the second run, switches tags, refuses hand-edited code and a non-empty non-git `code/`; the kiosk entry is written once; `kiosk.sh --url` reads the port from `ui.json`. The sudo steps (apt, snap, systemd) are only checked by `--dry-run` here and on a real machine.
+No sudo, network, MySQL, apt, pip download or Firefox needed: `tests/fakes.sh` provides logging fakes and a python3 wrapper whose `-m pip` only records the request. Covered: dry-run changes nothing; a first run on a prepared machine installs only mosquitto and the missing libraries, writes both files after the root check, never runs `sudo mysql`, never prints the password (output and log); a second run changes nothing and asks nothing; root refusing the password (continues, no cnf, reason shown); an old `dpc_setup` cnf replaced; `--check-only` on a bare machine names every missing item and writes nothing; YAML round-trip, `--reset-defaults`, no terminal without `DPC_DB_PASSWORD`, MySQL down; the code step; the Firefox kiosk.
 
-## Limits (v1)
-Ubuntu 22.04 only (24.04 refuses `pip install --user` into the system Python: use `--python` with a venv there); internet needed (no offline bundle, D-103); the GPU stack, the camera SDK and automatic login stay manual.
+## Limits
+Ubuntu 22.04 (24.04 refuses `pip install --user` into the system Python: use `--python` with a venv); internet needed for git, pip and apt (mosquitto only).
