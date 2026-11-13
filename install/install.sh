@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
-# install.sh : DPC installer, phase 0 of D-103 (STATUS S7).
+# install.sh : DPC installer for a PREPARED site machine (D-111, STATUS F95).
 #
-# Turns a fresh Ubuntu 22.04 machine WITH internet into a DPC machine that shows the setup wizard:
-#   1  system packages   git, python3-pip, mysql-server, mosquitto(+clients), curl; MySQL and mosquitto on
-#   2  browser           Chromium for the kiosk screen (snap on Ubuntu 22.04)
+# Insightzz site machines arrive prepared: Ubuntu 22.04, NVIDIA driver, CUDA, torch, detectron2,
+# the camera SDK, Firefox, and MySQL server with root using the company-standard password.
+# This script CHECKS those (it never installs, upgrades or reconfigures them) and adds only the
+# small DPC pieces. It is the only terminal step; everything after it happens in the UI (D-110).
+#
+#   0  checks            not root, Ubuntu 22.04, Python 3.10+, sudo
+#   1  prepared programs CHECK ONLY: MySQL server running, NVIDIA driver, torch + CUDA, detectron2,
+#                        pypylon or PySpin, Firefox (for the kiosk), git, pip
+#   2  MQTT broker       mosquitto + mosquitto-clients from apt, only when missing
 #   3  code              git clone of a release tag into <root>/code
 #   4  layout            <root>/{code,config,logs,run,data} via scripts/setup_dpc_layout.sh
-#   5  MySQL admin       account dpc_setup (random password) in <root>/config/mysql_setup.cnf (D-107)
-#   6  DB defaults       company-standard DB settings in <root>/config/site_defaults.yaml (D-108)
-#   7  Python packages   every worker's packages + ui/requirements.txt, for the same python3 the service uses
-#   8  manual items      checks NVIDIA driver, torch + CUDA, detectron2, camera SDK (pypylon / PySpin)
-#   9  boot service      supervisor/install_service.sh (systemd unit dpc-supervisor)
-#  10  kiosk             autostart entry that opens the UI full-screen at login
-#  11  start             starts the Supervisor; on a fresh machine it runs in setup mode (S1: only the UI)
+#   5  Python libraries  only the missing ones (paho-mqtt, pymysql, PyYAML, pymodbus, requests, Django,
+#                        waitress, numpy only if absent); numpy/torch/torchvision are never upgraded
+#   6  database login    checks that MySQL root accepts the company-standard password; writes
+#                        config/site_defaults.yaml (D-108) and config/mysql_setup.cnf (user=root)
+#   7  boot service      supervisor/install_service.sh (systemd unit dpc-supervisor)
+#   8  kiosk             autostart entry: Firefox full-screen on the UI at login
+#   9  start             starts the Supervisor; on a fresh machine it runs in setup mode (only the UI)
+#   then a table: what was found, installed, written, and what is MISSING.
 #
-# Run as the site user (NOT root, NOT with sudo); it asks for the sudo password when a step needs it.
+# Run as the site user (NOT root, NOT with sudo); it asks for the sudo password when needed.
 # Safe to re-run: every step checks first and only does what is missing.
 #
 # Usage:
@@ -22,44 +29,56 @@
 #   bash install.sh                         re-run on an installed machine (code left as it is)
 #   bash install.sh --tag v0.<n+1>          update the code of an installed machine to another tag
 #   bash install.sh --dry-run --tag v0.<n>  print every step, change nothing
-#   bash install.sh --check-only            only the checks of step 8 (after installing a manual item)
+#   bash install.sh --check-only            only the checks (steps 1, 5, 6), nothing installed or written
 #
 # Options:
-#   --tag TAG      release tag to check out (git tag v0.<n>)
-#   --ref BRANCH   a branch instead of a tag, ONLY for test machines (prints a warning)
-#   --root DIR     deployed root (default ~/INSIGHTZZ, CONTRACTS 4.1)
-#   --python PATH  the python3 for the Supervisor and every worker (default: python3 in PATH)
-#   --repo URL     git repository (default: the DPC repo on GitHub)
-#   --no-kiosk     skip the browser and the kiosk autostart (machine without a screen)
-#   --reset-defaults  ask again for the company-standard DB password, rewrite site_defaults.yaml
-#   --dry-run      print every step, change nothing (checks still run: they only read)
-#   --check-only   run only the manual-item checks
-#   -h, --help     this text
+#   --tag TAG         release tag to check out (git tag v0.<n>)
+#   --ref BRANCH      a branch instead of a tag, ONLY for test machines (prints a warning)
+#   --root DIR        deployed root (default ~/INSIGHTZZ, CONTRACTS 4.1)
+#   --python PATH     the python3 for the Supervisor and every worker (default: python3 in PATH)
+#   --repo URL        git repository (default: the DPC repo on GitHub)
+#   --no-kiosk        no kiosk screen (machine without a screen); Firefox is then not checked
+#   --reset-defaults  ask the company-standard DB password again, rewrite both DB files
+#   --dry-run         print every step, change nothing (checks still run: they only read)
+#   --check-only      only the checks, then the table
+#   -h, --help        this text
 #
-# The company-standard DB password (D-108) is asked once per machine, hidden, at the start of the
-# run (or set DPC_DB_PASSWORD in the environment of that one command). It is never printed.
+# The company-standard DB password (D-108) is asked once per machine, hidden, at the start (or set
+# DPC_DB_PASSWORD in the environment of that one command). It is never printed. MySQL root is only
+# used to log in: this script never runs "sudo mysql" and never changes a MySQL password.
 #
-# Exit: 0 done (manual items still missing are listed at the end), 1 a step failed, 2 wrong usage,
-#       3 (--check-only) a manual item is missing.
+# Exit: 0 done (MISSING items are in the table), 1 a step failed, 2 wrong usage,
+#       3 (--check-only) something is missing.
 # Log: <root>/logs/install_<date>_<time>.log (not in --dry-run / --check-only).
 
 set -euo pipefail
 
 # ---------------------------------------------------------------- fixed values (not site values)
 REPO_URL_DEFAULT="https://github.com/purushottamkumar2004/DPC.git"
-APT_PACKAGES=(git python3-pip mysql-server mosquitto mosquitto-clients curl)
-SYSTEM_SERVICES=(mysql mosquitto)
+APT_BROKER_PACKAGES=(mosquitto mosquitto-clients)
 SERVICE_NAME="dpc-supervisor"
-# Packages the workers import (capture, inspection helpers, plc, mail, cleanup, transfer, supervisor).
-# opencv-python-headless is added only when no cv2 is importable yet (an existing opencv-python
-# and a second OpenCV package in the same Python break each other).
-PIP_PACKAGES=(requests "paho-mqtt>=1.6" numpy pymysql "PyYAML>=5.4" "pymodbus>=3,<4")
-PIP_OPENCV="opencv-python-headless"
-# Never upgraded by this script when already installed: a newer numpy can break a torch/detectron2
-# that was built against the installed one (they are installed by hand, step 8).
+MYSQL_SERVICE="mysql"
+MYSQL_ADMIN_USER="root"            # D-110/D-111: the wizard creates the site DB as root
+# Python libraries the DPC programs import: "import name|pip requirement". Installed only when the
+# import fails; a library that is present is never upgraded (prepared machines stay as delivered).
+PY_LIBRARIES=(
+  "paho|paho-mqtt>=1.6"
+  "pymysql|pymysql"
+  "yaml|PyYAML>=5.4"
+  "pymodbus|pymodbus>=3,<4"
+  "requests|requests"
+  "django|Django>=5.2,<5.3"
+  "waitress|waitress>=3.0,<4"
+  "numpy|numpy"
+)
+# Reported when missing, never installed: they belong to the prepared GPU stack.
+PY_PREPARED_ONLY=("cv2|OpenCV (cv2)")
+# Pinned to their installed versions in every pip call: a newer numpy can break torch/detectron2.
 PIP_KEEP_AS_IS=(numpy torch torchvision)
-MIN_PYTHON="3.10"                  # Django 5.2 (ui/requirements.txt)
-UI_WAIT_SECONDS=120                # first UI start runs the Django migrations
+MIN_PYTHON="3.10"                  # Django 5.2
+UI_WAIT_SECONDS="${DPC_UI_WAIT_SECONDS:-120}"   # first UI start runs the Django migrations
+DEFAULT_DB_NAME_SUFFIX="_db"       # D-108 company standards (not secrets)
+DEFAULT_DB_USER="dpc_app"
 
 # ---------------------------------------------------------------- options and state
 ROOT="$HOME/INSIGHTZZ"
@@ -71,17 +90,25 @@ DRY_RUN=0
 CHECK_ONLY=0
 NO_KIOSK=0
 RESET_DEFAULTS=0
-DB_PASSWORD=""                     # company-standard DB password: only in memory until step 6
+DB_PASSWORD=""                     # company-standard DB password: only in memory, never printed
 CODE_CHANGED=0                     # step 3 moved the checkout to another commit
-CHECK_LINES=()                     # results of step 6, printed in the summary
-MANUAL_MISSING=0
-NOTES=()                           # other things the person must know, printed in the summary
+NOTES=()                           # things the person must know, printed after the table
+REPORT=()                          # "STATE|item|detail" rows of the final table
+MISSING_COUNT=0
 
 # ---------------------------------------------------------------- output helpers
 say()  { echo "$*"; }
 step() { echo; echo "== $* =="; }
 note() { echo "  NOTE: $*"; NOTES+=("$*"); }
 fail() { echo "ERROR: $*" >&2; exit 1; }
+
+# report <STATE> <item> <detail>: one row of the final table, also shown right away.
+# STATE: FOUND, INSTALLED, WRITTEN, KEPT, MISSING, WARN, SKIPPED, PLANNED (dry-run)
+report() {
+  REPORT+=("$1|$2|$3")
+  [[ "$1" == MISSING ]] && MISSING_COUNT=$((MISSING_COUNT + 1))
+  printf '  %-9s %-26s %s\n' "$1" "$2" "$3"
+}
 
 # run <command...>: run it, or only print it in --dry-run
 run() {
@@ -93,21 +120,21 @@ run_sudo() {
   if [[ $DRY_RUN -eq 1 ]]; then echo "  [dry-run] sudo$(printf ' %q' "$@")"; else sudo "$@"; fi
 }
 
-usage() { sed -n '2,43p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,55p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --tag)        TAG="${2:?--tag needs a value}"; shift 2 ;;
-      --ref)        REF="${2:?--ref needs a value}"; shift 2 ;;
-      --root)       ROOT="${2:?--root needs a value}"; shift 2 ;;
-      --python)     PY="${2:?--python needs a value}"; shift 2 ;;
-      --repo)       REPO_URL="${2:?--repo needs a value}"; shift 2 ;;
-      --no-kiosk)   NO_KIOSK=1; shift ;;
-      --dry-run)    DRY_RUN=1; shift ;;
-      --check-only) CHECK_ONLY=1; shift ;;
+      --tag)            TAG="${2:?--tag needs a value}"; shift 2 ;;
+      --ref)            REF="${2:?--ref needs a value}"; shift 2 ;;
+      --root)           ROOT="${2:?--root needs a value}"; shift 2 ;;
+      --python)         PY="${2:?--python needs a value}"; shift 2 ;;
+      --repo)           REPO_URL="${2:?--repo needs a value}"; shift 2 ;;
+      --no-kiosk)       NO_KIOSK=1; shift ;;
       --reset-defaults) RESET_DEFAULTS=1; shift ;;
-      -h|--help)    usage; exit 0 ;;
+      --dry-run)        DRY_RUN=1; shift ;;
+      --check-only)     CHECK_ONLY=1; shift ;;
+      -h|--help)        usage; exit 0 ;;
       *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
     esac
   done
@@ -118,7 +145,7 @@ parse_args() {
   CODE="$ROOT/code"
 }
 
-# ---------------------------------------------------------------- preflight
+# ---------------------------------------------------------------- 0 preflight
 preflight() {
   step "0  Checks before installing"
   if [[ $EUID -eq 0 ]]; then
@@ -148,7 +175,7 @@ preflight() {
   say "  Python: $PY ($("$PY" -c 'import sys; print(sys.version.split()[0])'))"
 
   if [[ $DRY_RUN -eq 0 && $CHECK_ONLY -eq 0 ]]; then
-    say "  sudo is needed for system packages and the boot service; enter your password if asked."
+    say "  sudo is needed for mosquitto (only if missing) and the boot service; enter your password if asked."
     sudo -v || fail "sudo is not available for $(id -un); ask the machine's administrator"
   fi
 }
@@ -158,60 +185,140 @@ start_log() {
   mkdir -p "$ROOT/logs"
   LOG_FILE="$ROOT/logs/install_$(date +%Y%m%d_%H%M%S).log"
   exec > >(tee -a "$LOG_FILE") 2>&1
-  say "Log: $LOG_FILE"
+  say "Log: $LOG_FILE (passwords are never written to it)"
 }
 
-# ---------------------------------------------------------------- 1 system packages
-is_apt_installed() {
-  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
+# ---------------------------------------------------------------- 1 prepared programs (check only)
+python_can_import() {
+  "$PY" -c "import $1" >/dev/null 2>&1
 }
 
-step_system_packages() {
-  step "1  System packages"
-  local missing=() pkg service
-  for pkg in "${APT_PACKAGES[@]}"; do
-    is_apt_installed "$pkg" || missing+=("$pkg")
-  done
-  if [[ ${#missing[@]} -eq 0 ]]; then
-    say "  all installed: ${APT_PACKAGES[*]}"
+check_mysql_server() {
+  if ! command -v mysql >/dev/null 2>&1; then
+    report MISSING "MySQL client/server" "no 'mysql' command: the machine should come with MySQL server installed (D-111)"
+  elif systemctl is-active --quiet "$MYSQL_SERVICE" 2>/dev/null || mysqladmin ping >/dev/null 2>&1; then
+    report FOUND "MySQL server" "running"
   else
-    say "  installing: ${missing[*]}"
-    run_sudo apt-get update
-    run_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
+    report MISSING "MySQL server" "installed but not running: sudo systemctl start $MYSQL_SERVICE"
   fi
-  # MySQL and the MQTT broker run on every boot (ARCHITECTURE 7); mosquitto 2 listens on this
-  # machine only and needs no login by default, which is what the site uses (INSTALL step 1).
-  for service in "${SYSTEM_SERVICES[@]}"; do
-    if systemctl is-enabled --quiet "$service" 2>/dev/null && systemctl is-active --quiet "$service" 2>/dev/null; then
-      say "  $service: enabled and running"
+}
+
+check_nvidia_driver() {
+  local driver
+  if command -v nvidia-smi >/dev/null 2>&1 \
+     && driver="$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1)" \
+     && [[ -n "$driver" ]]; then
+    report FOUND "NVIDIA driver" "$driver"
+  else
+    report MISSING "NVIDIA driver" "nvidia-smi does not answer (part of the prepared machine)"
+  fi
+}
+
+check_torch() {
+  local out version cuda available
+  if ! out="$("$PY" -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())' 2>/dev/null)"; then
+    report MISSING "PyTorch + CUDA" "import torch fails in $PY (part of the prepared machine)"
+    return 0
+  fi
+  read -r version cuda available <<<"$out"
+  if [[ "$available" == "True" ]]; then
+    report FOUND "PyTorch + CUDA" "torch $version, CUDA $cuda, GPU visible"
+  else
+    report MISSING "PyTorch + CUDA" "torch $version sees no GPU (CUDA $cuda): driver/CUDA/torch do not match"
+  fi
+}
+
+check_detectron2() {
+  local version
+  if version="$("$PY" -c 'import detectron2; print(detectron2.__version__)' 2>/dev/null)"; then
+    report FOUND "Detectron2" "$version"
+  else
+    report MISSING "Detectron2" "import detectron2 fails in $PY (part of the prepared machine)"
+  fi
+}
+
+check_camera_sdk() {
+  local found=()
+  python_can_import pypylon && found+=("pypylon (Basler)")
+  python_can_import PySpin && found+=("PySpin (FLIR)")
+  if [[ ${#found[@]} -gt 0 ]]; then
+    report FOUND "camera SDK" "${found[*]}"
+  else
+    report MISSING "camera SDK" "neither pypylon (Basler pylon) nor PySpin (FLIR Spinnaker) imports in $PY"
+  fi
+}
+
+check_prepared_python_only() {
+  local entry module label
+  for entry in "${PY_PREPARED_ONLY[@]}"; do
+    module="${entry%%|*}"; label="${entry#*|}"
+    if python_can_import "$module"; then
+      report FOUND "$label" "importable"
     else
-      run_sudo systemctl enable --now "$service"
+      report MISSING "$label" "import $module fails in $PY (part of the prepared machine, not installed here)"
     fi
   done
 }
 
-# ---------------------------------------------------------------- 2 browser
-browser_command() {
-  local name
-  for name in chromium chromium-browser; do
-    if command -v "$name" >/dev/null 2>&1; then echo "$name"; return 0; fi
-  done
-  return 1
+check_firefox() {
+  [[ $NO_KIOSK -eq 1 ]] && return 0
+  local path
+  if path="$(command -v firefox 2>/dev/null)"; then
+    report FOUND "Firefox (kiosk)" "$path"
+  else
+    report MISSING "Firefox (kiosk)" "no 'firefox' command; the kiosk cannot open (or install with --no-kiosk)"
+  fi
 }
 
-step_browser() {
-  step "2  Browser for the kiosk screen"
-  if [[ $NO_KIOSK -eq 1 ]]; then say "  skipped (--no-kiosk)"; return 0; fi
-  local found
-  if found="$(browser_command)"; then
-    say "  $found: installed"
-    return 0
-  fi
-  # On Ubuntu 22.04 Chromium exists only as a snap ("apt install chromium-browser" installs the snap too).
-  if command -v snap >/dev/null 2>&1; then
-    run_sudo snap install chromium
+check_tools() {
+  if command -v git >/dev/null 2>&1; then
+    report FOUND "git" "$(git --version | awk '{print $3}')"
   else
-    run_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y chromium-browser
+    report MISSING "git" "needed to fetch the code: sudo apt install git"
+  fi
+  if "$PY" -m pip --version >/dev/null 2>&1; then
+    report FOUND "pip" "for $PY"
+  else
+    report MISSING "pip" "needed to add Python libraries: sudo apt install python3-pip"
+  fi
+}
+
+step_prepared_checks() {
+  step "1  Prepared programs (checked, never installed or changed)"
+  check_mysql_server
+  check_nvidia_driver
+  check_torch
+  check_detectron2
+  check_camera_sdk
+  check_prepared_python_only
+  check_firefox
+  check_tools
+}
+
+# ---------------------------------------------------------------- 2 MQTT broker (install only when missing)
+is_apt_installed() {
+  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
+}
+
+step_broker() {
+  step "2  MQTT broker (mosquitto)"
+  local missing=() pkg
+  for pkg in "${APT_BROKER_PACKAGES[@]}"; do
+    is_apt_installed "$pkg" || missing+=("$pkg")
+  done
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    report FOUND "mosquitto" "installed"
+  else
+    # Only these two packages, never a full upgrade: the rest of the machine stays as delivered.
+    run_sudo apt-get update
+    run_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-upgrade "${missing[@]}"
+    report "$([[ $DRY_RUN -eq 1 ]] && echo PLANNED || echo INSTALLED)" "mosquitto" "apt: ${missing[*]}"
+  fi
+  # The broker runs on every boot (ARCHITECTURE 7); mosquitto 2 listens on this machine only.
+  if systemctl is-enabled --quiet mosquitto 2>/dev/null && systemctl is-active --quiet mosquitto 2>/dev/null; then
+    say "  mosquitto: enabled and running"
+  else
+    run_sudo systemctl enable --now mosquitto
   fi
 }
 
@@ -260,7 +367,7 @@ clone_code() {
   # A tag given to --branch is checked out detached: the site runs exactly that release.
   run git -c advice.detachedHead=false clone --quiet --branch "${TAG:-$REF}" "$REPO_URL" "$CODE"
   CODE_CHANGED=1
-  [[ $DRY_RUN -eq 1 ]] || say "  cloned ${TAG:-$REF}"
+  report "$([[ $DRY_RUN -eq 1 ]] && echo PLANNED || echo INSTALLED)" "code" "${TAG:-$REF} cloned into $CODE"
 }
 
 update_code() {
@@ -268,7 +375,7 @@ update_code() {
   current="$(git -C "$CODE" rev-parse HEAD)"
   say "  checkout present at $(git -C "$CODE" describe --tags --always 2>/dev/null || echo "$current")"
   if [[ -z "$TAG$REF" ]]; then
-    say "  no --tag given: code left as it is"
+    report KEPT "code" "$(git -C "$CODE" describe --tags --always 2>/dev/null) (no --tag given)"
     return 0
   fi
   # Same rule as INSTALL.md "Updating an installed site": nobody edits files inside code/.
@@ -284,12 +391,12 @@ update_code() {
     target="origin/$REF"
   fi
   if [[ $DRY_RUN -eq 0 ]] && [[ "$(git -C "$CODE" rev-parse "$target^{commit}")" == "$current" ]]; then
-    say "  already at ${TAG:-$REF}: unchanged"
+    report KEPT "code" "${TAG:-$REF} (unchanged)"
     return 0
   fi
   run git -C "$CODE" -c advice.detachedHead=false checkout --quiet --detach "$target"
   CODE_CHANGED=1
-  [[ $DRY_RUN -eq 1 ]] || say "  switched to ${TAG:-$REF}"
+  report "$([[ $DRY_RUN -eq 1 ]] && echo PLANNED || echo INSTALLED)" "code" "switched to ${TAG:-$REF}"
 }
 
 # ---------------------------------------------------------------- 4 layout
@@ -305,84 +412,71 @@ step_layout() {
   fi
 }
 
-# ---------------------------------------------------------------- 5 MySQL admin account (D-107)
-# A fresh Ubuntu 22.04 MySQL has root only through auth_socket ("sudo mysql", no password), so the
-# wizard could not create the site DB. The installer has sudo: it creates the admin account
-# dpc_setup@localhost with a random password and keeps the login in mysql_setup.cnf, which
-# db/bootstrap.py reads when no admin password is given (F85).
-# The two commands are variables so the tests can put fakes in their place (no real MySQL needed).
-MYSQL_SETUP_USER="dpc_setup"
-MYSQL_CLIENT=(mysql)               # checks the login in the cnf file
-MYSQL_AS_ROOT=(sudo mysql)         # root over auth_socket
-
-mysql_setup_cnf() { echo "$ROOT/config/mysql_setup.cnf"; }
-
-# mysql_cnf_works <cnf>: the account in that file can log in now
-mysql_cnf_works() {
-  [[ -r "$1" ]] && "${MYSQL_CLIENT[@]}" --defaults-file="$1" -e "SELECT 1" >/dev/null 2>&1
+# ---------------------------------------------------------------- 5 Python libraries (only the missing ones)
+python_in_venv() {
+  "$PY" -c 'import sys; sys.exit(0 if sys.prefix != sys.base_prefix else 1)'
 }
 
-new_random_password() {
-  # 32 characters from letters, digits, - and _: safe inside SQL '...' and in an option file
-  "$PY" -c 'import secrets; print(secrets.token_urlsafe(24))'
+# A pip constraints file that pins the installed numpy/torch/torchvision to their current versions.
+write_keep_constraints() {
+  "$PY" - "${PIP_KEEP_AS_IS[@]}" <<'EOF'
+import sys
+from importlib import metadata
+for name in sys.argv[1:]:
+    try:
+        print(f"{name}=={metadata.version(name)}")
+    except metadata.PackageNotFoundError:
+        pass
+EOF
 }
 
-# The SQL goes to mysql on stdin, never on a command line (other users can read command lines).
-# ALTER USER also repairs an account whose password was lost; the grant lets the wizard create
-# the site DB and the program user with rights on that DB only (db/bootstrap.py).
-mysql_setup_sql() {
-  cat <<SQL
-CREATE USER IF NOT EXISTS '$MYSQL_SETUP_USER'@'localhost' IDENTIFIED BY '$1';
-ALTER USER '$MYSQL_SETUP_USER'@'localhost' IDENTIFIED BY '$1';
-GRANT ALL PRIVILEGES ON *.* TO '$MYSQL_SETUP_USER'@'localhost' WITH GRANT OPTION;
-FLUSH PRIVILEGES;
-SQL
+installed_version() {   # installed_version <import name>: version string or "present"
+  "$PY" -c 'import sys, importlib; m = importlib.import_module(sys.argv[1]); print(getattr(m, "__version__", "present"))' "$1" 2>/dev/null \
+    || echo "present"
 }
 
-step_mysql_admin() {
-  step "5  MySQL admin account ($MYSQL_SETUP_USER)"
-  local cnf password tmp
-  cnf="$(mysql_setup_cnf)"
-  if mysql_cnf_works "$cnf"; then
-    [[ $DRY_RUN -eq 1 ]] || chmod 600 "$cnf"
-    say "  $cnf: the account logs in, kept"
+step_python_libraries() {
+  step "5  Python libraries (for $PY)"
+  local entry module requirement missing=() pip_args=(--disable-pip-version-check) constraints
+  for entry in "${PY_LIBRARIES[@]}"; do
+    module="${entry%%|*}"; requirement="${entry#*|}"
+    if python_can_import "$module"; then
+      report FOUND "$requirement" "$(installed_version "$module")"
+    else
+      missing+=("$requirement")
+    fi
+  done
+  [[ ${#missing[@]} -eq 0 ]] && return 0
+  if [[ $CHECK_ONLY -eq 1 ]]; then
+    for requirement in "${missing[@]}"; do report MISSING "$requirement" "would be installed by install.sh"; done
     return 0
   fi
-  if [[ $DRY_RUN -eq 1 ]]; then
-    say "  [dry-run] sudo mysql: create (or reset) $MYSQL_SETUP_USER@localhost with a new random password"
-    say "  [dry-run] write $cnf (mode 600): [client] user=$MYSQL_SETUP_USER, password=<hidden>"
-    return 0
-  fi
-  [[ -f "$cnf" ]] && say "  $cnf does not log in: the account gets a new password"
-  password="$(new_random_password)"
-  # File first (owner only, temporary name), account second, file into place last: an interrupted
-  # run leaves the old file or none, never a file with a password the account does not have.
-  tmp="$(umask 077 && mktemp "$ROOT/config/.mysql_setup.XXXXXX")"
-  printf '[client]\nuser=%s\npassword=%s\n' "$MYSQL_SETUP_USER" "$password" >"$tmp"
-  if ! mysql_setup_sql "$password" | "${MYSQL_AS_ROOT[@]}" >/dev/null 2>&1; then
-    rm -f "$tmp"
-    note "the MySQL account $MYSQL_SETUP_USER was not created: 'sudo mysql' did not log in as root
-        (this MySQL's root probably has a password). See install/README.md 'MySQL admin account'."
-    return 0
-  fi
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$cnf"
-  if mysql_cnf_works "$cnf"; then
-    say "  $MYSQL_SETUP_USER ready; its login is in $cnf (mode 600)"
+  # System Python: install for this user (as on Tadipatri). A venv installs into the venv.
+  python_in_venv || pip_args+=(--user)
+  constraints="$(mktemp)"
+  write_keep_constraints >"$constraints"
+  [[ -s "$constraints" ]] && pip_args+=(-c "$constraints")
+  # Only the missing requirements are named, without --upgrade: nothing present is touched.
+  if run "$PY" -m pip install "${pip_args[@]}" "${missing[@]}"; then
+    for requirement in "${missing[@]}"; do
+      report "$([[ $DRY_RUN -eq 1 ]] && echo PLANNED || echo INSTALLED)" "$requirement" "pip"
+    done
   else
-    note "$MYSQL_SETUP_USER was created but its login fails; try: mysql --defaults-file=$cnf -e 'SELECT 1'"
+    for requirement in "${missing[@]}"; do report MISSING "$requirement" "pip install failed (see above)"; done
   fi
+  rm -f "$constraints"
 }
 
-# ---------------------------------------------------------------- 6 company DB defaults (D-108)
-# New sites use the same DB user and password everywhere (developer's decision, D-108). The
-# password lives only in <root>/config/site_defaults.yaml (mode 600, outside code/ and git); the
-# wizard's database step is pre-filled from it. Name suffix and user are company standards.
-DEFAULT_DB_NAME_SUFFIX="_db"
-DEFAULT_DB_USER="dpc_app"
-
+# ---------------------------------------------------------------- 6 database login (D-108, D-110, D-111)
+# The machine arrives with MySQL root using the company-standard password. The installer only LOGS
+# IN to check it: never "sudo mysql", never a password change, no extra MySQL account.
+#   site_defaults.yaml  the standard login for the programs (dpc_app), pre-filled in the wizard (D-108)
+#   mysql_setup.cnf     [client] user=root + password: db/bootstrap.py creates the site DB with it
+# Both: <root>/config, mode 600, outside code/ and git.
 site_defaults_file() { echo "$ROOT/config/site_defaults.yaml"; }
+mysql_setup_cnf()    { echo "$ROOT/config/mysql_setup.cnf"; }
 
+# The password is needed only when site_defaults.yaml must be (re)written.
 need_db_password() {
   [[ $RESET_DEFAULTS -eq 1 || ! -f "$(site_defaults_file)" ]]
 }
@@ -390,8 +484,9 @@ need_db_password() {
 # Asked right after the first checks, so nobody waits for a prompt in the middle of the install.
 ask_db_password() {
   need_db_password || return 0
-  if [[ $DRY_RUN -eq 1 ]]; then
-    say "  [dry-run] the company-standard DB password would be asked here (or taken from DPC_DB_PASSWORD)"
+  if [[ $DRY_RUN -eq 1 || $CHECK_ONLY -eq 1 ]]; then
+    [[ $DRY_RUN -eq 1 ]] && say "  [dry-run] the company-standard DB password would be asked here (or taken from DPC_DB_PASSWORD)"
+    DB_PASSWORD="${DPC_DB_PASSWORD:-}"
     return 0
   fi
   if [[ -n "${DPC_DB_PASSWORD:-}" ]]; then
@@ -411,6 +506,18 @@ ask_db_password() {
   DB_PASSWORD="$first"
 }
 
+# The password stored in an existing site_defaults.yaml (the format this script writes).
+password_from_site_defaults() {
+  "$PY" - "$(site_defaults_file)" <<'EOF'
+import re, sys
+for line in open(sys.argv[1], encoding="utf-8"):
+    m = re.match(r"^\s+password:\s*'(.*)'\s*$", line)
+    if m:
+        print(m.group(1).replace("''", "'"), end="")
+        break
+EOF
+}
+
 yaml_single_quoted() {   # any text as a YAML single-quoted scalar (a ' inside is written '')
   local q="'"
   printf "'%s'" "${1//$q/$q$q}"
@@ -427,193 +534,154 @@ db:
 YAML
 }
 
-step_site_defaults() {
-  step "6  Company DB defaults (site_defaults.yaml)"
-  local file tmp
+# write_secret_file <path> <content via stdin>: mode 600 from the first byte, then moved into place
+write_secret_file() {
+  local path="$1" tmp
+  tmp="$(umask 077 && mktemp "$(dirname "$path")/.$(basename "$path").XXXXXX")"
+  cat >"$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$path"
+}
+
+# mysql_login_error <cnf>: empty when the login in that option file works, else MySQL's message
+# (MySQL's error text names the user, never the password).
+mysql_login_error() {
+  local err
+  if err="$(mysql --defaults-file="$1" -e "SELECT 1" 2>&1 >/dev/null)"; then return 0; fi
+  echo "${err:-login failed}" | head -1
+}
+
+cnf_user() { sed -n 's/^user=//p' "$1" 2>/dev/null | head -1; }
+
+write_site_defaults() {
+  local file
   file="$(site_defaults_file)"
   if ! need_db_password; then
-    [[ $DRY_RUN -eq 1 ]] || chmod 600 "$file"
-    say "  $file: present, kept (install.sh --reset-defaults changes it)"
+    [[ $DRY_RUN -eq 1 || $CHECK_ONLY -eq 1 ]] || chmod 600 "$file"
+    report KEPT "site_defaults.yaml" "present (install.sh --reset-defaults changes it)"
     return 0
   fi
-  if [[ $DRY_RUN -eq 1 ]]; then
-    say "  [dry-run] write $file (mode 600): db.name_suffix $DEFAULT_DB_NAME_SUFFIX, db.user $DEFAULT_DB_USER, db.password <hidden>"
+  if [[ $CHECK_ONLY -eq 1 ]]; then
+    report MISSING "site_defaults.yaml" "not written yet: run install.sh"
+  elif [[ $DRY_RUN -eq 1 ]]; then
+    report PLANNED "site_defaults.yaml" "mode 600: db.name_suffix $DEFAULT_DB_NAME_SUFFIX, db.user $DEFAULT_DB_USER, db.password <hidden>"
+  else
+    site_defaults_yaml | write_secret_file "$file"
+    report WRITTEN "site_defaults.yaml" "mode 600 (password not shown)"
+  fi
+}
+
+write_mysql_setup_cnf() {
+  local cnf tmp error
+  cnf="$(mysql_setup_cnf)"
+  # A working root login is kept as it is (re-runs change nothing).
+  if [[ $RESET_DEFAULTS -eq 0 && "$(cnf_user "$cnf")" == "$MYSQL_ADMIN_USER" ]] && [[ -z "$(mysql_login_error "$cnf")" ]]; then
+    [[ $DRY_RUN -eq 1 || $CHECK_ONLY -eq 1 ]] || chmod 600 "$cnf"
+    report KEPT "mysql_setup.cnf" "root logs in"
     return 0
   fi
-  [[ -n "$DB_PASSWORD" ]] || fail "no company-standard DB password was entered"
-  tmp="$(umask 077 && mktemp "$ROOT/config/.site_defaults.XXXXXX")"
-  site_defaults_yaml >"$tmp"
+  if [[ -z "$DB_PASSWORD" ]]; then
+    report "$([[ $DRY_RUN -eq 1 ]] && echo PLANNED || echo MISSING)" "mysql_setup.cnf" "root login not checked (no password given in this run)"
+    return 0
+  fi
+  if ! command -v mysql >/dev/null 2>&1; then
+    report MISSING "MySQL root login" "no 'mysql' command to check it; the wizard asks on its page"
+    return 0
+  fi
+  # In an option file the value is written in double quotes (a # or a space inside stays part of
+  # it); a " or \ cannot be written so that both the mysql client and pymysql read the same value.
+  if [[ "$DB_PASSWORD" == *[\"\\]* ]]; then
+    report MISSING "mysql_setup.cnf" "the standard password contains \" or \\, which an option file cannot hold; the wizard asks on its page"
+    return 0
+  fi
+  # Check with a temporary option file (mode 600 in config/, password never on a command line).
+  tmp="$(umask 077 && mktemp "$ROOT/config/.mysql_setup.cnf.XXXXXX")"
+  printf '[client]\nuser=%s\npassword="%s"\n' "$MYSQL_ADMIN_USER" "$DB_PASSWORD" >"$tmp"
+  error="$(mysql_login_error "$tmp")"
+  if [[ -n "$error" ]]; then
+    rm -f "$tmp"
+    report MISSING "MySQL root login" "root does not accept the company-standard password ($error)"
+    note "MySQL root did not accept the company-standard password, so config/mysql_setup.cnf was not written.
+        Nothing was changed in MySQL. The wizard's database step asks for the MySQL admin login on its page."
+    return 0
+  fi
+  if [[ $DRY_RUN -eq 1 || $CHECK_ONLY -eq 1 ]]; then
+    rm -f "$tmp"
+    report "$([[ $DRY_RUN -eq 1 ]] && echo PLANNED || echo FOUND)" "MySQL root login" "root accepts the standard password"
+    return 0
+  fi
+  [[ -f "$cnf" && "$(cnf_user "$cnf")" != "$MYSQL_ADMIN_USER" ]] && say "  replacing the old $(cnf_user "$cnf") login in mysql_setup.cnf by root (D-110)"
   chmod 600 "$tmp"
-  mv -f "$tmp" "$file"
-  DB_PASSWORD=""
-  say "  written $file (mode 600, password not shown)"
+  mv -f "$tmp" "$cnf"
+  report FOUND "MySQL root login" "root accepts the standard password"
+  report WRITTEN "mysql_setup.cnf" "mode 600, user=root (password not shown)"
 }
 
-# ---------------------------------------------------------------- 7 Python packages
-python_in_venv() {
-  "$PY" -c 'import sys; sys.exit(0 if sys.prefix != sys.base_prefix else 1)'
-}
-
-python_can_import() {
-  "$PY" -c "import $1" >/dev/null 2>&1
-}
-
-# A pip constraints file that pins the installed numpy/torch/torchvision to their current versions.
-write_keep_constraints() {
-  "$PY" - "${PIP_KEEP_AS_IS[@]}" <<'EOF'
-import sys
-from importlib import metadata
-for name in sys.argv[1:]:
-    try:
-        print(f"{name}=={metadata.version(name)}")
-    except metadata.PackageNotFoundError:
-        pass
-EOF
-}
-
-step_python_packages() {
-  step "7  Python packages (for $PY)"
-  local packages=("${PIP_PACKAGES[@]}") pip_args=(--disable-pip-version-check) constraints
-  if python_can_import cv2; then
-    say "  OpenCV already importable: $PIP_OPENCV not added"
-  else
-    packages+=("$PIP_OPENCV")
-  fi
-  # System Python: install for this user (as on Tadipatri). A venv installs into the venv.
-  python_in_venv || pip_args+=(--user)
-
-  constraints="$(mktemp)"
-  write_keep_constraints >"$constraints"
-  if [[ -s "$constraints" ]]; then
-    say "  kept at their installed versions: $(paste -sd ' ' "$constraints")"
-    pip_args+=(-c "$constraints")
-  fi
-  # Without --upgrade pip leaves every package that is already installed alone: re-runs change nothing.
-  run "$PY" -m pip install "${pip_args[@]}" "${packages[@]}" \
-      -r "$CODE/supervisor/requirements.txt" -r "$CODE/ui/requirements.txt"
-  rm -f "$constraints"
-}
-
-# ---------------------------------------------------------------- 6 manual items (checks only)
-check_ok()      { CHECK_LINES+=("  OK       $1"); }
-check_missing() { CHECK_LINES+=("  MISSING  $1"$'\n'"           -> $2"); MANUAL_MISSING=1; }
-check_warn()    { CHECK_LINES+=("  WARN     $1"$'\n'"           -> $2"); }
-
-check_nvidia_driver() {
-  local driver
-  if command -v nvidia-smi >/dev/null 2>&1 && driver="$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1)" && [[ -n "$driver" ]]; then
-    check_ok "NVIDIA driver: $driver"
-  else
-    check_missing "NVIDIA driver (nvidia-smi does not answer)" \
-      "install it:  sudo ubuntu-drivers install   then reboot; check with  nvidia-smi"
-  fi
-}
-
-check_torch() {
-  local out
-  if ! out="$("$PY" -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())' 2>/dev/null)"; then
-    check_missing "PyTorch (import torch fails in $PY)" \
-      "install PyTorch for this machine's CUDA from pytorch.org, with this same Python: $PY -m pip install ..."
+step_database_login() {
+  step "6  Database login (MySQL root, company-standard password)"
+  if [[ ! -d "$ROOT/config" ]]; then
+    report "$([[ $DRY_RUN -eq 1 ]] && echo PLANNED || echo MISSING)" "DB login files" "$ROOT/config does not exist yet (written by a real run)"
     return 0
   fi
-  local version cuda available
-  read -r version cuda available <<<"$out"
-  if [[ "$available" == "True" ]]; then
-    check_ok "PyTorch $version, CUDA $cuda, GPU visible"
-  else
-    check_missing "PyTorch $version installed but it sees no GPU (CUDA $cuda)" \
-      "torch, CUDA and the NVIDIA driver do not match: reinstall the torch build for this driver (pytorch.org)"
+  # A kept site_defaults.yaml is the source of the password for the root check.
+  if [[ -z "$DB_PASSWORD" && -f "$(site_defaults_file)" && $RESET_DEFAULTS -eq 0 ]]; then
+    DB_PASSWORD="$(password_from_site_defaults)"
   fi
-}
-
-check_detectron2() {
-  local version
-  if version="$("$PY" -c 'import detectron2; print(detectron2.__version__)' 2>/dev/null)"; then
-    check_ok "Detectron2 $version"
-  else
-    check_missing "Detectron2 (import detectron2 fails in $PY)" \
-      "build Detectron2 0.6 from source with this same Python after PyTorch (docs/INSTALL.md step 2)"
-  fi
-}
-
-check_camera_sdk() {
-  local found=()
-  python_can_import pypylon && found+=("Basler pypylon")
-  python_can_import PySpin && found+=("FLIR PySpin")
-  if [[ ${#found[@]} -gt 0 ]]; then
-    check_ok "camera SDK: ${found[*]}"
-  else
-    check_missing "camera SDK (neither pypylon nor PySpin imports in $PY)" \
-      "Basler: $PY -m pip install --user pypylon (or the pylon software from baslerweb.com); FLIR: Spinnaker SDK and its PySpin wheel for this Python (flir.com)"
-  fi
-}
-
-check_autologin() {
-  # The kiosk opens at login; after a power cut nobody logs in unless automatic login is on.
-  if grep -Eqs '^[[:space:]]*AutomaticLoginEnable[[:space:]]*=[[:space:]]*(true|True)' /etc/gdm3/custom.conf; then
-    check_ok "automatic login (the screen opens by itself after a power cut)"
-  else
-    check_warn "automatic login is off: after a reboot the screen stays at the login page" \
-      "Settings > Users > Automatic Login for $(id -un) (the programs run anyway; only the screen waits)"
-  fi
-}
-
-step_checks() {
-  step "8  Items installed by hand (checked, not installed)"
-  CHECK_LINES=()
-  MANUAL_MISSING=0
-  check_nvidia_driver
-  check_torch
-  check_detectron2
-  check_camera_sdk
-  [[ $NO_KIOSK -eq 1 ]] || check_autologin
-  printf '%s\n' "${CHECK_LINES[@]}"
+  write_site_defaults
+  write_mysql_setup_cnf
+  DB_PASSWORD=""
 }
 
 # ---------------------------------------------------------------- 7 boot service
 step_service() {
-  step "9  Boot service ($SERVICE_NAME)"
-  # install_service.sh writes the unit only through sudo, runs check-config on a set-up site,
-  # and on a fresh machine says that the Supervisor will start in setup mode (S1).
-  local args=(--root "$ROOT" --python "$PY")
-  run bash "$CODE/supervisor/install_service.sh" "${args[@]}"
+  step "7  Boot service ($SERVICE_NAME)"
+  # install_service.sh writes the unit through sudo, runs check-config on a set-up site, and on a
+  # fresh machine says that the Supervisor will start in setup mode (S1).
+  run bash "$CODE/supervisor/install_service.sh" --root "$ROOT" --python "$PY"
+  report "$([[ $DRY_RUN -eq 1 ]] && echo PLANNED || echo WRITTEN)" "boot service" "$SERVICE_NAME enabled"
 }
 
-# ---------------------------------------------------------------- 8 kiosk autostart
+# ---------------------------------------------------------------- 8 kiosk autostart (Firefox, D-111)
 kiosk_desktop_entry() {
   cat <<EOF
 [Desktop Entry]
 Type=Application
 Name=DPC screen
-Comment=Opens the DPC UI full-screen at login (written by install/install.sh)
+Comment=Opens the DPC UI full-screen in Firefox at login (written by install/install.sh)
 Exec=/bin/bash $CODE/install/kiosk.sh
 Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
 }
 
-# write_if_changed <path> <content>: writes only when the content differs (re-runs change nothing)
+# write_if_changed <path> <content>: prints unchanged/written; re-runs change nothing
 write_if_changed() {
-  local path="$1" content="$2"
+  local path="$1" content="$2" line
   if [[ -f "$path" ]] && [[ "$(cat "$path")" == "$content" ]]; then
-    say "  $path: unchanged"
+    echo unchanged
     return 0
   fi
   if [[ $DRY_RUN -eq 1 ]]; then
-    say "  [dry-run] write $path:"
-    local line
-    while IFS= read -r line; do echo "      $line"; done <<<"$content"
+    say "  [dry-run] write $path:" >&2
+    while IFS= read -r line; do echo "      $line" >&2; done <<<"$content"
+    echo planned
     return 0
   fi
   mkdir -p "$(dirname "$path")"
   printf '%s\n' "$content" >"$path"
-  say "  written $path"
+  echo written
 }
 
 step_kiosk() {
-  step "10 Kiosk screen (autostart at login)"
-  if [[ $NO_KIOSK -eq 1 ]]; then say "  skipped (--no-kiosk)"; return 0; fi
-  write_if_changed "$HOME/.config/autostart/dpc-kiosk.desktop" "$(kiosk_desktop_entry)"
+  step "8  Kiosk screen (Firefox at login)"
+  if [[ $NO_KIOSK -eq 1 ]]; then report SKIPPED "kiosk" "--no-kiosk"; return 0; fi
+  local entry="$HOME/.config/autostart/dpc-kiosk.desktop" result
+  result="$(write_if_changed "$entry" "$(kiosk_desktop_entry)")"
+  case "$result" in
+    unchanged) report KEPT "kiosk autostart" "$entry" ;;
+    planned)   report PLANNED "kiosk autostart" "$entry" ;;
+    *)         report WRITTEN "kiosk autostart" "$entry" ;;
+  esac
 }
 
 # ---------------------------------------------------------------- 9 start the Supervisor
@@ -632,15 +700,18 @@ ui_url() {
   fi
 }
 
+url_answers() {   # no curl needed: the Python that runs the UI checks it
+  "$PY" -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=3)' "$1" >/dev/null 2>&1
+}
+
 step_start() {
-  step "11 Start the Supervisor"
+  step "9  Start the Supervisor"
   if ! systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
     # Fresh machine: no site.yaml yet, so the Supervisor starts in setup mode (only the UI).
     run_sudo systemctl start "$SERVICE_NAME"
   elif [[ $CODE_CHANGED -eq 1 ]]; then
     if [[ "$(current_mode)" == "setup" ]]; then
-      # Setup mode runs only the UI: a restart costs nothing.
-      run_sudo systemctl restart "$SERVICE_NAME"
+      run_sudo systemctl restart "$SERVICE_NAME"      # setup mode runs only the UI: costs nothing
     else
       # Normal mode: a restart restarts inspection (wheel counter lost, pause until the next plate),
       # so the person chooses the moment.
@@ -651,52 +722,57 @@ step_start() {
   else
     say "  running, code unchanged: left as it is"
   fi
-  [[ $DRY_RUN -eq 0 ]] && wait_for_ui
-  return 0
+  [[ $DRY_RUN -eq 1 ]] && { report PLANNED "Supervisor" "start (setup mode on a fresh machine)"; return 0; }
+  wait_for_ui
 }
 
 wait_for_ui() {
   local url waited=0
   url="$(ui_url)"
   say "  waiting for the UI at $url (first start can take a minute) ..."
-  while ! curl -fsS -o /dev/null --max-time 3 "$url" 2>/dev/null; do
+  while ! url_answers "$url"; do
     if [[ $waited -ge $UI_WAIT_SECONDS ]]; then
-      note "the UI did not answer within ${UI_WAIT_SECONDS} s. Look at:  journalctl -u $SERVICE_NAME -n 50   and $ROOT/logs/"
+      report MISSING "UI" "no answer at $url after ${UI_WAIT_SECONDS} s: journalctl -u $SERVICE_NAME -n 50"
       return 0
     fi
     sleep 3
     waited=$((waited + 3))
   done
-  say "  UI answers: OK (mode: $(current_mode))"
+  report FOUND "Supervisor + UI" "running, mode $(current_mode), $url"
 }
 
-# ---------------------------------------------------------------- summary
-summary() {
+# ---------------------------------------------------------------- final table
+print_table() {
+  local row state item detail
   echo
   echo "================================================================"
-  if [[ $DRY_RUN -eq 1 ]]; then
-    echo "Dry run finished: nothing was changed."
-  else
-    echo "DPC installation finished."
-  fi
-  echo
-  echo "Items installed by hand:"
-  printf '%s\n' "${CHECK_LINES[@]}"
+  if [[ $DRY_RUN -eq 1 ]]; then echo "Dry run: nothing was changed."; fi
+  printf '%-9s  %-26s  %s\n' "STATE" "ITEM" "DETAIL"
+  printf '%-9s  %-26s  %s\n' "---------" "--------------------------" "------"
+  for row in "${REPORT[@]}"; do
+    IFS='|' read -r state item detail <<<"$row"
+    printf '%-9s  %-26s  %s\n' "$state" "$item" "$detail"
+  done
   if [[ ${#NOTES[@]} -gt 0 ]]; then
     echo
     echo "Notes:"
     printf '  - %s\n' "${NOTES[@]}"
   fi
   echo
-  if [[ $MANUAL_MISSING -eq 1 ]]; then
-    echo "Install the MISSING items, then check again:  bash $CODE/install/install.sh --check-only"
-    echo "The setup wizard opens anyway; its camera and model steps need those items."
+  if [[ $MISSING_COUNT -gt 0 ]]; then
+    echo "$MISSING_COUNT item(s) MISSING. Prepared items are not installed by this script; after fixing them:"
+    echo "      bash $CODE/install/install.sh --check-only"
+  else
+    echo "Nothing missing."
   fi
+}
+
+print_next() {
+  echo
   echo "Next: open the setup wizard on this machine's screen:"
   echo "      $(ui_url)"
-  echo "and follow the Setup page (site name, database, cameras, PLC, machine, model, sizes, mail)."
   if [[ $NO_KIOSK -eq 0 ]]; then
-    echo "The kiosk screen opens it by itself at every login. To open it now (from the desktop):"
+    echo "The kiosk opens it in Firefox at every login. To open it now (from the desktop):"
     echo "      bash $CODE/install/kiosk.sh &"
   fi
   echo "================================================================"
@@ -707,27 +783,29 @@ main() {
   parse_args "$@"
   if [[ $CHECK_ONLY -eq 1 ]]; then
     preflight
-    step_checks
-    if [[ $MANUAL_MISSING -eq 0 ]]; then echo "All manual items present."; return 0; fi
-    echo "Some manual items are MISSING (see above)."
-    return 3
+    ask_db_password
+    step_prepared_checks
+    step_python_libraries
+    step_database_login
+    print_table
+    [[ $MISSING_COUNT -eq 0 ]] || return 3
+    return 0
   fi
   [[ $DRY_RUN -eq 1 ]] && echo "DRY RUN: every step is printed, nothing is changed."
   preflight
   ask_db_password
   start_log
-  step_system_packages
-  step_browser
+  step_prepared_checks
+  step_broker
   step_code
   step_layout
-  step_mysql_admin
-  step_site_defaults
-  step_python_packages
-  step_checks
+  step_python_libraries
+  step_database_login
   step_service
   step_kiosk
   step_start
-  summary
+  print_table
+  print_next
 }
 
 # The whole script is read before main runs, so checking out another tag (which rewrites this
