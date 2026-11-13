@@ -23,7 +23,15 @@ section of <root>/config/mysql_setup.cnf (pymysql read_default_file), so nobody 
 MySQL admin password on a fresh install (F88). An explicit admin password, or --socket
 (root over auth_socket), still works as before.
 
-Function:  bootstrap(BootstrapRequest(...)) -> dict  (used by the UI wizard, D-103)
+Seed only (D-112, F97; what the wizard's "Prepare tables" and Apply use):
+  The person creates the database and its login (e.g. in MySQL Workbench). --seed-only logs in
+  with that login to the EXISTING database and only runs steps 3 and 4 (schema.sql,
+  fixed_rows.sql, health rows for the serials given). It never runs CREATE DATABASE,
+  CREATE USER or GRANT, needs no admin login, and root is allowed as the login (D-050).
+  Errors say what to do: cannot connect, database does not exist, login refused, no rights.
+  Function: seed(SeedRequest(...)) -> dict;  CLI: --seed-only --db <name> --user <login> [--serial ..]
+
+Function:  bootstrap(BootstrapRequest(...)) -> dict  (create mode; D-103, superseded for the wizard by D-112)
 CLI:       python3 db/bootstrap.py --db <name> --user <program user> [--serial <s1> --serial <s2>] [--json]
            The program password comes from the environment (DPC_DB_PASS) or a prompt, the admin
            password from DPC_DB_ADMIN_PASS or else mysql_setup.cnf; never from the command line
@@ -340,6 +348,119 @@ def bootstrap(req: BootstrapRequest, connect: Optional[Callable] = None) -> dict
             "steps": report.steps}
 
 
+# --------------------------------------------------------------------------- seed only (D-112, F97)
+@dataclasses.dataclass
+class SeedRequest:
+    db_name: str
+    user: str
+    password: str
+    serials: Sequence[str] = ()                       # empty: health rows skipped (F93)
+    host: str = "localhost"
+    port: int = 3306
+
+    def secrets(self) -> List[str]:
+        return [self.password] if self.password else []
+
+
+# MySQL error numbers (pymysql puts the number first in the exception's args)
+ER_DBACCESS_DENIED = 1044          # login ok, no rights on this database
+ER_ACCESS_DENIED = 1045            # user or password wrong
+ER_BAD_DB = 1049                   # unknown database
+ER_TABLEACCESS_DENIED = 1142       # e.g. CREATE / INSERT command denied for the table
+ER_SPECIFIC_ACCESS_DENIED = 1227
+CANNOT_CONNECT = {2002, 2003, 2005, 2006, 2013}   # socket, TCP refused, unknown host, gone, lost
+
+
+def mysql_errno(exc) -> Optional[int]:
+    args = getattr(exc, "args", ())
+    return args[0] if args and isinstance(args[0], int) else None
+
+
+def validate_seed(req: SeedRequest) -> None:
+    if not NAME_RE.match(req.db_name or ""):
+        raise BootstrapError("database name: use 1-64 letters, digits or _")
+    if req.db_name.lower() in {"mysql", "information_schema", "performance_schema", "sys"}:
+        raise BootstrapError(f"database name {req.db_name!r} is a MySQL system database")
+    if not (req.user or "").strip():
+        raise BootstrapError("user is empty")
+    serials = [str(x).strip() for x in (req.serials or ())]
+    if any(not x or len(x) > 64 for x in serials):
+        raise BootstrapError("camera serials: each 1-64 characters")
+    if len(set(serials)) != len(serials):
+        raise BootstrapError("camera serials: the same serial is given twice")
+
+
+def connect_error_message(exc, req: SeedRequest) -> str:
+    """One sentence the person can act on, for a failed login to the site database."""
+    code, where = mysql_errno(exc), f"{req.host}:{req.port}"
+    if code == ER_BAD_DB:
+        return (f"database {req.db_name!r} does not exist on {where}: create it first, "
+                "e.g. in MySQL Workbench, then try again")
+    if code == ER_ACCESS_DENIED:
+        return f"login refused for user {req.user!r} on {where}: check the user and the password"
+    if code == ER_DBACCESS_DENIED:
+        # MySQL also answers this (not "unknown database") when a user without rights names a
+        # database that does not exist, so both causes are named
+        return (f"user {req.user!r} has no rights on database {req.db_name!r}, or it does not exist: "
+                "create it first if needed, e.g. in MySQL Workbench, and give the user all rights on it "
+                "(Users and Privileges, Schema Privileges)")
+    if code in CANNOT_CONNECT:
+        return f"cannot connect to MySQL on {where}: is MySQL running, and are host and port right?"
+    return f"cannot connect to MySQL on {where}: {exc}"
+
+
+def statement_error_message(exc, req: SeedRequest, what: str) -> str:
+    if mysql_errno(exc) in (ER_TABLEACCESS_DENIED, ER_DBACCESS_DENIED, ER_SPECIFIC_ACCESS_DENIED):
+        return (f"user {req.user!r} has no rights to {what} in {req.db_name!r}: give it all rights on that "
+                "database (MySQL Workbench: Users and Privileges, Schema Privileges)")
+    return f"{what} failed: {exc}"
+
+
+def seed(req: SeedRequest, connect: Optional[Callable] = None) -> dict:
+    """Seed an existing database with the given login (D-112). Never creates a database or user.
+    Returns {"ok", "mode": "seed-only", "database", "user", "error", "steps"}; "error" is None or
+    one sentence. Raises BootstrapError for bad input (before connecting)."""
+    validate_seed(req)
+    if connect is None:
+        import pymysql
+        connect = pymysql.connect
+    report = Report(req.secrets())
+    error = None
+    login = f"{req.user}@{req.host}:{req.port}"
+    try:
+        conn = connect(host=req.host, port=int(req.port), user=req.user, password=req.password,
+                       database=req.db_name, autocommit=True, connect_timeout=10)
+    except Exception as e:
+        error = report.redact(connect_error_message(e, req))
+        report.add("login", login, FAILED, error)
+        return _seed_result(req, report, error)
+
+    warning = "root is allowed; a dedicated user is safer (D-050)" if req.user == "root" else ""
+    report.add("login", login, OK, warning)
+    report.add("database", req.db_name, ALREADY)
+    try:
+        cur = conn.cursor()
+        try:
+            step_scripts(cur, req, report)
+        except Exception as e:
+            error = report.redact(statement_error_message(e, req, "create the tables and fixed rows"))
+            report.add("tables", req.db_name, FAILED, error)
+            return _seed_result(req, report, error)
+        try:
+            step_health_rows(cur, req, report)
+        except Exception as e:
+            error = report.redact(statement_error_message(e, req, "insert the health rows"))
+            report.add("health row", "", FAILED, error)
+    finally:
+        conn.close()
+    return _seed_result(req, report, error)
+
+
+def _seed_result(req, report, error):
+    return {"ok": report.ok and error is None, "mode": "seed-only", "database": req.db_name,
+            "user": req.user, "error": error, "steps": report.steps}
+
+
 # --------------------------------------------------------------------------- CLI
 def _password(env_name: str, prompt: str, allow_empty=False) -> str:
     value = os.environ.get(env_name)
@@ -351,7 +472,10 @@ def _password(env_name: str, prompt: str, allow_empty=False) -> str:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Create or check a site's DPC database (S3, D-103).")
+    ap = argparse.ArgumentParser(description="Seed (--seed-only, D-112) or create a site's DPC database (S3).")
+    ap.add_argument("--seed-only", action="store_true",
+                    help="only load the tables, fixed rows and health rows into an EXISTING database with "
+                         "the login --user / DPC_DB_PASS; never creates a database or user (D-112)")
     ap.add_argument("--host", default="localhost", help="MySQL host (default localhost)")
     ap.add_argument("--port", type=int, default=3306)
     ap.add_argument("--socket", help="connect the admin over this unix socket (root with auth_socket)")
@@ -362,9 +486,10 @@ def main(argv=None) -> int:
     ap.add_argument("--root", default=DEFAULT_ROOT, help="DPC root (default ~/INSIGHTZZ)")
     ap.add_argument("--admin-option-file", help="option file instead of <root>/config/mysql_setup.cnf")
     ap.add_argument("--db", required=True, help="site database name")
-    ap.add_argument("--user", required=True, help="program user to create (not root)")
+    ap.add_argument("--user", required=True, help="--seed-only: the login (root allowed); "
+                    "otherwise the program user to create (not root)")
     ap.add_argument("--password-env", default="DPC_DB_PASS",
-                    help="environment variable with the program user's password (default DPC_DB_PASS)")
+                    help="environment variable with that user's password (default DPC_DB_PASS)")
     ap.add_argument("--serial", action="append", default=[],
                     help="camera serial (repeat per camera); without it no health rows are inserted (F93)")
     ap.add_argument("--program-host", action="append", help="host part of the program user (repeat; "
@@ -373,6 +498,8 @@ def main(argv=None) -> int:
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
     args = ap.parse_args(argv)
 
+    if args.seed_only:
+        return _main_seed(args)
     try:
         admin_password = os.environ.get(args.admin_password_env) or ""
         if args.admin_user and not admin_password and not args.socket:
@@ -394,14 +521,34 @@ def main(argv=None) -> int:
     except BootstrapError as e:
         result = {"ok": False, "error": str(e), "steps": []}
 
-    if args.json:
+    return _print_result(result, args.json)
+
+
+def _main_seed(args) -> int:
+    create_only = [name for name, used in (
+        ("--socket", args.socket), ("--admin-user", args.admin_user), ("--admin-option-file", args.admin_option_file),
+        ("--program-host", args.program_host), ("--reset-password", args.reset_password)) if used]
+    try:
+        if create_only:
+            raise BootstrapError(f"{', '.join(create_only)} not used with --seed-only (it creates nothing)")
+        req = SeedRequest(db_name=args.db, user=args.user,
+                          password=_password(args.password_env, f"Password for {args.user}: "),
+                          serials=args.serial, host=args.host, port=args.port)
+        result = seed(req)
+    except BootstrapError as e:
+        result = {"ok": False, "mode": "seed-only", "error": str(e), "steps": []}
+    return _print_result(result, args.json)
+
+
+def _print_result(result: dict, as_json: bool) -> int:
+    if as_json:
         print(json.dumps(result, indent=2))
-    elif "error" in result:
-        print(f"ERROR {result['error']}")
     else:
         for s in result["steps"]:
             detail = f" ({s['detail']})" if s["detail"] else ""
             print(f"{s['result'].upper():14} {s['step']:15} {s['item']}{detail}")
+        if result.get("error"):
+            print(f"ERROR {result['error']}")
         print("OK" if result["ok"] else "FAILED")
     return 0 if result["ok"] else 1
 
