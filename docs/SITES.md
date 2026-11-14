@@ -57,3 +57,10 @@ MAIL: runs a mail variant that is not in the repo (Graph + false-alarm flood bre
 
 ## Hirmi (new site, setup started 2026-11-13)
 Machine `Dpc-inspection-hirmi`, user `dpc_inspection_hirmi`, Ubuntu 22.04, prepared machine (D-111). Cameras: **one Basler and one FLIR** (mixed; which side has which: from the wizard). First install with v0.2 stopped at the browser (Snap store timeouts) and at the database step; continue with v0.3. Values (serials, PLC, wheels per revolution, model) come from the wizard; recorded here after commissioning. Needs F86, F100, F101 before the FLIR camera can be set up.
+
+
+## Dhar (wizard test started 2026-11-14)
+Machine `dharddpcconveyor` (HP Z2 G9), user `dhar-ddpc-conveyor`. Old layout still present (`~/INSIGHTZZ/Code/`, old programs). New code in `~/INSIGHTZZ/code`. Cameras: **two FLIR Blackfly S BFS-PGE-23S3C**: serial 23431622 at 192.168.1.1, serial 23431632 at 192.168.1.2 (which is LEFT / RIGHT: from the wizard). Spinnaker in /opt/spinnaker; both cameras were in use by another program (old capture) during the test. Needs F86 (FLIR capture) and F103 (camera SDK environment for the service).
+
+## Narmada (2026-11-14)
+Machine `dpcnarmada`, user `dpc-narmada`: **Ubuntu 20.04, Python 3.8**; install.sh stops (needs Python 3.10+). Not prepared to the standard (D-107/D-111); upgrade to Ubuntu 22.04 recommended before installing.
