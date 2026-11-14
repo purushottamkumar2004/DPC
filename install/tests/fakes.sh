@@ -11,6 +11,7 @@
 
 make_fake_machine() {
   local fake="$1"
+  mkdir -p "$fake/root/etc/profile.d"     # DPC_SYSTEM_ROOT for the camera SDK settings (F103)
   mkdir -p "$fake/bin" "$fake/mods" "$fake/etc"
   : >"$fake/apt_installed"
 
@@ -18,7 +19,11 @@ make_fake_machine() {
 #!/usr/bin/env bash
 echo "$*" >>"$FAKE/sudo.log"
 [[ "$1" == "-v" ]] && exit 0
-if [[ "$1" == "tee" ]]; then cat >"$FAKE/etc/$(basename "$2")"; exit 0; fi
+# tee: a path inside the fake tree is written there, any real system path goes to $FAKE/etc/
+if [[ "$1" == "tee" ]]; then
+  case "$2" in "$FAKE"/*) cat >"$2" ;; *) cat >"$FAKE/etc/$(basename "$2")" ;; esac
+  exit 0
+fi
 exec "$@"
 EOF
   cat >"$fake/bin/apt-get" <<'EOF'
@@ -104,4 +109,21 @@ make_prepared_stack() {
   fake_module "$fake" pypylon
   fake_module "$fake" cv2
   fake_module "$fake" numpy "__version__ = '1.24.4'"
+}
+
+# fake_spinnaker <fake dir>: Spinnaker as its .deb installs it on Ubuntu: /opt/spinnaker and two
+# /etc/profile.d files that set the GenTL variables and PATH only for login shells (Dhar).
+fake_spinnaker() {
+  local sys="$1/root"
+  mkdir -p "$sys/opt/spinnaker/bin" "$sys/opt/spinnaker/lib/spinnaker-gentl" "$sys/etc/profile.d"
+  touch "$sys/opt/spinnaker/lib/spinnaker-gentl/Spinnaker_GenTL.cti"
+  cat >"$sys/etc/profile.d/setup_spinnaker_gentl_64.sh" <<EOF
+if [ -z "\$GENICAM_GENTL64_PATH" ]; then
+  export GENICAM_GENTL64_PATH=$sys/opt/spinnaker/lib/spinnaker-gentl
+else
+  export GENICAM_GENTL64_PATH=\$GENICAM_GENTL64_PATH:$sys/opt/spinnaker/lib/spinnaker-gentl
+fi
+export SPINNAKER_GENTL64_CTI=$sys/opt/spinnaker/lib/spinnaker-gentl/Spinnaker_GenTL.cti
+EOF
+  echo "export PATH=\$PATH:$sys/opt/spinnaker/bin" >"$sys/etc/profile.d/setup_spinnaker_paths.sh"
 }
