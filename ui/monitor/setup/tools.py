@@ -53,17 +53,24 @@ def frames_dir(serial):
     return env.work_dir("frames", re.sub(r"[^\w.-]", "_", str(serial)))
 
 
-def grab(serial, exposure_us=None):
+def _driver_args(driver):
+    """camera_probe picks pylon or Spinnaker (flir_probe.py) by the driver the search reported."""
+    return ["--driver", driver] if driver in ("basler", "flir") else []
+
+
+def grab(serial, exposure_us=None, driver=None):
     out = os.path.join(frames_dir(serial), "grab_" + datetime.datetime.now().strftime("%H%M%S_%f") + ".jpg")
-    cmd = _py("camera_probe", "grab", serial, out, "--json") + (["--exposure", exposure_us] if exposure_us else [])
+    cmd = _py("camera_probe", "grab", serial, out, "--json") + (["--exposure", exposure_us] if exposure_us else []) \
+        + _driver_args(driver)
     jobs.start(f"cameras.grab.{serial}", f"Taking an image from camera {serial}", [str(c) for c in cmd])
 
 
-def burst(serial, exposure_us=None):
+def burst(serial, exposure_us=None, driver=None):
     out = os.path.join(frames_dir(serial), "burst_" + datetime.datetime.now().strftime("%H%M%S"))
     cmd = _py("camera_probe", "burst", serial, out, "--count", BURST_COUNT, "--interval-ms", BURST_INTERVAL_MS, "--json")
     if exposure_us:
         cmd += ["--exposure", str(exposure_us)]
+    cmd += _driver_args(driver)
     jobs.start(f"cameras.burst.{serial}", f"Recording {BURST_COUNT} frames from camera {serial}", cmd)
 
 
@@ -298,7 +305,12 @@ def _probe_list(r, code):
     if not cams:
         return {"level": "error", "sentence": "No camera found. Check the network cables and that the cameras have power.",
                 "lines": lines}
-    return {"level": "ok", "sentence": f"{len(cams)} camera{'s' if len(cams) != 1 else ''} found.", "lines": lines}
+    by_driver = {}
+    for cam in cams:
+        by_driver[cam.get("driver") or "?"] = by_driver.get(cam.get("driver") or "?", 0) + 1
+    names = {"basler": "Basler", "flir": "FLIR"}
+    detail = ", ".join(f"{n} {names.get(d, d)}" for d, n in sorted(by_driver.items()))
+    return {"level": "ok", "sentence": f"{len(cams)} camera{'s' if len(cams) != 1 else ''} found ({detail}).", "lines": lines}
 
 
 def _probe_grab(r, code):

@@ -70,10 +70,12 @@ def _merge_results(step, answers):
             known = {c["serial"] for c in answers.get("cameras") or []}
             for cam in found["result"].get("cameras") or []:
                 if str(cam.get("serial")) not in known:
-                    answers.setdefault("cameras", []).append(
-                        {"serial": str(cam["serial"]), "driver": cam.get("driver") or "basler", "ip": cam.get("ip"),
-                         "model": cam.get("model"), "side": None, "fps": 4.0, "exposure_us": 1500, "rotate": 0,
-                         "motion": None})
+                    entry = {"serial": str(cam["serial"]), "driver": cam.get("driver") or "basler", "ip": cam.get("ip"),
+                             "model": cam.get("model"), "side": None, "fps": 4.0, "exposure_us": 1500, "rotate": 0,
+                             "motion": None}
+                    if entry["driver"] == "flir":
+                        entry["flir"] = dict(steps.FLIR_DEFAULTS)          # F101: shown and editable
+                    answers.setdefault("cameras", []).append(entry)
                     changed = True
         for cam in answers.get("cameras") or []:
             job = jobs.last(f"cameras.direction.{cam['serial']}")
@@ -234,7 +236,7 @@ def action(request, step, name):
                 exposure = p.get("exposure_us") or cam.get("exposure_us")
                 cam["exposure_us"] = int(float(exposure)) if exposure else cam.get("exposure_us")
                 steps.save(answers, "cameras")
-                (tools.grab if name == "grab" else tools.burst)(serial, cam["exposure_us"])
+                (tools.grab if name == "grab" else tools.burst)(serial, cam["exposure_us"], cam.get("driver"))
             elif name == "assign":
                 side = p.get("side")
                 for cam in answers.get("cameras") or []:

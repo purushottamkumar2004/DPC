@@ -30,6 +30,9 @@ DB_USER_RE = re.compile(r"^[A-Za-z0-9_]{1,32}$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 ROTATIONS = (0, 90, 180, 270)
 OBJECT_SIZE_KEYS = ("wheel_w", "wheel_h", "bucket_clip_w", "chain_w", "half_bucket_clip_w")
+# FLIR GigE cameras (Spinnaker) need two more settings; defaults from config/examples/site.example.yaml
+# and CONTRACTS 13 (the values of the existing FLIR sites)
+FLIR_DEFAULTS = {"interface": "GEV Interface 1", "throughput_bps": 19662239}
 PLC_DEFAULTS = {"type": "modbus_tcp", "port": 502, "light_register": 4109, "cleaning_register": 4106,
                 "conveyor_status_register": 4098, "light_on_value": 1}
 
@@ -209,7 +212,22 @@ def validate_cameras(form, answers):
             errors[f"motion_{serial}"] = (f"The direction of the {cam['side']} camera is not confirmed yet "
                                           "(detect it, or choose it).")
         if cam.get("driver") == "flir":
-            errors[f"driver_{serial}"] = "FLIR cameras cannot be set up by the wizard yet (F86)."
+            current = cam.get("flir") or dict(FLIR_DEFAULTS)
+            interface = (form.get(f"flir_interface_{serial}", current.get("interface")) or "").strip()
+            if not interface:
+                errors[f"flir_interface_{serial}"] = f"Interface of the FLIR camera {serial} is needed (default: GEV Interface 1)."
+            raw = form.get(f"flir_throughput_{serial}", current.get("throughput_bps"))
+            try:
+                throughput = int(str(raw).strip())
+                if throughput < 1:
+                    raise ValueError
+            except (TypeError, ValueError):
+                throughput = None
+                errors[f"flir_throughput_{serial}"] = (f"Throughput of the FLIR camera {serial} must be a whole number of "
+                                                       "bytes per second (default 19662239).")
+            cam["flir"] = {"interface": interface, "throughput_bps": throughput}
+        else:
+            cam.pop("flir", None)                      # the loader allows a flir block only for driver flir
     if not errors and len([c for c in cameras if c.get("side")]) == 0:
         errors["cameras"] = "Choose which camera is LEFT and which RIGHT."
     chosen = sorted([c for c in cameras if c.get("side")], key=lambda c: SIDES.index(c["side"]))

@@ -322,7 +322,7 @@ class CameraTests(WizardBase):
 
     def test_search_merges_cameras(self):
         page = self.search()
-        self.assertIn("2 cameras found.", page)
+        self.assertIn("2 cameras found (2 Basler).", page)
         self.assertIn("flir: camera software not installed", page)
         self.assertEqual([c["serial"] for c in self.draft()["answers"]["cameras"]], ["40112233", "40114455"])
         self.assertEqual(self.calls("camera_probe")[0]["argv"], ["list", "--json"])
@@ -401,6 +401,85 @@ class CameraTests(WizardBase):
     def _mkrun(self):
         os.makedirs(os.path.join(self.root, "run"), exist_ok=True)
         return os.path.join(self.root, "run", "mode.json")
+
+
+class MixedFlirTests(WizardBase):
+    """F101: a site with one Basler and one FLIR camera (Hirmi)."""
+    LIST = {"cameras": [{"driver": "basler", "serial": "40112233", "model": "a2A1920-51gcBAS", "ip": "192.168.1.102", "in_use": False},
+                        {"driver": "flir", "serial": "21234567", "model": "Blackfly S BFS-PGE-31S4C", "ip": "192.168.2.10",
+                         "in_use": False}],
+            "drivers": [{"driver": "basler", "sdk_installed": True, "cameras": []},
+                        {"driver": "flir", "sdk_installed": True, "cameras": []}]}
+
+    def setUp(self):
+        super().setUp()
+        self.set_answers({"site": {"id": "hirmi", "name": "Hirmi DPC"}}, step="cameras")
+        self.fake("camera_probe", self.LIST)
+        self.post("/setup/cameras/do/search/")
+        self.client.get("/setup/cameras/")             # the reload after the job merges the result into the draft
+
+    def cams(self):
+        return {c["serial"]: c for c in self.draft()["answers"]["cameras"]}
+
+    def test_both_drivers_listed_flir_with_defaults(self):
+        page = self.client.get("/setup/cameras/").content.decode()
+        self.assertIn("2 cameras found (1 Basler, 1 FLIR).", page)
+        self.assertNotIn("cannot be set up by the wizard", page)            # the F86 refusal is gone
+        self.assertIn('name="flir_interface_21234567" value="GEV Interface 1"', page)
+        self.assertIn('name="flir_throughput_21234567" value="19662239"', page)
+        self.assertNotIn("flir_interface_40112233", page)                   # Basler: no FLIR fields
+        cams = self.cams()
+        self.assertEqual(cams["21234567"]["flir"], {"interface": "GEV Interface 1", "throughput_bps": 19662239})
+        self.assertNotIn("flir", cams["40112233"])
+
+    def test_grab_and_burst_go_through_the_right_driver(self):
+        self.fake("camera_probe", {"ok": True, "status": "ok", "driver": "flir", "serial": "21234567"}, writes_image=True)
+        self.post("/setup/cameras/do/grab/", {"serial": "21234567"})
+        argv = self.calls("camera_probe")[-1]["argv"]
+        self.assertEqual(argv[:2], ["grab", "21234567"])
+        self.assertEqual(argv[argv.index("--driver") + 1], "flir")
+        self.fake("camera_probe", {"ok": True, "status": "ok", "driver": "flir", "frames": [{"index": 0}]})
+        self.post("/setup/cameras/do/burst/", {"serial": "21234567"})
+        argv = self.calls("camera_probe")[-1]["argv"]
+        self.assertEqual((argv[0], argv[argv.index("--driver") + 1]), ("burst", "flir"))
+        self.post("/setup/cameras/do/grab/", {"serial": "40112233"})
+        argv = self.calls("camera_probe")[-1]["argv"]
+        self.assertEqual(argv[argv.index("--driver") + 1], "basler")
+
+    def test_flir_fields_validated_and_saved(self):
+        self.client.post("/setup/cameras/do/assign/", {"serial": "40112233", "side": "LEFT"})
+        self.client.post("/setup/cameras/do/assign/", {"serial": "21234567", "side": "RIGHT"})
+        form = {"go": "next", "motion_40112233": "rtl", "motion_21234567": "rtl",
+                "flir_interface_21234567": "", "flir_throughput_21234567": "fast"}
+        r = self.client.post("/setup/cameras/", form)
+        self.assertContains(r, "Interface of the FLIR camera 21234567 is needed", status_code=400)
+        self.assertContains(r, "Throughput of the FLIR camera 21234567 must be a whole number", status_code=400)
+        form.update({"flir_interface_21234567": "GEV Interface 2", "flir_throughput_21234567": "12000000"})
+        self.assertEqual(self.client.post("/setup/cameras/", form).url, "/setup/plc/")
+        cams = self.cams()
+        self.assertEqual(cams["21234567"]["flir"], {"interface": "GEV Interface 2", "throughput_bps": 12000000})
+        self.assertEqual((cams["40112233"]["id"], cams["21234567"]["id"]), ("CAM1", "CAM2"))
+        self.assertNotIn("flir", cams["40112233"])
+
+    def test_mixed_site_passes_the_loader_and_applies(self):
+        answers = self.full_answers()
+        answers["site"] = {"id": "hirmi", "name": "Hirmi DPC"}
+        answers["database"]["name"] = "hirmi_db"
+        answers["cameras"][1].update({"driver": "flir", "serial": "21234567",
+                                      "flir": {"interface": "GEV Interface 1", "throughput_bps": 19662239}})
+        self.set_answers(answers, step="review")
+        page = self.client.get("/setup/review/").content.decode()
+        self.assertNotIn("The settings are not complete yet", page)
+        self.assertIn("FLIR 21234567 (GEV Interface 1, 19662239 B/s)", page)
+        os.makedirs(os.path.join(self.root, "run"), exist_ok=True)
+        self.cfg["paths"]["run"] = os.path.join(self.root, "run")
+        self.fake("bootstrap", {"ok": True, "steps": []})
+        self.post("/setup/apply/", {"confirm": "yes"})
+        site = open(os.path.join(self.root, "config", "site.yaml")).read()
+        self.assertIn("driver: flir", site)
+        self.assertIn("GEV Interface 1", site)
+        self.assertIn("19662239", site)
+        self.assertTrue(os.path.exists(os.path.join(self.root, "run", "setup_finish")))
 
 
 # ------------------------------------------------------------------------------------- steps 4, 5

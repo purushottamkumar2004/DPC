@@ -63,7 +63,9 @@ Steps: site, database (D-112: the person creates the database and its login, e.g
 step pre-fills host, port, `<site.id>_db`, user and "standard password set" from `config/site_defaults.yaml`,
 root allowed with a warning; **Test connection** checks the login and that the database exists, **Prepare
 tables** runs `db/bootstrap.py --seed-only` (F97); never creates a database or user),
-cameras (search, grab, LEFT/RIGHT, exposure/fps/rotate, record frames, detect direction, confirm), PLC (read,
+cameras (search lists Basler and FLIR; grab and burst go through camera_probe with the camera's driver, FLIR
+via flir_probe; LEFT/RIGHT, exposure/fps/rotate, FLIR interface and throughput_bps with defaults "GEV Interface 1"
+and 19662239; record frames, detect direction, confirm), PLC (read,
 light off 5 s, cleaning pulse), machine, model (choose files under /media, /mnt or the root; package; self-test),
 object sizes (measure: p10 proposed, median beside it), mail (optional, test mail), data transfer (optional,
 check), review (the real loader, secrets as set / not set, warnings).
