@@ -7,8 +7,9 @@ Same functions and result format as the Basler side:
 Use it through camera_probe.py (list_all / grab_one / the CLI), which also covers Basler.
 Without the Spinnaker SDK both report "FLIR SDK not installed" instead of failing.
 
-Not yet tried on a real FLIR camera (no FLIR site so far): built from the Spinnaker API and
-tested with a fake PySpin. The first FLIR site should run `camera_probe.py list` and `grab` once.
+In use is decided only by camera.Init() (F106, Dhar): DeviceAccessStatus is read without
+opening and was "not free" for two free GigE Blackfly S cameras that SpinView opened fine, so it is
+reported as `access` (information) and never refuses a grab or burst.
 """
 import os
 import time
@@ -17,9 +18,9 @@ import camera_probe as probe
 
 FLIR_SDK_MISSING = "FLIR SDK not installed (Spinnaker + PySpin)"
 
-# DeviceAccessStatus (GenTL), read without opening the camera.
-_FREE_STATES = ("ReadWrite",)
-_IN_USE_STATES = ("ReadOnly", "NoAccess", "Busy", "OpenReadWrite", "OpenReadOnly")
+# DeviceAccessStatus (GenTL) is read without opening the camera and only reported (F106):
+# ReadOnly / NoAccess also appear for a free camera that is not reachable for control
+# (e.g. another subnet than the PC port), so it never decides "in use".
 
 
 def _load_pyspin():
@@ -53,14 +54,12 @@ def _ip_text(value):
 
 
 def _describe(PySpin, camera):
-    """(serial, model, ip, in_use) from the transport-layer node map, without opening the camera."""
+    """(serial, model, ip, access status) from the transport-layer node map, without opening."""
     tl = camera.GetTLDeviceNodeMap()
-    access = _read(PySpin, tl, "DeviceAccessStatus", "enum")
-    in_use = True if access in _IN_USE_STATES else False if access in _FREE_STATES else None
     return (_read(PySpin, tl, "DeviceSerialNumber", "string"),
             _read(PySpin, tl, "DeviceModelName", "string"),
             _ip_text(_read(PySpin, tl, "GevDeviceIPAddress", "integer")),
-            in_use)
+            _read(PySpin, tl, "DeviceAccessStatus", "enum"))
 
 
 class _System:
@@ -91,9 +90,9 @@ def list_cameras():
         with _System(PySpin) as spin:
             for index in range(spin.cameras.GetSize()):
                 camera = spin.cameras.GetByIndex(index)
-                serial, model, ip, in_use = _describe(PySpin, camera)
+                serial, model, ip, access = _describe(PySpin, camera)
                 del camera
-                found.append(probe.camera_entry("flir", serial, model, ip, in_use))
+                found.append(probe.camera_entry("flir", serial, model, ip, access))
         return probe.list_result("flir", True, found)
     except Exception as exc:
         return probe.list_result("flir", True, message=f"listing FLIR cameras failed: {exc}")
@@ -132,35 +131,43 @@ def _to_bgr(PySpin, image):
 def _find(PySpin, cameras, serial):
     for index in range(cameras.GetSize()):
         camera = cameras.GetByIndex(index)
-        found_serial, model, _, in_use = _describe(PySpin, camera)
+        found_serial, model, _, access = _describe(PySpin, camera)
         if found_serial == str(serial):
-            return camera, model, in_use
+            return camera, model, access
         del camera
     return None, None, None
 
 
 def _with_flir(serial, make_result, work):
-    """Find the FLIR camera, check it is free, Init it, run work(PySpin, camera, nodemap, model),
-    then EndAcquisition (if started) and DeInit. Shared by grab and burst so both say "in use"
-    the same way. make_result(status, message, **fields) builds the operation's result."""
+    """Find the FLIR camera, Init it, run work(PySpin, camera, nodemap, model, state), then
+    EndAcquisition (if started) and DeInit. Shared by grab and burst so both say "in use" the same
+    way. make_result(status, message, **fields) builds the operation's result. Every result carries
+    the camera's DeviceAccessStatus as `access` (information only); in_use only when Init fails
+    as busy (F106)."""
+    seen = {"access": None}
+    result = _open_flir(serial, make_result, work, seen)
+    result["access"] = seen["access"]
+    return result
+
+
+def _open_flir(serial, make_result, work, seen):
     PySpin = _load_pyspin()
     if PySpin is None:
         return make_result(probe.SDK_MISSING, FLIR_SDK_MISSING)
-    in_use_message = probe.IN_USE_MESSAGE.format(serial=serial)
     try:
         with _System(PySpin) as spin:
-            camera, model, in_use = _find(PySpin, spin.cameras, serial)
+            camera, model, access = _find(PySpin, spin.cameras, serial)
             if camera is None:
                 return make_result(probe.NOT_FOUND, f"no FLIR camera with serial {serial}")
+            seen["access"] = access
             try:
-                if in_use:
-                    return make_result(probe.IN_USE, in_use_message, model=model)
                 try:
-                    camera.Init()
+                    camera.Init()                     # always tried: the only real "in use" test
                 except Exception as exc:
                     if probe.looks_in_use(exc):
-                        return make_result(probe.IN_USE, in_use_message, model=model)
-                    return make_result(probe.FAILED, f"could not open camera {serial}: {exc}", model=model)
+                        return make_result(probe.IN_USE, probe.in_use_message(serial, exc), model=model)
+                    return make_result(probe.FAILED, f"could not open camera {serial} "
+                                                     f"(access status {access}): {exc}", model=model)
                 state = {"acquiring": False}
                 try:
                     return work(PySpin, camera, camera.GetNodeMap(), model, state)
@@ -178,7 +185,7 @@ def _with_flir(serial, make_result, work):
                 del camera
     except Exception as exc:
         if probe.looks_in_use(exc):
-            return make_result(probe.IN_USE, in_use_message)
+            return make_result(probe.IN_USE, probe.in_use_message(serial, exc))
         return make_result(probe.FAILED, f"camera {serial}: {exc}")
 
 

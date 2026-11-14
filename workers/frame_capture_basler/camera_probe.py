@@ -23,6 +23,11 @@ Exit codes: 0 ok, 1 failed (SDK missing, open or grab failed), 2 bad request,
 
 A camera that another program (normally the running capture) holds is reported as in use;
 it is never forced. Stop that program first, e.g. through the Supervisor.
+"In use" is decided ONLY by trying to open the camera (F106): the SDK's access check without
+opening (pylon IsDeviceAccessible, Spinnaker DeviceAccessStatus) also says "no" for a camera that
+is free but not reachable (e.g. another subnet than the PC port), so it is shown as information
+(`access`) and never refuses a grab. A failed open that is not "busy" gives status failed with
+the SDK's own text.
 An exposure given here is set in the camera's working memory only (lost at power-off); the
 capture program sets its own exposure (and frame rate, which a burst unlocks) when it starts,
 so nothing here changes production.
@@ -75,10 +80,24 @@ def list_result(driver, sdk_installed, cameras=(), message=None):
     return {"driver": driver, "sdk_installed": sdk_installed, "message": message, "cameras": list(cameras)}
 
 
-def camera_entry(driver, serial, model, ip, in_use, device_class=None, name=None):
-    """One camera in a list result. in_use: True / False, or None when the SDK cannot tell."""
+def camera_entry(driver, serial, model, ip, access=None, device_class=None, name=None):
+    """One camera in a list result. access: what the SDK says without opening the camera
+    (information only). in_use is always None in a list: only opening the camera tells (F106);
+    grab answers it."""
     return {"driver": driver, "serial": str(serial), "model": model, "ip": ip,
-            "in_use": in_use, "device_class": device_class, "name": name}
+            "in_use": None, "access": access, "device_class": device_class, "name": name}
+
+
+def basler_access(factory, info):
+    """pylon's accessibility check without opening, as text (information only)."""
+    try:
+        return "accessible" if factory.IsDeviceAccessible(info) else "not accessible"
+    except Exception:
+        return None
+
+
+def in_use_message(serial, error):
+    return IN_USE_MESSAGE.format(serial=serial) + f" (SDK: {error})"
 
 
 def grab_result(status, driver=None, serial=None, message=None, **fields):
@@ -172,7 +191,7 @@ def _basler_ip(device_info):
 
 
 def list_cameras():
-    """Every Basler camera pylon can see, with in_use = another program holds it."""
+    """Every Basler camera pylon can see; access = pylon's check without opening (information)."""
     sdk = _load_pylon()
     if sdk is None:
         return list_result("basler", False, message=BASLER_SDK_MISSING)
@@ -181,12 +200,9 @@ def list_cameras():
         factory = pylon.TlFactory.GetInstance()
         cameras = []
         for info in factory.EnumerateDevices():
-            try:
-                in_use = not factory.IsDeviceAccessible(info)
-            except Exception:
-                in_use = None
             cameras.append(camera_entry("basler", _info(info, "GetSerialNumber"), _info(info, "GetModelName"),
-                                        _basler_ip(info), in_use, _info(info, "GetDeviceClass"),
+                                        _basler_ip(info), basler_access(factory, info),
+                                        _info(info, "GetDeviceClass"),
                                         _info(info, "GetUserDefinedName")))
         return list_result("basler", True, cameras)
     except Exception as exc:
@@ -230,9 +246,17 @@ def _basler_settings(camera, genicam, exposure_us, unlock_frame_rate=False):
 
 
 def _with_basler(serial, make_result, work):
-    """Find, check and open the Basler camera, run work(pylon, genicam, camera, model), close it.
+    """Find and open the Basler camera, run work(pylon, genicam, camera, model), close it.
     Shared by grab and burst so both say "in use" the same way. make_result(status, message, **fields)
-    builds the operation's result for every failure before work runs."""
+    builds the operation's result for every failure before work runs. Every result carries
+    `access` (pylon's check without opening) as information; in_use only from a busy open (F106)."""
+    seen = {"access": None}
+    result = _open_basler(serial, make_result, work, seen)
+    result["access"] = seen["access"]
+    return result
+
+
+def _open_basler(serial, make_result, work, seen):
     sdk = _load_pylon()
     if sdk is None:
         return make_result(SDK_MISSING, BASLER_SDK_MISSING)
@@ -242,12 +266,8 @@ def _with_basler(serial, make_result, work):
     if info is None:
         return make_result(NOT_FOUND, f"no Basler camera with serial {serial}")
     model = _info(info, "GetModelName")
-    in_use = make_result(IN_USE, IN_USE_MESSAGE.format(serial=serial), model=model)
-    try:
-        if not factory.IsDeviceAccessible(info):
-            return in_use
-    except Exception:
-        pass                                 # cannot tell: opening will show it
+    access = basler_access(factory, info)          # information only, never a refusal (F106)
+    seen["access"] = access
 
     camera = None
     try:
@@ -256,12 +276,12 @@ def _with_basler(serial, make_result, work):
             camera.Open()
         except Exception as exc:
             if looks_in_use(exc):
-                return in_use
-            return make_result(FAILED, f"could not open camera {serial}: {exc}", model=model)
+                return make_result(IN_USE, in_use_message(serial, exc), model=model)
+            return make_result(FAILED, f"could not open camera {serial} (access: {access}): {exc}", model=model)
         return work(pylon, genicam, camera, model)
     except Exception as exc:
         if looks_in_use(exc):
-            return in_use
+            return make_result(IN_USE, in_use_message(serial, exc), model=model)
         return make_result(FAILED, f"camera {serial}: {exc}", model=model)
     finally:
         if camera is not None:
@@ -458,7 +478,7 @@ def _print_list(result):
         elif not driver["cameras"]:
             print(f"{driver['driver']}: no cameras found")
     for cam in result["cameras"]:
-        state = {True: "IN USE", False: "free", None: "unknown"}[cam["in_use"]]
+        state = f"access {cam['access'] or '?'} (in use: only a grab tells)"
         print(f"{cam['driver']:7} serial {cam['serial']:12} {cam['model'] or '?':24} "
               f"ip {cam['ip'] or '-':15} {state}")
 

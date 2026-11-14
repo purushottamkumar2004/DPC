@@ -1,6 +1,7 @@
 """Fake PySpin (Spinnaker) for flir_probe tests: only the calls flir_probe makes.
 CAMERAS lists the connected cameras: {"serial", "model", "ip" (int), "access" (DeviceAccessStatus),
-"init_error", "incomplete", "incomplete_at" (1-based image number)}. LOG records the calls that matter for clean-up order."""
+"init_error", "busy" (Init fails with Spinnaker's access-denied error), "incomplete",
+"incomplete_at" (1-based image number)}. "access" is only what the camera reports without opening. LOG records the calls that matter for clean-up order."""
 import numpy as np
 
 PixelFormat_BGR8 = 1
@@ -132,6 +133,8 @@ class _Camera:
 
     def Init(self):
         LOG.append(f"init {self.info['serial']}")
+        if self.info.get("busy"):
+            raise SpinnakerException("Spinnaker: Access Denied [-1005]")
         if self.info.get("init_error"):
             raise SpinnakerException(self.info["init_error"])
 
