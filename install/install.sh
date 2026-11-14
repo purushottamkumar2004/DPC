@@ -8,7 +8,7 @@
 #
 #   0  checks            not root, Ubuntu 22.04, Python 3.10+, sudo
 #   1  prepared programs CHECK ONLY: MySQL server running, NVIDIA driver, torch + CUDA, detectron2,
-#                        pypylon or PySpin, Firefox (for the kiosk), git, pip
+#                        pypylon and PySpin (each with its version; a mixed site needs both), Firefox (for the kiosk), git, pip
 #   2  MQTT broker       mosquitto + mosquitto-clients from apt, only when missing
 #   3  code              git clone of a release tag into <root>/code
 #   4  layout            <root>/{code,config,logs,run,data} via scripts/setup_dpc_layout.sh
@@ -103,6 +103,7 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 
 # report <STATE> <item> <detail>: one row of the final table, also shown right away.
 # STATE: FOUND, INSTALLED, WRITTEN, KEPT, MISSING, WARN, SKIPPED, PLANNED (dry-run)
+# WARN does not count as missing for the exit code: it is something to check for this site.
 report() {
   REPORT+=("$1|$2|$3")
   [[ "$1" == MISSING ]] && MISSING_COUNT=$((MISSING_COUNT + 1))
@@ -236,14 +237,63 @@ check_detectron2() {
   fi
 }
 
+# Camera SDKs: each camera's driver needs its own SDK, so a mixed site (one Basler + one FLIR camera)
+# needs both. Each SDK gets its own line with its version. On a configured site the drivers come from
+# site.yaml (capture.cameras[].driver); before the wizard has run they are not known yet.
+# "driver|import name|pip distribution name|what to install"
+CAMERA_SDKS=(
+  "basler|pypylon|pypylon|Basler pylon SDK + pypylon"
+  "flir|PySpin|spinnaker-python|FLIR Spinnaker SDK + its PySpin wheel"
+)
+
+# site_camera_drivers: the camera drivers in site.yaml (basler / flir, one per line); empty when
+# there is no site.yaml yet. A plain text read: PyYAML may not be installed yet at step 1.
+site_camera_drivers() {
+  local file="$ROOT/config/site.yaml"
+  [[ -r "$file" ]] || return 0
+  sed -n -E 's/#.*//; s/^[[:space:]]*driver:[[:space:]]*["'"'"']?([a-z]+).*/\1/p' "$file" | sort -u
+}
+
+# sdk_version <import name> <distribution name>: version from the package metadata, else the
+# module's __version__, else "version unknown". Never opens a camera (no PySpin.System instance).
+sdk_version() {
+  "$PY" - "$1" "$2" 2>/dev/null <<'EOF' || echo "version unknown"
+import importlib, sys
+from importlib import metadata
+module, dist = sys.argv[1], sys.argv[2]
+try:
+    print(metadata.version(dist))
+except metadata.PackageNotFoundError:
+    print(getattr(importlib.import_module(module), "__version__", "version unknown"))
+EOF
+}
+
 check_camera_sdk() {
-  local found=()
-  python_can_import pypylon && found+=("pypylon (Basler)")
-  python_can_import PySpin && found+=("PySpin (FLIR)")
-  if [[ ${#found[@]} -gt 0 ]]; then
-    report FOUND "camera SDK" "${found[*]}"
-  else
-    report MISSING "camera SDK" "neither pypylon (Basler pylon) nor PySpin (FLIR Spinnaker) imports in $PY"
+  local drivers entry driver module dist label item found_count=0 lacking=()
+  drivers="$(site_camera_drivers)"
+  for entry in "${CAMERA_SDKS[@]}"; do
+    IFS='|' read -r driver module dist label <<<"$entry"
+    if python_can_import "$module"; then found_count=$((found_count + 1)); fi
+  done
+  for entry in "${CAMERA_SDKS[@]}"; do
+    IFS='|' read -r driver module dist label <<<"$entry"
+    item="$module (${label%% *})"
+    if python_can_import "$module"; then
+      report FOUND "$item" "$(sdk_version "$module" "$dist")"
+    elif grep -qx "$driver" <<<"$drivers"; then
+      report MISSING "$item" "site.yaml has a $driver camera: install the $label for $PY"
+    elif [[ -n "$drivers" ]]; then
+      report SKIPPED "$item" "not needed: no $driver camera in site.yaml"
+    elif [[ $found_count -eq 0 ]]; then
+      report MISSING "$item" "no camera SDK imports in $PY; each camera needs the SDK of its driver"
+    else
+      lacking+=("$label")
+      report WARN "$item" "not found: needed only if this site has a $driver camera"
+    fi
+  done
+  if [[ ${#lacking[@]} -gt 0 ]]; then
+    note "a mixed site (one Basler + one FLIR camera) needs BOTH camera SDKs; this machine lacks: ${lacking[*]}.
+        If this site has such a camera, install it before the wizard's camera step."
   fi
 }
 

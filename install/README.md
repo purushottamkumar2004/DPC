@@ -1,6 +1,6 @@
 # install/ : the DPC installer for prepared site machines (D-111, STATUS F95)
 
-Owned by the INSTALLER role (OWNERS.md). Insightzz site machines arrive **prepared**: Ubuntu 22.04, NVIDIA driver, CUDA, torch, detectron2, the camera SDK (pylon or Spinnaker), Firefox, and MySQL server. `install.sh` **checks** those and never installs, upgrades or reconfigures them; it adds only the small DPC pieces. It is the only terminal step: everything after it happens in the UI (D-110).
+Owned by the INSTALLER role (OWNERS.md). Insightzz site machines arrive **prepared**: Ubuntu 22.04, NVIDIA driver, CUDA, torch, detectron2, the camera SDK of each camera (pylon for Basler, Spinnaker for FLIR; both on a mixed site), Firefox, and MySQL server. `install.sh` **checks** those and never installs, upgrades or reconfigures them; it adds only the small DPC pieces. It is the only terminal step: everything after it happens in the UI (D-110).
 
 | File | What it is |
 |---|---|
@@ -23,7 +23,7 @@ Never with `sudo` or as root. Then open the setup wizard on the screen (the URL 
 | # | Step | Does | Never |
 |---|---|---|---|
 | 0 | Checks | not root, Ubuntu 22.04 (else a note), Python 3.10+, `sudo -v` | - |
-| 1 | Prepared programs | **checks**: MySQL server running, NVIDIA driver (`nvidia-smi`), torch + CUDA (GPU visible), detectron2, pypylon or PySpin, OpenCV, Firefox (unless `--no-kiosk`), git, pip | installs, upgrades or changes any of them |
+| 1 | Prepared programs | **checks**: MySQL server running, NVIDIA driver (`nvidia-smi`), torch + CUDA (GPU visible), detectron2, **pypylon (Basler) and PySpin (FLIR) on separate lines with their versions**, OpenCV, Firefox (unless `--no-kiosk`), git, pip | installs, upgrades or changes any of them |
 | 2 | MQTT broker | `apt-get install --no-upgrade mosquitto mosquitto-clients` **only when missing**; enabled and started | a full `apt upgrade` |
 | 3 | Code | `git clone --branch <tag>` into `~/INSIGHTZZ/code` (detached at the release, D-039) | switch code without `--tag`, or over hand edits |
 | 4 | Layout | `scripts/setup_dpc_layout.sh` | move or delete anything |
@@ -46,6 +46,19 @@ The password is asked once per machine at the start (typed twice, hidden), or gi
 
 A `config/mysql_setup.cnf` from an older installer (v0.2 or the F95 build) is no longer read by anything. The installer leaves it in place and prints a note; delete it when you no longer need the MySQL login it holds.
 
+## Camera SDKs (F102)
+Each camera needs the SDK of its driver, so a **mixed site** (one Basler + one FLIR camera, for example Hirmi) needs **both**. The table shows each SDK on its own line with its version (pypylon from `pypylon`, PySpin from the `spinnaker-python` package metadata; no camera is opened):
+
+| Situation | pypylon / PySpin line |
+|---|---|
+| SDK imports | `FOUND` with its version |
+| SDK missing, `site.yaml` has a camera with that driver | `MISSING` (counts for `--check-only` exit 3) |
+| SDK missing, `site.yaml` has no camera with that driver | `SKIPPED` (not needed) |
+| SDK missing, no `site.yaml` yet (first install), the other SDK present | `WARN` plus a note: a mixed site needs both; install it before the wizard's camera step if the site has such a camera |
+| neither SDK imports | both `MISSING` |
+
+After the wizard has saved the cameras, re-run `bash ~/INSIGHTZZ/code/install/install.sh --check-only` to check the SDKs against the site's actual drivers.
+
 ## Re-running and updating
 `bash ~/INSIGHTZZ/code/install/install.sh` is safe at any time: every step checks first, nothing present is reinstalled, the code is not switched without `--tag`.
 ```bash
@@ -64,6 +77,7 @@ It refuses when files inside `code/` were changed by hand. It adds any library t
 ```bash
 bash install/tests/test_install.sh      # as a normal user; needs git, python3; shellcheck optional
 bash install/tests/test_db_setup.sh
+bash install/tests/test_camera_sdk.sh   # both SDKs, one SDK before the wizard, mixed / Basler-only site.yaml, none
 ```
 No sudo, network, MySQL, apt, pip download or Firefox needed: `tests/fakes.sh` provides logging fakes and a python3 wrapper whose `-m pip` only records the request. Covered: dry-run changes nothing; a first run on a prepared machine installs only mosquitto and the missing libraries, writes `site_defaults.yaml`, never calls MySQL (the fake `mysql` is a tripwire), never prints the password (output and log); a second run changes nothing and asks nothing; `--no-kiosk` without Firefox; an old `mysql_setup.cnf` left untouched with a note; `--check-only` on a bare machine names every missing item and writes nothing; YAML round-trip (quotes, `#`, `\`), `--reset-defaults`, no terminal without `DPC_DB_PASSWORD`; the code step; the Firefox kiosk.
 
