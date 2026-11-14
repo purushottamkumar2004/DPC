@@ -61,8 +61,14 @@ python3 camera_probe.py burst SERIAL OUT_DIR [--count 20] [--interval-ms 250] [-
 In Python: `camera_probe.list_all()`, `camera_probe.grab_one(serial, out_path, exposure_us=None, timeout_ms=5000, driver="auto")`,
 `camera_probe.burst(serial, out_dir, count=20, interval_ms=250, exposure_us=None, timeout_ms=5000, driver="auto")`.
 
-- `list` gives per camera: driver, serial, model, IP (GigE only), `in_use` (true / false / null when the SDK
-  cannot tell), device class and user name. A missing SDK is reported per driver ("Basler SDK not installed",
+- `list` gives per camera: driver, serial, model, IP (GigE only), `access` (what the SDK says without opening:
+  pylon `accessible` / `not accessible`, Spinnaker's DeviceAccessStatus such as `ReadWrite`, `ReadOnly`), device
+  class and user name. `in_use` is always null in a list (F106): only opening the camera tells, so ask `grab`.
+- **In use is decided only by opening** (F106): `grab` and `burst` always try `Open()` (pylon) / `Init()`
+  (Spinnaker), and say `in_use` only when that fails with a busy / access-denied error, with the SDK's words in
+  `message`. Any other open error is `failed` with the SDK's text and the access status (e.g. a camera on another
+  subnet than the PC port). The access status alone never refuses: on Dhar it said "not free" for two free FLIR
+  cameras. Every grab and burst result carries `access` as information. A missing SDK is reported per driver ("Basler SDK not installed",
   "FLIR SDK not installed"), never an error.
 - `grab` writes one image (.jpg, .png or .bmp; written next to the target, then renamed). Status and exit code:
   `ok` 0; `failed` 1 (open or grab failed, the SDK's text in `message`); `sdk_missing` 1; `bad_request` 2;
@@ -79,8 +85,7 @@ In Python: `camera_probe.list_all()`, `camera_probe.grab_one(serial, out_path, e
   on start). Same in-use handling and exit codes as `grab`. The result adds `dir`, `count`, `interval_ms`,
   `saved` and `frames` ([{index, path, t_ms}], t_ms since the first frame). If a frame fails mid-burst the result
   is `failed` with the message naming the frame, and the frames saved before it stay and are listed.
-- FLIR (Spinnaker, PySpin) is in `flir_probe.py` with the same functions and results; `in_use` comes from the
-  camera's access status, read without opening it. Not yet tried on a real FLIR camera.
+- FLIR (Spinnaker, PySpin) is in `flir_probe.py` with the same functions and results; first real FLIR use is Dhar (Blackfly S BFS-PGE-23S3C, GigE), to be confirmed by F106's site check.
 - Try it without hardware: `PYLON_CAMEMU=2 python3 camera_probe.py list` (pylon's emulated cameras).
 
 ## Tests

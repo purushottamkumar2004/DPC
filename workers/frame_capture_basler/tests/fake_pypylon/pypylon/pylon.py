@@ -4,7 +4,10 @@ When the script is empty the test is over and a stop is requested.
 
 For camera_probe: STATE["devices"] lists the cameras that are connected
 ({"serial", "model", "ip", "class", "in_use", "open_error", "grab_ok"}); set them with set_devices().
-"in_use" makes IsDeviceAccessible() False; "open_error" makes Open() raise that text.
+"in_use" = really held by another program: IsDeviceAccessible() False AND Open() fails with
+pylon's "controlled by another application" error. "not_accessible" = IsDeviceAccessible() False
+but the camera opens fine (free, e.g. reachable for streaming only; F106).
+"open_error" makes Open() raise that text.
 In a burst, RetrieveResult() gives frames; "fail_at" / "timeout_at" (1-based frame number) make that
 frame a failed grab / a timeout."""
 import numpy as np
@@ -15,6 +18,9 @@ GrabStrategy_LatestImageOnly = 1
 TimeoutHandling_Return = 1
 
 STATE = {}
+BUSY_ERROR = ("Failed to open 'Basler acA1920-40gc#0030534A6217#192.168.1.103:3956'. The device is "
+              "controlled by another application. Err: An attempt was made to access an address "
+              "location which is currently/momentary not accessible. (0xE1018006)")
 FEATURES = {"TriggerMode", "AcquisitionMode", "AcquisitionFrameRateEnable",
             "AcquisitionFrameRateAbs", "ExposureTimeAbs"}     # a mono ace: no BalanceWhiteAuto
 
@@ -67,7 +73,8 @@ class _TransportLayer:
         return [DeviceInfo(d) for d in STATE.get("devices", [])]
 
     def IsDeviceAccessible(self, device_info):
-        return not device_info.device.get("in_use", False)
+        d = device_info.device
+        return not (d.get("in_use") or d.get("not_accessible"))
 
     def CreateDevice(self, device_info):
         return device_info
@@ -130,6 +137,8 @@ class InstantCamera:
         raise AttributeError(name)
 
     def Open(self):
+        if self.device.get("in_use"):
+            raise RuntimeError(BUSY_ERROR)
         if self.device.get("open_error"):
             raise RuntimeError(self.device["open_error"])
         STATE["opens"] += 1

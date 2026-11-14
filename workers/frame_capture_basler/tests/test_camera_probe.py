@@ -54,11 +54,12 @@ class Base(unittest.TestCase):
 
 
 class BaslerList(Base):
-    def test_lists_serial_model_ip_and_in_use(self):
+    def test_lists_serial_model_ip_and_access(self):
         pylon.set_devices([LEFT, dict(RIGHT, in_use=True), USB])
         cams = {c["serial"]: c for c in probe.list_cameras()["cameras"]}
-        self.assertEqual((cams["24824427"]["ip"], cams["24824427"]["in_use"]), ("192.168.1.102", False))
-        self.assertTrue(cams["24874775"]["in_use"])
+        self.assertEqual((cams["24824427"]["ip"], cams["24824427"]["access"]), ("192.168.1.102", "accessible"))
+        self.assertEqual(cams["24874775"]["access"], "not accessible")
+        self.assertTrue(all(c["in_use"] is None for c in cams.values()))      # only a grab tells (F106)
         self.assertEqual((cams["40000001"]["ip"], cams["40000001"]["device_class"]), (None, "BaslerUsb"))
         self.assertEqual(cams["24824427"]["driver"], "basler")
 
@@ -96,12 +97,20 @@ class BaslerGrab(Base):
         self.assertIsNone(result["exposure_us"])
         self.assertNotIn("ExposureTimeAbs", pylon.STATE["settings"])
 
-    def test_in_use_is_said_clearly_and_camera_not_opened(self):
+    def test_in_use_is_said_clearly(self):
         result = probe.grab_one("24874775", self.out)
         self.assertEqual(result["status"], probe.IN_USE)
         self.assertIn("in use by another program", result["message"])
-        self.assertEqual(pylon.STATE["opens"], 0)
+        self.assertIn("controlled by another application", result["message"])   # the SDK's own words
+        self.assertEqual(result["access"], "not accessible")
         self.assertEqual(self.files(), [])
+
+    def test_not_accessible_but_free_is_grabbed(self):                     # F106, Basler side
+        pylon.set_devices([dict(LEFT, not_accessible=True)])
+        result = probe.grab_one("24824427", self.out)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["access"], "not accessible")
+        self.assertEqual(cv2.imread(self.out).shape, (1080, 1920, 3))
 
     def test_in_use_found_only_when_opening(self):
         pylon.set_devices([dict(LEFT, open_error=IN_USE_ERROR)])
@@ -113,6 +122,7 @@ class BaslerGrab(Base):
         result = probe.grab_one("24824427", self.out)
         self.assertEqual(result["status"], probe.FAILED)
         self.assertIn("wrong subnet", result["message"])
+        self.assertEqual(result["access"], "accessible")
 
     def test_failed_grab_writes_nothing_and_closes(self):
         pylon.set_devices([dict(LEFT, grab_ok=False)])
@@ -144,12 +154,13 @@ class Flir(Base):
         super().setUp()
         PySpin.setup([{"serial": "21012345", "model": "Blackfly S BFS-PGE-31S4C", "ip": 0xC0A8016E},
                       {"serial": "21012346", "model": "Blackfly S BFS-PGE-31S4C", "ip": 0xC0A8016F,
-                       "access": "OpenReadWrite"}])
+                       "access": "OpenReadWrite", "busy": True}])
 
     def test_list(self):
         cams = {c["serial"]: c for c in flir_probe.list_cameras()["cameras"]}
-        self.assertEqual((cams["21012345"]["ip"], cams["21012345"]["in_use"]), ("192.168.1.110", False))
-        self.assertTrue(cams["21012346"]["in_use"])
+        self.assertEqual((cams["21012345"]["ip"], cams["21012345"]["access"]), ("192.168.1.110", "ReadWrite"))
+        self.assertEqual(cams["21012346"]["access"], "OpenReadWrite")
+        self.assertTrue(all(c["in_use"] is None for c in cams.values()))      # only Init tells (F106)
         self.assertEqual(PySpin.LOG[-2:], ["list cleared", "system released"])
 
     def test_list_all_merges_both_drivers(self):
@@ -168,13 +179,37 @@ class Flir(Base):
         for done in ("end", "deinit", "list cleared", "system released"):
             self.assertIn(done, PySpin.LOG)
 
-    def test_in_use_by_access_status(self):
+    def test_in_use_only_from_a_busy_init(self):
         result = flir_probe.grab_one("21012346", self.out)
         self.assertEqual(result["status"], probe.IN_USE)
-        self.assertNotIn("init 21012346", PySpin.LOG)
+        self.assertIn("init 21012346", PySpin.LOG)                             # Init was tried
+        self.assertIn("-1005", result["message"])
+        self.assertEqual(result["access"], "OpenReadWrite")
+
+    def test_dhar_readonly_status_but_init_ok_grabs(self):                   # F106, the Dhar case
+        for access in ("ReadOnly", "NoAccess", "OpenReadWrite", "Busy"):
+            with self.subTest(access=access):
+                PySpin.setup([{"serial": "23431622", "model": "Blackfly S BFS-PGE-23S3C", "ip": 0xC0A80101,
+                               "access": access}])
+                result = probe.grab_one("23431622", self.out, driver="flir")
+                self.assertTrue(result["ok"], result)
+                self.assertEqual((result["status"], result["access"]), (probe.OK, access))
+                self.assertEqual(cv2.imread(self.out).shape, (1080, 1440, 3))
+
+    def test_other_init_error_is_failed_with_the_real_message(self):
+        PySpin.setup([{"serial": "23431632", "access": "ReadOnly",
+                       "init_error": "Spinnaker: GenICam::GenericException= Camera IP 192.168.1.2 is not "
+                                     "on the subnet of the PC port [-1010]"}])
+        result = flir_probe.grab_one("23431632", self.out)
+        self.assertEqual(result["status"], probe.FAILED)
+        self.assertIn("not on the subnet", result["message"])
+        self.assertIn("access status ReadOnly", result["message"])
+        self.assertEqual(result["access"], "ReadOnly")
+        self.assertEqual(self.files(), [])
+        self.assertIn("system released", PySpin.LOG)
 
     def test_in_use_found_at_init(self):
-        PySpin.setup([{"serial": "21012345", "init_error": "Spinnaker: Access Denied [-1005]"}])
+        PySpin.setup([{"serial": "21012345", "access": "ReadWrite", "busy": True}])   # status said free
         self.assertEqual(flir_probe.grab_one("21012345", self.out)["status"], probe.IN_USE)
         self.assertIn("system released", PySpin.LOG)
 
@@ -207,10 +242,11 @@ class Cli(Base):
         self.assertEqual([c["serial"] for c in result["cameras"]], ["24824427", "24874775"])
         self.assertIn("FLIR SDK not installed", result["drivers"][1]["message"])
 
-    def test_list_text_says_in_use(self):
+    def test_list_text_shows_access_not_a_verdict(self):
         pylon.set_devices([dict(RIGHT, in_use=True)])
         code, text = self.run_cli("list", "--driver", "basler")
-        self.assertIn("IN USE", text)
+        self.assertIn("access not accessible", text)
+        self.assertNotIn("IN USE", text)
 
     def test_burst_cli(self):
         pylon.set_devices([LEFT, dict(RIGHT, in_use=True)])
@@ -268,6 +304,11 @@ class BaslerBurst(Base):
         self.assertEqual((pylon.STATE["opens"], self.names()), (0, []))
         pylon.set_devices([dict(LEFT, open_error=IN_USE_ERROR)])
         self.assertEqual(probe.burst("24824427", self.dir)["status"], probe.IN_USE)
+
+    def test_not_accessible_but_free_bursts(self):                         # F106
+        pylon.set_devices([dict(LEFT, not_accessible=True)])
+        result = probe.burst("24824427", self.dir, count=3, interval_ms=0)
+        self.assertEqual((result["status"], result["saved"], result["access"]), (probe.OK, 3, "not accessible"))
 
     def test_failure_mid_burst_keeps_the_saved_frames(self):
         for key, words in (("fail_at", "incomplete"), ("timeout_at", "no frame within")):
@@ -337,8 +378,11 @@ class FlirBurst(Base):
         for done in ("end", "deinit", "system released"):
             self.assertIn(done, PySpin.LOG)
 
-    def test_in_use(self):
-        PySpin.setup([{"serial": "21012346", "access": "Busy"}])
+    def test_in_use_only_from_init(self):
+        PySpin.setup([{"serial": "21012346", "access": "Busy"}])                      # free: Init works
+        self.assertEqual(probe.burst("21012346", self._tmp.name, count=2, interval_ms=0,
+                                     driver="flir")["status"], probe.OK)
+        PySpin.setup([{"serial": "21012346", "access": "Busy", "busy": True}])
         self.assertEqual(probe.burst("21012346", self._tmp.name, driver="flir")["status"], probe.IN_USE)
 
 
