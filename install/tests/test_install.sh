@@ -77,7 +77,7 @@ run_installer() {
 test_shellcheck() {
   if ! command -v shellcheck >/dev/null 2>&1; then echo "SKIP  shellcheck not installed"; return 0; fi
   if shellcheck -x "$INSTALL_DIR/install.sh" "$INSTALL_DIR/kiosk.sh" "$HERE/test_install.sh" \
-       "$HERE/test_db_setup.sh" "$HERE/fakes.sh"; then
+       "$HERE/test_db_setup.sh" "$HERE/test_camera_sdk.sh" "$HERE/fakes.sh"; then
     pass "shellcheck clean"
   else
     fail "shellcheck"
@@ -184,7 +184,7 @@ test_check_only_missing() {
   out="$(FAKE="$fake" PATH="$fake/bin:/usr/bin:/bin" bash "$INSTALL_DIR/install.sh" --check-only \
           --python "$fake/py" --root "$root" </dev/null 2>&1)" || rc=$?
   check "check-only with missing items: exit 3 (was $rc)" [ "$rc" -eq 3 ]
-  for item in "NVIDIA driver" "PyTorch + CUDA" "Detectron2" "camera SDK" "MySQL server" "Firefox (kiosk)" "OpenCV (cv2)"; do
+  for item in "NVIDIA driver" "PyTorch + CUDA" "Detectron2" "pypylon (Basler)" "PySpin (FLIR)" "MySQL server" "Firefox (kiosk)" "OpenCV (cv2)"; do
     check "check-only names MISSING $item" has "$out" "MISSING    $item"
   done
   check "check-only: nothing installed (no apt, pip)" none_exist "$fake/apt.log" "$fake/pip.log"
