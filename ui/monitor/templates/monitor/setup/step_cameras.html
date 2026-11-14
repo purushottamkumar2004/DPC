@@ -9,7 +9,7 @@
 <div class="camgrid">
 {% for c in cams %}
 <div class="card camcard{% if c.side %} chosen{% endif %}">
-  <div class="h"><span>{{ c.serial }}</span><span class="muted">{{ c.driver }} {{ c.model|default:"" }} {{ c.ip|default:"" }}</span></div>
+  <div class="h"><span>{{ c.serial }} <span class="drv">{% if c.driver == "flir" %}FLIR{% else %}Basler{% endif %}</span></span><span class="muted">{{ c.model|default:"" }} {{ c.ip|default:"" }}</span></div>
   <div class="img whole">{% if c.grab %}<img src="/setup/frame/{{ c.serial }}/{{ c.grab }}" alt="camera {{ c.serial }}">{% else %}<span class="nolive" style="display:flex">no image yet: Grab</span>{% endif %}</div>
   {% with r=c.result %}{% include "monitor/setup/result.html" %}{% endwith %}
   {% if c.result.level == "warning" and mode == "normal" %}<p><button class="btn" hx-post="/setup/cameras/do/pause/" hx-vals='{"serial": "{{ c.serial }}"}' hx-target="#job" data-tip="Stops this camera's capture program (and so its inspection side) until you leave this step">Pause this camera for the test</button></p>{% endif %}
@@ -24,6 +24,15 @@
       <option value="0" {% if c.rotate == 0 %}selected{% endif %}>0°</option><option value="90" {% if c.rotate == 90 %}selected{% endif %}>90°</option>
       <option value="180" {% if c.rotate == 180 %}selected{% endif %}>180°</option><option value="270" {% if c.rotate == 270 %}selected{% endif %}>270°</option></select></label>
   </div>
+  {% if c.driver == "flir" %}
+  <div class="fields two flirfields" data-tip="FLIR GigE cameras (Spinnaker) need the network interface name and the throughput limit. The defaults fit the existing FLIR sites.">
+    <label class="field{% for k, v in errors.items %}{% if k == 'flir_interface_'|add:c.serial %} bad{% endif %}{% endfor %}"><span class="flabel">FLIR interface</span>
+      <input name="flir_interface_{{ c.serial }}" value="{{ c.flir.interface|default:'GEV Interface 1' }}"><span class="muted">default GEV Interface 1</span>
+      {% for k, v in errors.items %}{% if k == "flir_interface_"|add:c.serial %}<span class="ferr">{{ v }}</span>{% endif %}{% endfor %}</label>
+    <label class="field{% for k, v in errors.items %}{% if k == 'flir_throughput_'|add:c.serial %} bad{% endif %}{% endfor %}"><span class="flabel">Throughput (bytes/s)</span>
+      <input name="flir_throughput_{{ c.serial }}" value="{{ c.flir.throughput_bps|default:19662239 }}" inputmode="numeric"><span class="muted">default 19662239</span>
+      {% for k, v in errors.items %}{% if k == "flir_throughput_"|add:c.serial %}<span class="ferr">{{ v }}</span>{% endif %}{% endfor %}</label>
+  </div>{% endif %}
   <p><button class="btn" hx-post="/setup/cameras/do/grab/" hx-vals='{"serial": "{{ c.serial }}"}' hx-include="[name='exposure_us_{{ c.serial }}']" hx-target="#job" data-tip="Takes one image with this exposure">Grab again</button></p>
   {% if c.side %}
   <div class="direction"><b>Direction</b> <span class="muted">Start the conveyor, then record a few seconds of frames.</span>

@@ -281,3 +281,5 @@ fieldset.choice > label { display: block; margin: 4px 0; }
 .row form { display: inline; }
 .camcard .fields.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .field input, .field select { width: 100%; min-width: 0; }
+.drv { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; background: var(--row); color: var(--muted); margin-left: 6px; }
+.fields.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
