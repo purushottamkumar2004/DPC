@@ -70,14 +70,14 @@ prepare_root() {   # prepare_root <root>: only the rendered ui.json, so the star
 # run_installer <fake> <home> <args...>: install.sh with the fake machine first in PATH
 run_installer() {
   local fake="$1" home="$2"; shift 2
-  FAKE="$fake" HOME="$home" PATH="$fake/bin:$PATH" DPC_UI_WAIT_SECONDS=6 \
+  FAKE="$fake" HOME="$home" PATH="$fake/bin:$PATH" DPC_UI_WAIT_SECONDS=6 DPC_SYSTEM_ROOT="$fake/root" \
     bash "$INSTALL_DIR/install.sh" --python "$fake/py" --repo "$REMOTE" "$@" </dev/null
 }
 
 test_shellcheck() {
   if ! command -v shellcheck >/dev/null 2>&1; then echo "SKIP  shellcheck not installed"; return 0; fi
   if shellcheck -x "$INSTALL_DIR/install.sh" "$INSTALL_DIR/kiosk.sh" "$HERE/test_install.sh" \
-       "$HERE/test_db_setup.sh" "$HERE/test_camera_sdk.sh" "$HERE/fakes.sh"; then
+       "$HERE/test_db_setup.sh" "$HERE/test_camera_sdk.sh" "$HERE/test_camera_sdk_env.sh" "$HERE/fakes.sh"; then
     pass "shellcheck clean"
   else
     fail "shellcheck"
@@ -114,7 +114,7 @@ test_dry_run() {
 # some Python libraries missing.
 test_first_and_second_run() {
   local fake="$WORK/f_ok" home="$WORK/h_ok" root="$WORK/ok/INSIGHTZZ" out rc=0 cnf defaults log
-  make_fake_machine "$fake"; make_prepared_stack "$fake"
+  make_fake_machine "$fake"; make_prepared_stack "$fake"; fake_spinnaker "$fake"
   fake_module "$fake" yaml; fake_module "$fake" pymysql
   prepare_root "$root"
   cnf="$root/config/mysql_setup.cnf"; defaults="$root/config/site_defaults.yaml"
@@ -138,6 +138,9 @@ test_first_and_second_run() {
   check "first run: boot unit written" [ -f "$fake/etc/dpc-supervisor.service" ]
   check "first run: Supervisor started" [ -e "$fake/active_dpc-supervisor" ]
   check "first run: UI found" has "$out" "FOUND      Supervisor + UI"
+  check "first run: camera SDK settings WRITTEN for the service" has "$out" "WRITTEN    SDK settings for service"
+  check "first run: drop-in in the fake system root" \
+    grep -q "SPINNAKER_GENTL64_CTI" "$fake/root/etc/systemd/system/dpc-supervisor.service.d/camera-sdk.conf"
   check "first run: kiosk entry written" grep -q "install/kiosk.sh" "$home/.config/autostart/dpc-kiosk.desktop"
   check "first run: no Chromium, no snap" file_lacks "$fake/sudo.log" "snap|chromium"
 
@@ -151,6 +154,7 @@ test_first_and_second_run() {
   check "second run: site_defaults.yaml kept" [ "$(cat "$defaults")" = "$defaults_before" ]
   check "second run: table says KEPT" has "$out" "KEPT       site_defaults.yaml"
   check "second run: code kept" has "$out" "KEPT       code"
+  check "second run: camera SDK settings unchanged" has "$out" "KEPT       SDK settings for service"
   check "second run: password not printed" lacks "$out" "$TEST_PASSWORD"
 }
 

@@ -30,6 +30,7 @@ Never with `sudo` or as root. Then open the setup wizard on the screen (the URL 
 | 5 | Python libraries | `pip install --user` of **only the missing ones** among paho-mqtt, pymysql, PyYAML, pymodbus (3.x), requests, Django 5.2, waitress, numpy (only if absent) | upgrade a library that is present; numpy/torch/torchvision are pinned to their installed versions |
 | 6 | DB defaults | writes `config/site_defaults.yaml`, the wizard's pre-fill (standard password asked once) | log in to MySQL, create a database or a login (D-112) |
 | 7 | Boot service | `supervisor/install_service.sh` (systemd `dpc-supervisor`, D-052) | - |
+| 7b | Camera SDK settings | copies the Spinnaker / pylon settings of the login shell into `/etc/systemd/system/dpc-supervisor.service.d/camera-sdk.conf`, then `daemon-reload` (F103) | change the SDK or its files |
 | 8 | Kiosk | `~/.config/autostart/dpc-kiosk.desktop` runs `install/kiosk.sh` (Firefox) at login | install a browser (no Chromium, no Snap store) |
 | 9 | Start | `systemctl start dpc-supervisor` (setup mode on a fresh machine: only the UI); waits until the UI answers | restart a Supervisor in normal mode (it prints the command instead) |
 
@@ -59,6 +60,17 @@ Each camera needs the SDK of its driver, so a **mixed site** (one Basler + one F
 
 After the wizard has saved the cameras, re-run `bash ~/INSIGHTZZ/code/install/install.sh --check-only` to check the SDKs against the site's actual drivers.
 
+## Camera SDK settings for the service (F103)
+Spinnaker (and pylon) put their settings (`GENICAM_GENTL64_PATH`, `SPINNAKER_GENTL64_CTI`, `PATH` with `/opt/spinnaker/bin`) in `/etc/profile.d`, which only a **login shell** reads. The boot service never sees them, so the wizard's camera search and the FLIR capture found 0 cameras while a terminal found them (Dhar). Step 7b copies them into a drop-in of the service:
+
+- **Sources:** `/etc/environment` (read, not run), the `/etc/profile.d/*.sh` files that mention an SDK (run in a clean shell, never this terminal's environment), then the SDK folders `/opt/spinnaker` and `/opt/pylon*`, which fill whatever the login settings do not set.
+- **Kept:** `GENICAM_GENTL32/64_PATH`, `SPINNAKER_*`, `PYLON_*`, `FLIR_*`, the SDK entries of `LD_LIBRARY_PATH`, and `PATH` = the unit's own `PATH` (same Python first) plus the SDK `bin` folders. A drop-in `PATH` replaces the unit's, which is why it repeats it.
+- **Written** only when the content changed, then `systemctl daemon-reload`. The table shows `WRITTEN`, `KEPT` (unchanged) or `SKIPPED` (no SDK).
+- **Restart:** new settings take effect at the next start. In setup mode the installer restarts the Supervisor itself (only the UI runs). In normal mode it prints `sudo systemctl restart dpc-supervisor` for a quiet moment.
+- **After installing or updating Spinnaker or pylon:** run `bash ~/INSIGHTZZ/code/install/install.sh` again.
+
+Check on the machine: `systemctl show dpc-supervisor -p Environment`.
+
 ## Re-running and updating
 `bash ~/INSIGHTZZ/code/install/install.sh` is safe at any time: every step checks first, nothing present is reinstalled, the code is not switched without `--tag`.
 ```bash
@@ -78,6 +90,7 @@ It refuses when files inside `code/` were changed by hand. It adds any library t
 bash install/tests/test_install.sh      # as a normal user; needs git, python3; shellcheck optional
 bash install/tests/test_db_setup.sh
 bash install/tests/test_camera_sdk.sh   # both SDKs, one SDK before the wizard, mixed / Basler-only site.yaml, none
+bash install/tests/test_camera_sdk_env.sh   # F103 drop-in: fake /etc/profile.d, /etc/environment, /opt (DPC_SYSTEM_ROOT)
 ```
 No sudo, network, MySQL, apt, pip download or Firefox needed: `tests/fakes.sh` provides logging fakes and a python3 wrapper whose `-m pip` only records the request. Covered: dry-run changes nothing; a first run on a prepared machine installs only mosquitto and the missing libraries, writes `site_defaults.yaml`, never calls MySQL (the fake `mysql` is a tripwire), never prints the password (output and log); a second run changes nothing and asks nothing; `--no-kiosk` without Firefox; an old `mysql_setup.cnf` left untouched with a note; `--check-only` on a bare machine names every missing item and writes nothing; YAML round-trip (quotes, `#`, `\`), `--reset-defaults`, no terminal without `DPC_DB_PASSWORD`; the code step; the Firefox kiosk.
 

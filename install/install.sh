@@ -17,6 +17,8 @@
 #   6  DB defaults       config/site_defaults.yaml: the company-standard DB login, the wizard's
 #                        pre-fill (D-108). No MySQL login: the person creates the database (D-112)
 #   7  boot service      supervisor/install_service.sh (systemd unit dpc-supervisor)
+#   7b camera SDK env    drop-in dpc-supervisor.service.d/camera-sdk.conf with the Spinnaker/pylon
+#                        settings of the login shell (GenTL paths, PATH), so the service finds cameras
 #   8  kiosk             autostart entry: Firefox full-screen on the UI at login
 #   9  start             starts the Supervisor; on a fresh machine it runs in setup mode (only the UI)
 #   then a table: what was found, installed, written, and what is MISSING.
@@ -621,6 +623,152 @@ step_service() {
   report "$([[ $DRY_RUN -eq 1 ]] && echo PLANNED || echo WRITTEN)" "boot service" "$SERVICE_NAME enabled"
 }
 
+# ---------------------------------------------------------------- 7b camera SDK settings for the service (F103)
+# Spinnaker (and pylon) put their GenTL settings in the LOGIN shell (/etc/profile.d, /etc/environment).
+# A systemd service never reads those, so everything the Supervisor starts (the wizard's camera
+# search, the FLIR capture) saw 0 cameras while a terminal saw them (Dhar, 2026-11-14). This step
+# copies the SDK settings the machine defines into a drop-in of the boot service. It never changes
+# the SDK or its files. The locations are variables so the tests can point them at fake files.
+# DPC_SYSTEM_ROOT is only for the tests (a fake /etc and /opt); empty on a machine.
+SYSTEM_ROOT="${DPC_SYSTEM_ROOT:-}"
+PROFILE_D_DIR="$SYSTEM_ROOT/etc/profile.d"
+ETC_ENVIRONMENT="$SYSTEM_ROOT/etc/environment"
+SDK_SPINNAKER_DIR="$SYSTEM_ROOT/opt/spinnaker"
+SDK_PYLON_GLOB="$SYSTEM_ROOT/opt/pylon*"
+SERVICE_DROPIN_DIR="$SYSTEM_ROOT/etc/systemd/system/$SERVICE_NAME.service.d"
+SERVICE_DROPIN_NAME="camera-sdk.conf"
+# The unit's own PATH (supervisor/dpc-supervisor.service, after the Python folder): the drop-in's
+# PATH replaces it, so it starts with the same entries.
+UNIT_BASE_PATH="/usr/local/bin:/usr/bin:/bin"
+# Variables taken from the login settings: the GenTL search paths and everything the SDKs name.
+SDK_VAR_REGEX='^(GENICAM_GENTL(32|64)_PATH|SPINNAKER_[A-Z0-9_]*|PYLON_[A-Z0-9_]*|FLIR_[A-Z0-9_]*)$'
+# Only profile.d files that mention an SDK are read (other files are not the installer's business).
+SDK_FILE_REGEX='GENICAM|GENTL|SPINNAKER|[Ss]pinnaker|PYLON|[Pp]ylon'
+SDK_ENV_CHANGED=0                  # the drop-in was (re)written: a running service needs a restart
+
+# sdk_login_env: NAME=value lines as a login shell would have them, from /etc/environment and the
+# SDK files in /etc/profile.d, read in a clean environment (nothing from this terminal leaks in).
+sdk_login_env() {
+  local files=() f
+  for f in "$PROFILE_D_DIR"/*.sh; do
+    [[ -f "$f" ]] && grep -qE "$SDK_FILE_REGEX" "$f" 2>/dev/null && files+=("$f")
+  done
+  # shellcheck disable=SC2016  # the script runs in the clean shell, not here
+  timeout 20 env -i HOME="$HOME" PATH="$UNIT_BASE_PATH" bash --noprofile --norc -c '
+    trap env EXIT                  # printed even if an SDK file calls exit
+    environment_file="$1"; shift
+    # /etc/environment holds plain NAME=value lines (no shell code): read, do not source.
+    if [[ -r "$environment_file" ]]; then
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+        q=$(printf "\047"); value="${BASH_REMATCH[2]}"; value="${value#[\"$q]}"; value="${value%[\"$q]}"
+        export "${BASH_REMATCH[1]}=$value"
+      done <"$environment_file"
+    fi
+    for f in "$@"; do . "$f" >/dev/null 2>&1 </dev/null || true; done' _ "$ETC_ENVIRONMENT" "${files[@]}" 2>/dev/null || true
+}
+
+# path_list_add <list> <entry>: list with entry appended once (":"-separated)
+path_list_add() {
+  local list="$1" entry="$2"
+  [[ -z "$entry" ]] && { echo "$list"; return 0; }
+  case ":$list:" in *":$entry:"*) echo "$list" ;; *) echo "${list:+$list:}$entry" ;; esac
+}
+
+# sdk_entries <list>: the entries of a ":"-list that belong to a camera SDK
+sdk_entries() {
+  tr ':' '\n' <<<"$1" | grep -iE 'spinnaker|pylon|flir|genicam|gentl' | paste -sd ':' - || true
+}
+
+# camera_sdk_settings: prints the settings for the service, "NAME=value" per line (PATH last), or
+# nothing when no camera SDK is installed. Login settings first; the SDK folders fill the gaps.
+camera_sdk_settings() {
+  local login name value gentl="" bins="" libs="" pylon_dir spin_cti spin_gentl
+  declare -A vars=()
+  login="$(sdk_login_env)"
+  while IFS= read -r line; do
+    name="${line%%=*}"; value="${line#*=}"
+    if [[ "$name" =~ $SDK_VAR_REGEX ]]; then vars["$name"]="$value"; fi
+    [[ "$name" == PATH ]] && bins="$(sdk_entries "$value")"
+    [[ "$name" == LD_LIBRARY_PATH ]] && libs="$(sdk_entries "$value")"
+  done <<<"$login"
+  gentl="${vars[GENICAM_GENTL64_PATH]:-}"
+
+  # Spinnaker folder (the .deb installs to /opt/spinnaker)
+  if [[ -d "$SDK_SPINNAKER_DIR" ]]; then
+    spin_gentl="$SDK_SPINNAKER_DIR/lib/spinnaker-gentl"
+    spin_cti="$spin_gentl/Spinnaker_GenTL.cti"
+    if [[ -d "$spin_gentl" ]]; then gentl="$(path_list_add "$gentl" "$spin_gentl")"; fi
+    if [[ -f "$spin_cti" && -z "${vars[SPINNAKER_GENTL64_CTI]:-}" ]]; then vars[SPINNAKER_GENTL64_CTI]="$spin_cti"; fi
+    if [[ -d "$SDK_SPINNAKER_DIR/bin" ]]; then bins="$(path_list_add "$bins" "$SDK_SPINNAKER_DIR/bin")"; fi
+  fi
+  # pylon folder(s) (/opt/pylon, /opt/pylon5, ...); pypylon brings its own runtime, these are for
+  # the pylon tools and any GenTL consumer
+  # shellcheck disable=SC2086  # the glob must expand
+  for pylon_dir in $SDK_PYLON_GLOB; do
+    [[ -d "$pylon_dir" ]] || continue
+    if [[ -z "${vars[PYLON_ROOT]:-}" ]]; then vars[PYLON_ROOT]="$pylon_dir"; fi
+    if [[ -d "$pylon_dir/lib/gentlproducer/gtl" ]]; then gentl="$(path_list_add "$gentl" "$pylon_dir/lib/gentlproducer/gtl")"; fi
+    if [[ -d "$pylon_dir/bin" ]]; then bins="$(path_list_add "$bins" "$pylon_dir/bin")"; fi
+  done
+
+  [[ -n "$gentl" ]] && vars[GENICAM_GENTL64_PATH]="$gentl"
+  [[ ${#vars[@]} -eq 0 && -z "$bins" ]] && return 0
+  for name in $(printf '%s\n' "${!vars[@]}" | sort); do echo "$name=${vars[$name]}"; done
+  [[ -n "$libs" ]] && echo "LD_LIBRARY_PATH=$libs"
+  # The unit's PATH (same Python first), then the SDK tools
+  local path_value entry
+  path_value="$(dirname "$PY"):$UNIT_BASE_PATH"
+  while IFS= read -r entry; do path_value="$(path_list_add "$path_value" "$entry")"; done < <(tr ':' '\n' <<<"$bins")
+  echo "PATH=$path_value"
+}
+
+# systemd_quote <NAME=value>: one Environment= value in double quotes (\ " escaped, % as %%)
+systemd_quote() {
+  local text="$1"
+  text="${text//\\/\\\\}"; text="${text//\"/\\\"}"; text="${text//%/%%}"
+  printf '"%s"' "$text"
+}
+
+camera_sdk_dropin() {   # camera_sdk_dropin <settings>: the drop-in file content
+  local line
+  echo "# Camera SDK settings for $SERVICE_NAME, written by install/install.sh (F103)."
+  echo "# Copied from this machine's login settings (/etc/profile.d, /etc/environment) and the SDK"
+  echo "# folders, because a service does not read them. Rewritten by every install.sh run; do not edit."
+  echo "[Service]"
+  while IFS= read -r line; do [[ -n "$line" ]] && echo "Environment=$(systemd_quote "$line")"; done <<<"$1"
+}
+
+step_camera_sdk_env() {
+  step "7b Camera SDK settings for the service"
+  local settings content target current
+  target="$SERVICE_DROPIN_DIR/$SERVICE_DROPIN_NAME"
+  settings="$(camera_sdk_settings)"
+  if [[ -z "$settings" ]]; then
+    report SKIPPED "SDK settings for service" "no SDK: no Spinnaker or pylon folder or login settings found"
+    return 0
+  fi
+  say "  settings: $(cut -d= -f1 <<<"$settings" | paste -sd ' ' -)"
+  content="$(camera_sdk_dropin "$settings")"
+  current="$(cat "$target" 2>/dev/null || true)"
+  if [[ "$current" == "$content" ]]; then
+    report KEPT "SDK settings for service" "unchanged: $target"
+    return 0
+  fi
+  if [[ $DRY_RUN -eq 1 ]]; then
+    say "  [dry-run] write $target:"
+    while IFS= read -r line; do echo "      $line"; done <<<"$content"
+    report PLANNED "SDK settings for service" "$target, then daemon-reload"
+    return 0
+  fi
+  run_sudo mkdir -p "$SERVICE_DROPIN_DIR"
+  printf '%s\n' "$content" | sudo tee "$target" >/dev/null
+  run_sudo chmod 644 "$target"
+  run_sudo systemctl daemon-reload
+  SDK_ENV_CHANGED=1
+  report WRITTEN "SDK settings for service" "$target (daemon-reload done)"
+}
+
 # ---------------------------------------------------------------- 8 kiosk autostart (Firefox, D-111)
 kiosk_desktop_entry() {
   cat <<EOF
@@ -689,13 +837,14 @@ step_start() {
   if ! systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
     # Fresh machine: no site.yaml yet, so the Supervisor starts in setup mode (only the UI).
     run_sudo systemctl start "$SERVICE_NAME"
-  elif [[ $CODE_CHANGED -eq 1 ]]; then
+  elif [[ $CODE_CHANGED -eq 1 || $SDK_ENV_CHANGED -eq 1 ]]; then
+    # New code or new camera SDK settings take effect only after a restart.
     if [[ "$(current_mode)" == "setup" ]]; then
       run_sudo systemctl restart "$SERVICE_NAME"      # setup mode runs only the UI: costs nothing
     else
       # Normal mode: a restart restarts inspection (wheel counter lost, pause until the next plate),
       # so the person chooses the moment.
-      note "the code changed while the site runs: the programs keep the old code until
+      note "the code or the camera SDK settings changed while the site runs: the programs keep the old ones until
         sudo systemctl restart $SERVICE_NAME
         (inspection pauses until the next plate; choose a quiet moment)"
     fi
@@ -782,6 +931,7 @@ main() {
   step_python_libraries
   step_site_defaults
   step_service
+  step_camera_sdk_env
   step_kiosk
   step_start
   print_table
